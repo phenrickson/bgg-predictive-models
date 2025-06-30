@@ -1,6 +1,6 @@
 -- Create a comprehensive view of game features with full names
 
-CREATE OR REPLACE VIEW `bgg_data_dev.games_features` AS
+CREATE OR REPLACE VIEW `{dataset}.games_features` AS
 WITH games_features AS (
     SELECT
         g.game_id,
@@ -27,34 +27,31 @@ WITH games_features AS (
         -- Artists with names
         ARRAY_AGG(DISTINCT art.name) as artists,
         -- Families with names
-        ARRAY_AGG(DISTINCT fam.name) as families,
-        -- Counts for additional feature engineering
-        ARRAY_LENGTH(ARRAY_AGG(DISTINCT pub.name)) as publisher_count,
-        ARRAY_LENGTH(ARRAY_AGG(DISTINCT des.name)) as designer_count
-    FROM `bgg_data_dev.games_active` g
-    LEFT JOIN `bgg_data_dev.game_categories` gc
+        ARRAY_AGG(DISTINCT fam.name) as families
+    FROM `{dataset}.games_active` g
+    LEFT JOIN `{dataset}.game_categories` gc
         ON g.game_id = gc.game_id
-    LEFT JOIN `bgg_data_dev.categories` cat
+    LEFT JOIN `{dataset}.categories` cat
         ON gc.category_id = cat.category_id
-    LEFT JOIN `bgg_data_dev.game_mechanics` gm
+    LEFT JOIN `{dataset}.game_mechanics` gm
         ON g.game_id = gm.game_id
-    LEFT JOIN `bgg_data_dev.mechanics` mech
+    LEFT JOIN `{dataset}.mechanics` mech
         ON gm.mechanic_id = mech.mechanic_id
-    LEFT JOIN `bgg_data_dev.game_publishers` gp
+    LEFT JOIN `{dataset}.game_publishers` gp
         ON g.game_id = gp.game_id
-    LEFT JOIN `bgg_data_dev.publishers` pub
+    LEFT JOIN `{dataset}.publishers` pub
         ON gp.publisher_id = pub.publisher_id
-    LEFT JOIN `bgg_data_dev.game_designers` gd
+    LEFT JOIN `{dataset}.game_designers` gd
         ON g.game_id = gd.game_id
-    LEFT JOIN `bgg_data_dev.designers` des
+    LEFT JOIN `{dataset}.designers` des
         ON gd.designer_id = des.designer_id
-    LEFT JOIN `bgg_data_dev.game_artists` ga
+    LEFT JOIN `{dataset}.game_artists` ga
         ON g.game_id = ga.game_id
-    LEFT JOIN `bgg_data_dev.artists` art
+    LEFT JOIN `{dataset}.artists` art
         ON ga.artist_id = art.artist_id
-    LEFT JOIN `bgg_data_dev.game_families` gf
+    LEFT JOIN `{dataset}.game_families` gf
         ON g.game_id = gf.game_id
-    LEFT JOIN `bgg_data_dev.families` fam
+    LEFT JOIN `{dataset}.families` fam
         ON gf.family_id = fam.family_id
     GROUP BY 
         g.game_id,
@@ -73,6 +70,5 @@ WITH games_features AS (
 )
 SELECT * FROM games_features;
 
--- Optional: Add a comment to describe the view
-COMMENT ON VIEW `bgg_data_dev.games_features` 
-IS 'Comprehensive view of board game features with full names for categories, mechanics, publishers, designers, artists, and families';
+-- Note: BigQuery doesn't support COMMENT ON VIEW syntax
+-- To add a description to the view, use the Google Cloud Console or the API

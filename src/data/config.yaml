@@ -1,0 +1,3 @@
+# BigQuery Configuration
+bigquery:
+  dataset: bgg_data_dev
