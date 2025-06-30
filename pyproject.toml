@@ -1,0 +1,10 @@
+[project]
+name = "bgg-predictive-models"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "polars>=1.31.0",
+    "scikit-learn>=1.7.0",
+]
