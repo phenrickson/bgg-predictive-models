@@ -120,7 +120,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Create or refresh the games features view')
     parser.add_argument('--type', choices=['standard', 'optimized', 'materialized'], 
-                        default='optimized',
+                        default='materialized',
                         help='Type of view to create (default: optimized)')
     parser.add_argument('--refresh', action='store_true',
                         help='Refresh the materialized view instead of creating it')
