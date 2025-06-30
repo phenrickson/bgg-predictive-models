@@ -45,6 +45,123 @@ class MissingValueTransformer(BaseTransformer):
         return df
 
 
+class YearTransformer(BaseTransformer):
+    """Transform year_published variable."""
+    
+    def __init__(
+        self, 
+        reference_year: int = 2000, 
+        normalization_factor: int = 25,
+        transformation_strategy: str = 'normalized_log'
+    ):
+        """Initialize transformer.
+        
+        Args:
+            reference_year: Year to center around (default 2000)
+            normalization_factor: Divisor for normalization (default 25)
+            transformation_strategy: Strategy for year transformation
+                Options:
+                - 'normalized_log': Normalized and log-transformed distance from reference year
+                - 'era_bins': Categorical binning of years
+                - 'centered': Simple centering around reference year
+                - 'quadratic': Quadratic transformation
+                - 'cubic': Cubic transformation
+        """
+        self.reference_year = reference_year
+        self.normalization_factor = normalization_factor
+        self.transformation_strategy = transformation_strategy
+    
+    def transform(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Transform year_published into selected feature."""
+        if "year_published" not in df.columns:
+            return df
+        
+        # Remove rows with missing year_published
+        total_rows_before = len(df)
+        result_df = df.filter(pl.col("year_published").is_not_null())
+        rows_removed = total_rows_before - len(result_df)
+        
+        if rows_removed > 0:
+            print(f"Removed {rows_removed} games with missing year_published (out of {total_rows_before} total games)")
+        
+        # Base features
+        base_features = [
+            (pl.col("year_published") - self.reference_year).alias("year_published_centered"),
+            ((pl.col("year_published") - self.reference_year) / self.normalization_factor).alias("year_published_normalized"),
+        ]
+        
+        # Strategy-specific transformations
+        if self.transformation_strategy == 'normalized_log':
+            # Log-transformed normalized distance
+            log_feature = (
+                pl.when(pl.col("year_published") <= self.reference_year)
+                .then((self.reference_year - pl.col("year_published") + 1).log())
+                .otherwise((pl.col("year_published") - self.reference_year + 1).log())
+                .alias("year_published_transformed")
+            )
+            base_features.append(log_feature)
+        
+        elif self.transformation_strategy == 'era_bins':
+            # Categorical binning
+            era_feature = (
+                pl.when(pl.col("year_published") < 1900)
+                .then(pl.lit("pre_1900"))
+                .when(pl.col("year_published") < 1950)
+                .then(pl.lit("1900_1950"))
+                .when(pl.col("year_published") < 1975)
+                .then(pl.lit("1950_1975"))
+                .when(pl.col("year_published") < 1990)
+                .then(pl.lit("1975_1990"))
+                .when(pl.col("year_published") < 2000)
+                .then(pl.lit("1990_2000"))
+                .when(pl.col("year_published") < 2010)
+                .then(pl.lit("2000_2010"))
+                .when(pl.col("year_published") < 2020)
+                .then(pl.lit("2010_2020"))
+                .when(pl.col("year_published") < 2030)
+                .then(pl.lit("2020_2030"))
+                .otherwise(pl.lit("post_2030"))
+                .alias("year_published_transformed")
+            )
+            base_features.append(era_feature)
+        
+        elif self.transformation_strategy == 'quadratic':
+            # Quadratic transformation
+            quad_feature = (
+                ((pl.col("year_published") - self.reference_year) ** 2 / (self.normalization_factor ** 2))
+                .alias("year_published_transformed")
+            )
+            base_features.append(quad_feature)
+        
+        elif self.transformation_strategy == 'cubic':
+            # Cubic transformation
+            cubic_feature = (
+                ((pl.col("year_published") - self.reference_year) ** 3 / (self.normalization_factor ** 3))
+                .alias("year_published_transformed")
+            )
+            base_features.append(cubic_feature)
+        
+        # Apply features
+        result_df = result_df.with_columns(base_features)
+        
+        return result_df
+
+
+class MechanicsCountTransformer(BaseTransformer):
+    """Add a feature counting the number of mechanics a game has."""
+    
+    def transform(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Add mechanics count feature."""
+        if "mechanics" not in df.columns:
+            return df
+        
+        result_df = df.with_columns([
+            pl.col("mechanics").list.len().alias("mechanics_count")
+        ])
+        
+        return result_df
+
+
 class PlayerCountTransformer(BaseTransformer):
     """Create dummy variables for player counts."""
     
@@ -470,22 +587,27 @@ class BGGPreprocessor:
         # Feature generation parameters
         max_player_count: int = 10,
         
+        # Year transformation parameters
+        reference_year: int = 2000,
+        normalization_factor: int = 25,
+        
         # Array feature parameters
-        category_min_freq: int = 100,
-        mechanic_min_freq: int = 100,
+        category_min_freq: int = 0,
+        mechanic_min_freq: int = 0,
         designer_min_freq: int = 10,
         artist_min_freq: int = 10,
         publisher_min_freq: int = 10,
         family_min_freq: int = 10,
-        max_category_features: int = 50,
-        max_mechanic_features: int = 50,
-        max_designer_features: int = 20,
-        max_artist_features: int = 20,
-        max_publisher_features: int = 20,
-        max_family_features: int = 20,
+        max_category_features: int = 250,
+        max_mechanic_features: int = 250,
+        max_designer_features: int = 100,
+        max_artist_features: int = 100,
+        max_publisher_features: int = 100,
+        max_family_features: int = 100,
         
         # Feature generation flags
         handle_missing_values: bool = True,
+        transform_year: bool = True,
         create_player_dummies: bool = True,
         create_category_mechanic_features: bool = False,
         create_designer_artist_features: bool = False,
@@ -498,6 +620,15 @@ class BGGPreprocessor:
         # Add transformers based on configuration
         if handle_missing_values:
             self.pipeline.add_transformer(MissingValueTransformer())
+        
+        if transform_year:
+            self.pipeline.add_transformer(YearTransformer(
+                reference_year=reference_year,
+                normalization_factor=normalization_factor
+            ))
+        
+        # Always add mechanics count transformer
+        self.pipeline.add_transformer(MechanicsCountTransformer())
         
         if create_player_dummies:
             self.pipeline.add_transformer(PlayerCountTransformer(max_count=max_player_count))
