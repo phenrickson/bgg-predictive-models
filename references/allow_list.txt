@@ -1,0 +1,136 @@
+
+publishers_allow_list <- function() {
+  # list of ids allowed to enter model for publisher
+  c(
+    51 # Hasbo
+    , 10 # Mayfair Games
+    , 102 # Decision Games
+    , 196 # Multi-Man Publishing
+    , 396 # Alderac Entertainment Group aka AEG
+    , 1027 # Days of Wonder
+    , 21847 # Pandasaurus Games
+    , 1001 # (web published)
+    , 4 # (Self-Published)
+    , 140 # Splotter Spellen
+    , 157 # Asmodee
+    , 34 # Ravensburger
+    , 28 # Parker Brothers
+    , 39 # Pegasus Speile
+    , 37 # KOSMOS
+    , 20 # Milton Bradley
+    , 3 # Rio Grande Games
+    , 538 # Z-Man Games
+    , 52 # GMT Games
+    # ,8923 # IELLO
+    , 17 # Fantasy Flight Games
+    , 5 # Avalon Hill
+    , 3320 # (Unknown)
+    , 597 # Eagle-Gryphon Games
+    , 5400 # Matagot
+    , 26 # Games Workshop Ltd
+    , 47 # Queen Games
+    , 11652 # Stronghold Games
+    , 19 # Steve Jackson Games
+    , 13 # Wizards of the Coast
+    , 12024 # Cryptozoic Entertainment
+    , 10754 # Plaid Hat Games
+    , 21608 # CMON Global Limited
+    , 108 # Gamewright
+    , 221 # WizKids
+    , 171 # (Public Domain)
+    , 93 # Mattel, Inc
+    , 25842 # Space Cowboys
+    , 23202 # Stonemaier
+    , 34188 # Plan  B
+    , 30958 # Capstone Games
+    , 22593 # Chip Theory Games
+    , 17917 # Ares Games
+    , 17543 # Greater Than Games
+    , 28072 # Renegade Games
+    , 34846 # Restoration Games
+    , 29313 # Osprey Games
+    , 21765 # Roxley
+    , 7345 # Czech Games Edition
+    , 29412 # Awaken Realms
+    , 3929 # Compass Games
+    , 26991 # Button Shy
+    , 2456 # The Game Crafter
+    , 12 # Cheapass Games
+    , 9 # alea
+    , 2164 # NorthStar Game Studio
+    , 5774 # Bézier Games
+    , 18617 # Red Raven Games
+    , 102 # Decision Games (I)
+    , 489 # 3W (World Wide Wargames)
+  )
+}
+
+families_remove_list <- function() {
+  c(
+    "^Admin:",
+    "^Misc:",
+    "^Promotional:",
+    "^Digital Implementations:",
+    "^Crowdfunding: Spieleschmiede",
+    "^Crowdfunding: Verkami",
+    "^Crowdfunding: Indiegogo",
+    "^Contests:",
+    "^Game:",
+    "^Players: Expansions",
+    "^Players: Games with expansions"
+  ) %>%
+    paste(., collapse = "|")
+}
+
+families_allow_list <- function() {
+  c(
+    "^Series: Monopoly-Like",
+    "^Series: 18xx",
+    "^Series: Cards Against Humanity-Like",
+    "^Series: Exit: The Game",
+    "^Players: Games with Solitaire Rules",
+    "^Players: Wargames with Solitaire Rules",
+    "^Players: One versus Many",
+    "^Players: Solitaire Only Games",
+    "^Players: Solitaire Only Wargames",
+    "^Players: Two-Player Only Games",
+    "^Players: Three Players Only Games",
+    "^Players: Wargames with Rules Supporting Only Two Players",
+    "^Players: Solitaire Only Card Games",
+    "^Country:",
+    "^Animals",
+    "^History",
+    "^Sports",
+    "^Category",
+    "^Cities",
+    "^Traditional",
+    "^Creatures",
+    "^TV",
+    "^Region",
+    "^Card",
+    "^Comic",
+    "^Ancient",
+    "^Brands",
+    "^Versions & Editions",
+    "^Food",
+    "^Movies",
+    "^Setting",
+    "^Card Games",
+    "^Collectible",
+    "^Containers",
+    "^Crowdfunding: Kickstarter",
+    "^Crowdfunding: Gamefound",
+    "^Authors",
+    "^Characters",
+    "^Religious",
+    "^Holidays",
+    "^Space",
+    "^Folk",
+    "^Word",
+    "^Mythology",
+    "^Occupation",
+    "^Celebrities",
+    "^Toys"
+  ) %>%
+    paste(., collapse = "|")
+}
