@@ -613,8 +613,52 @@ class BGGPreprocessor:
         create_designer_artist_features: bool = False,
         create_publisher_features: bool = False,
         create_family_features: bool = False,
+        
+        # Feature selection parameters
+        include_base_numeric: bool = True,
+        include_average_weight: bool = False,  # New parameter for average_weight
+        include_player_count: bool = True,
+        include_categories: bool = True,
+        include_mechanics: bool = True,
+        include_designers: bool = False,
+        include_artists: bool = False,
+        include_publishers: bool = False,
+        include_families: bool = False,
+        custom_feature_patterns: List[str] = None,
+        exclude_feature_patterns: List[str] = None,
+        always_include_columns: List[str] = None,
+        always_exclude_columns: List[str] = None,
     ):
         """Initialize preprocessor with configuration options."""
+        # Store feature selection parameters
+        self.include_base_numeric = include_base_numeric
+        self.include_average_weight = include_average_weight  # Store the new parameter
+        self.include_player_count = include_player_count
+        self.include_categories = include_categories
+        self.include_mechanics = include_mechanics
+        self.include_designers = include_designers
+        self.include_artists = include_artists
+        self.include_publishers = include_publishers
+        self.include_families = include_families
+        self.custom_feature_patterns = custom_feature_patterns or []
+        self.exclude_feature_patterns = exclude_feature_patterns or []
+        self.always_include_columns = always_include_columns or ["id", "name"]
+        self.always_exclude_columns = always_exclude_columns or []
+        
+        # Feature registry to track created features
+        self.feature_registry = {
+            "base_numeric": [],
+            "average_weight": [],  # New category for average_weight
+            "player_count": [],
+            "categories": [],
+            "mechanics": [],
+            "designers": [],
+            "artists": [],
+            "publishers": [],
+            "families": [],
+            "custom": [],
+        }
+        
         self.pipeline = BGGPreprocessingPipeline()
         
         # Add transformers based on configuration
@@ -695,20 +739,146 @@ class BGGPreprocessor:
         self.pipeline.fit(df)
         return self
     
+    def _update_feature_registry(self, df: pl.DataFrame):
+        """Update the feature registry based on the processed DataFrame."""
+        # Base numeric features - only include fields that are in the DataFrame
+        base_numeric = [
+            "year_published_transformed", "year_published_centered", 
+            "year_published_normalized", "mechanics_count",
+            "min_age", "min_playtime", "max_playtime"
+        ]
+        self.feature_registry["base_numeric"] = [col for col in base_numeric if col in df.columns]
+        
+        # Average weight feature - only include if it's in the DataFrame
+        if "average_weight" in df.columns:
+            self.feature_registry["average_weight"] = ["average_weight"]
+        else:
+            self.feature_registry["average_weight"] = []
+        
+        # Player count features
+        self.feature_registry["player_count"] = [
+            col for col in df.columns if col.startswith("player_count_")
+        ]
+        
+        # Category features
+        self.feature_registry["categories"] = [
+            col for col in df.columns if col.startswith("category_")
+        ]
+        
+        # Mechanic features
+        self.feature_registry["mechanics"] = [
+            col for col in df.columns if col.startswith("mechanic_")
+        ]
+        
+        # Designer features
+        self.feature_registry["designers"] = [
+            col for col in df.columns if col.startswith("designer_")
+        ]
+        
+        # Artist features
+        self.feature_registry["artists"] = [
+            col for col in df.columns if col.startswith("artist_")
+        ]
+        
+        # Publisher features
+        self.feature_registry["publishers"] = [
+            col for col in df.columns if col.startswith("publisher_")
+        ]
+        
+        # Family features
+        self.feature_registry["families"] = [
+            col for col in df.columns if col.startswith("family_")
+        ]
+        
+        # Custom features
+        for pattern in self.custom_feature_patterns:
+            matching_cols = [col for col in df.columns if re.search(pattern, col)]
+            self.feature_registry["custom"].extend(matching_cols)
+    
+    def _get_selected_features(self) -> List[str]:
+        """Get the list of selected features based on configuration."""
+        selected_features = []
+        
+        # Add features based on configuration
+        if self.include_base_numeric:
+            selected_features.extend(self.feature_registry["base_numeric"])
+        
+        if self.include_average_weight:
+            selected_features.extend(self.feature_registry["average_weight"])
+        
+        if self.include_player_count:
+            selected_features.extend(self.feature_registry["player_count"])
+        
+        if self.include_categories:
+            selected_features.extend(self.feature_registry["categories"])
+        
+        if self.include_mechanics:
+            selected_features.extend(self.feature_registry["mechanics"])
+        
+        if self.include_designers:
+            selected_features.extend(self.feature_registry["designers"])
+        
+        if self.include_artists:
+            selected_features.extend(self.feature_registry["artists"])
+        
+        if self.include_publishers:
+            selected_features.extend(self.feature_registry["publishers"])
+        
+        if self.include_families:
+            selected_features.extend(self.feature_registry["families"])
+        
+        # Add custom features
+        selected_features.extend(self.feature_registry["custom"])
+        
+        # Add always-include columns
+        selected_features.extend(self.always_include_columns)
+        
+        # Remove duplicates
+        selected_features = list(dict.fromkeys(selected_features))
+        
+        # Remove excluded features
+        for pattern in self.exclude_feature_patterns:
+            selected_features = [col for col in selected_features if not re.search(pattern, col)]
+        
+        # Remove always-exclude columns
+        selected_features = [col for col in selected_features if col not in self.always_exclude_columns]
+        
+        return selected_features
+    
+    def get_available_features(self) -> Dict[str, List[str]]:
+        """Get all available features by category."""
+        return self.feature_registry
+    
+    def get_selected_features(self) -> List[str]:
+        """Get the list of selected features based on current configuration."""
+        return self._get_selected_features()
+    
     def transform(
         self, 
         df: pl.DataFrame,
     ) -> Tuple[pl.DataFrame, Dict[str, pl.Series]]:
         """Transform raw data into features and targets."""
         # Apply preprocessing pipeline
-        features = self.pipeline.transform(df)
+        processed = self.pipeline.transform(df)
         
-        # Create targets
+        # Update feature registry
+        self._update_feature_registry(processed)
+        
+        # Get selected features based on configuration
+        feature_columns = self._get_selected_features()
+        
+        # Filter to only include columns that exist in the processed DataFrame
+        valid_columns = [col for col in feature_columns if col in processed.columns]
+        
+        # Select features
+        features = processed.select(valid_columns)
+        
+        # Create targets using pre-computed columns from SQL
         targets = {
-            "hurdle": df.select(pl.col("users_rated") >= 25).to_series().cast(pl.Int8),
-            "complexity": df.select("average_weight").to_series(),
-            "rating": df.select("average_rating").to_series(),
-            "users_rated": df.select("users_rated").to_series(),
+            "hurdle": df.select("hurdle").to_series(),
+            "complexity": df.select("complexity").to_series(),
+            "rating": df.select("rating").to_series(),
+            "users_rated": df.select("log_users_rated").to_series()
         }
         
         return features, targets

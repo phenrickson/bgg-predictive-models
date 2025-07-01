@@ -38,7 +38,12 @@ class BGGDataLoader:
         """
         # Build query with optional WHERE clause
         query = f"""
-        SELECT *
+        SELECT 
+            *,
+            CASE WHEN users_rated >= 25 THEN 1 ELSE 0 END as hurdle,
+            average_weight as complexity,
+            average_rating as rating,
+            LN(users_rated + 1) as log_users_rated
         FROM `{self.config.project_id}.{self.config.dataset}.games_features_materialized`
         """
         

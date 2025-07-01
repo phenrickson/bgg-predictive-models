@@ -6,8 +6,9 @@ from typing import Dict, List, Optional, Union
 import joblib
 import pandas as pd
 
-from ..data.config import get_config_from_env
+from ..data.config import load_config
 from ..data.loader import BGGDataLoader
+from ..features.preprocessor import BGGPreprocessor
 from ..models.pipeline import BGGPipeline
 
 
@@ -68,9 +69,39 @@ def make_predictions(
     
     # Load feature data
     logger.info("Loading game data...")
-    config = get_config_from_env()
+    config = load_config()
     loader = BGGDataLoader(config)
-    features = loader.load_prediction_data(game_ids=game_ids)
+    
+    # Create preprocessor - should match the one used in training
+    logger.info("Creating preprocessor...")
+    preprocessor = BGGPreprocessor(
+        # Basic preprocessing
+        handle_missing_values=True,
+        transform_year=True,
+        create_player_dummies=True,
+        
+        # Feature generation flags - adjust as needed
+        create_category_mechanic_features=True,
+        create_designer_artist_features=False,
+        create_publisher_features=False,
+        create_family_features=False,
+        
+        # Feature thresholds
+        category_min_freq=100,
+        mechanic_min_freq=100,
+    )
+    
+    # Load and preprocess data
+    result = loader.load_prediction_data(
+        game_ids=game_ids,
+        preprocessor=preprocessor,
+    )
+    
+    # With preprocessor, it returns (features, targets)
+    if isinstance(result, tuple):
+        features, _ = result
+    else:
+        features = result
     
     # Generate predictions
     logger.info("Generating predictions...")
