@@ -92,15 +92,22 @@ def score_data(
     # Preprocess and predict in one step
     predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
     
-    # Add predictions to the dataframe
-    results = df.with_columns([
+    # Select only the required columns and add predictions
+    results = df.select([
+        "game_id", 
+        "name", 
+        "year_published"
+    ]).with_columns([
         pl.Series("predicted_prob", predictions),
-        pl.Series("predicted_class", predictions >= 0.5)
+        pl.Series("predicted_class", predictions >= 0.5),
+        pl.Series("hurdle", df.select("hurdle").to_pandas().squeeze())
     ])
     
     # Determine output path if not provided
     if output_path is None:
-        output_path = f"data/predictions/{experiment_name}_predictions.csv"
+        output_path = f"data/predictions/{experiment_name}_predictions.parquet"
+    elif not output_path.endswith('.parquet'):
+        output_path = output_path.rsplit('.', 1)[0] + '.parquet'
     
     # Save results
     results.write_parquet(output_path)
