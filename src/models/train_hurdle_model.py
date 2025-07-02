@@ -2,6 +2,10 @@
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+from datetime import datetime
+
+# Project imports
+from src.models.experiments import ExperimentTracker
 
 import numpy as np
 import pandas as pd
@@ -213,7 +217,13 @@ def main():
                        help="Start year for testing (inclusive)")
     parser.add_argument("--test-end-year", type=int, default=2019,
                        help="End year for testing (inclusive)")
-    parser.add_argument("--output-dir", type=str, default="./models/hurdle_train_tune_test")
+    parser.add_argument("--output-dir", type=str, default="./models/experiments")
+    parser.add_argument("--experiment-name", type=str, 
+                       default=f"hurdle_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    parser.add_argument("--description", type=str,
+                       help="Description of the experiment")
+    parser.add_argument("--c", type=float,
+                       help="Override C parameter for LogisticRegression")
     
     args = parser.parse_args()
     
@@ -266,59 +276,91 @@ def main():
     
     logger.info(f"Feature dimensions: Train {X_train.shape}, Tune {X_tune.shape}, Test {X_test.shape}")
     
-    # Tune hyperparameters
-    best_params = tune_hyperparameters(X_train, y_train, X_tune, y_tune)
+    # Use provided C value or tune hyperparameters
+    if args.c is not None:
+        best_params = {'C': args.c, 'max_iter': 4000, 'penalty': 'l2'}
+        logger.info(f"Using provided C value: {args.c}")
+    else:
+        best_params = tune_hyperparameters(X_train, y_train, X_tune, y_tune)
     
     # Train final model on training data with best parameters
     logger.info("Training final model...")
     final_model = LogisticRegression(**best_params)
     final_model.fit(X_train, y_train)
     
+    # Create complete pipeline
+    full_pipeline = Pipeline([
+        ('preprocessing', preprocessing_pipeline),
+        ('model', final_model)
+    ])
+    
     # Evaluate on all sets
     train_metrics = evaluate_model(final_model, X_train, y_train, "training")
     tune_metrics = evaluate_model(final_model, X_tune, y_tune, "tuning")
     test_metrics = evaluate_model(final_model, X_test, y_test, "test")
     
-    # Save results
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Initialize experiment tracker and create new experiment
+    tracker = ExperimentTracker("hurdle", args.output_dir)
     
-    results = {
-        'train_end_year_exclusive': args.train_end_year,
-        'tune_start_year': args.tune_start_year,
-        'tune_end_year': args.tune_end_year,
-        'test_start_year': args.test_start_year,
-        'test_end_year': args.test_end_year,
-        'best_params': best_params,
-        'train_metrics': train_metrics,
-        'tune_metrics': tune_metrics,
-        'test_metrics': test_metrics
+    # Create configuration dictionary for hashing
+    config = {
+        'model_params': best_params,
+        'preprocessing': {
+            'category_min_freq': 5,
+            'mechanic_min_freq': 5,
+            'designer_min_freq': 10,
+            'artist_min_freq': 10,
+            'publisher_min_freq': 5,
+            'family_min_freq': 5,
+            'max_artist_features': 250,
+            'max_publisher_features': 250,
+            'max_designer_features': 250,
+            'max_family_features': 250,
+            'max_mechanic_features': 500,
+            'max_category_features': 500,
+            'create_category_features': True,
+            'create_mechanic_features': True,
+            'create_designer_features': True,
+            'create_artist_features': True,
+            'create_publisher_features': True,
+            'create_family_features': True,
+            'create_player_dummies': True,
+            'transform_year': True,
+            'include_base_numeric': True
+        },
+        'data_splits': {
+            'train_end_year': args.train_end_year,
+            'tune_start_year': args.tune_start_year,
+            'tune_end_year': args.tune_end_year,
+            'test_start_year': args.test_start_year,
+            'test_end_year': args.test_end_year
+        },
+        'target': 'users_rated >= 25',
+        'target_type': 'binary_classification'
     }
     
-    # Save as CSV
-    results_df = pl.DataFrame([{
-        'dataset': 'train',
-        'start_year': None,
-        'end_year': args.train_end_year - 1,
-        **train_metrics
-    }, {
-        'dataset': 'tune',
-        'start_year': args.tune_start_year,
-        'end_year': args.tune_end_year,
-        **tune_metrics
-    }, {
-        'dataset': 'test',
-        'start_year': args.test_start_year,
-        'end_year': args.test_end_year,
-        **test_metrics
-    }])
+    experiment = tracker.create_experiment(
+        name=args.experiment_name,
+        description=args.description,
+        metadata={
+            'train_end_year_exclusive': args.train_end_year,
+            'tune_start_year': args.tune_start_year,
+            'tune_end_year': args.tune_end_year,
+            'test_start_year': args.test_start_year,
+            'test_end_year': args.test_end_year,
+            'model_type': 'hurdle',
+            'target': 'users_rated >= 25'
+        },
+        config=config
+    )
     
-    results_df.write_csv(output_dir / "train_tune_test_results.csv")
+    # Log metrics for each dataset
+    experiment.log_metrics(train_metrics, "train")
+    experiment.log_metrics(tune_metrics, "tune")
+    experiment.log_metrics(test_metrics, "test")
     
-    # Save best parameters
-    import json
-    with open(output_dir / "best_params.json", 'w') as f:
-        json.dump(best_params, f, indent=2)
+    # Log best parameters
+    experiment.log_parameters(best_params)
     
     # Save model coefficients
     feature_names = X_train.columns.tolist()
@@ -339,19 +381,20 @@ def main():
     for i, coef_data in enumerate(coefficients_data):
         coef_data['rank'] = i + 1
     
-    # Save coefficients as CSV
+    # Save coefficients
     coefficients_df = pl.DataFrame(coefficients_data)
-    coefficients_df.write_csv(output_dir / "model_coefficients.csv")
+    experiment.log_coefficients(coefficients_df)
     
-    # Also save intercept
+    # Save model info
     model_info = {
         'intercept': float(final_model.intercept_[0]),
         'n_features': len(feature_names),
         'best_params': best_params
     }
+    experiment.log_model_info(model_info)
     
-    with open(output_dir / "model_info.json", 'w') as f:
-        json.dump(model_info, f, indent=2)
+    # Save complete pipeline
+    experiment.save_pipeline(full_pipeline)
     
     # Log top 10 most important features
     logger.info("Top 10 most important features (by absolute coefficient):")
@@ -359,7 +402,7 @@ def main():
         logger.info(f"  {i+1:2d}. {coef_data['feature']:30s} = {coef_data['coefficient']:8.4f}")
     
     logger.info(f"Model intercept: {final_model.intercept_[0]:.4f}")
-    logger.info("Results saved to " + str(output_dir))
+    logger.info(f"Results saved to {experiment.exp_dir}")
     logger.info("Training complete!")
 
 if __name__ == "__main__":
