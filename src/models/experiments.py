@@ -111,13 +111,23 @@ class ExperimentTracker:
         for exp_dir in self.model_dir.iterdir():
             if not exp_dir.is_dir():
                 continue
-                
-            # Parse name and version
-            name_parts = exp_dir.name.split('_v')
-            if len(name_parts) != 2 or not name_parts[1].isdigit():
+            
+            # More flexible parsing of experiment names
+            name_parts = exp_dir.name.split('_')
+            
+            # Try to find a version and hash
+            version = None
+            base_name = exp_dir.name
+            
+            for i, part in enumerate(name_parts):
+                if part.startswith('v') and part[1:].isdigit():
+                    version = int(part[1:])
+                    base_name = '_'.join(name_parts[:i] + name_parts[i+1:])
+                    break
+            
+            # If no version found, skip
+            if version is None:
                 continue
-                
-            base_name, version = name_parts[0], int(name_parts[1])
             
             # Load metadata if available
             metadata_file = exp_dir / "metadata.json"
@@ -146,29 +156,46 @@ class ExperimentTracker:
         Returns:
             Experiment object
         """
+        # More flexible experiment name matching
+        matching_experiments = [
+            p for p in self.model_dir.iterdir() 
+            if p.is_dir() and name in p.name
+        ]
+        
+        if not matching_experiments:
+            raise ValueError(f"No experiments found matching '{name}'")
+        
+        # If version is not specified, find the latest
         if version is None:
-            # Find latest version
+            # Extract versions from matching experiments
             versions = []
-            for p in self.model_dir.glob(f"{name}_v*"):
-                # Extract version number from name (e.g., "name_v1_hash" -> 1)
+            for exp_path in matching_experiments:
                 try:
-                    version_str = p.name.split('_v')[-1].split('_')[0]
-                    if version_str.isdigit():
-                        versions.append(int(version_str))
+                    # More flexible version extraction
+                    name_parts = exp_path.name.split('_')
+                    for part in name_parts:
+                        if part.startswith('v') and part[1:].isdigit():
+                            versions.append(int(part[1:]))
+                            break
                 except (IndexError, ValueError):
                     continue
+            
             if not versions:
                 raise ValueError(f"No versions found for experiment '{name}'")
             version = max(versions)
         
-        # Find full name including hash
-        full_names = list(self.model_dir.glob(f"{name}_v{version}_*"))
-        if not full_names:
+        # Find the exact experiment matching version
+        matching_version_exps = [
+            p for p in matching_experiments 
+            if f'_v{version}_' in p.name
+        ]
+        
+        if not matching_version_exps:
             raise ValueError(f"Version {version} not found for experiment '{name}'")
-        versioned_name = full_names[0].name
-        exp_dir = self.model_dir / versioned_name
-        if not exp_dir.exists():
-            raise ValueError(f"Experiment '{versioned_name}' not found")
+        
+        # Use the first matching experiment
+        exp_dir = matching_version_exps[0]
+        versioned_name = exp_dir.name
         
         # Load metadata
         metadata_file = exp_dir / "metadata.json"

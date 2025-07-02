@@ -194,7 +194,20 @@ def main():
     # Load predictions
     df = pl.read_parquet(latest_file)
     
-    st.write(f"Loaded predictions from: {os.path.basename(latest_file)}")
+    # Extract additional metadata about the predictions file
+    file_info = os.stat(latest_file)
+    
+    # Display more detailed information about the loaded predictions
+    st.markdown(f"""
+    ### 📊 Prediction File Details
+    - **Filename**: {os.path.basename(latest_file)}
+    - **File Size**: {file_info.st_size / 1024:.2f} KB
+    - **Last Modified**: {pd.to_datetime(file_info.st_mtime, unit='s').strftime('%Y-%m-%d %H:%M:%S')}
+    
+    #### Prediction Metadata
+    - **Total Predictions**: {len(df)}
+    - **Prediction Columns**: {', '.join(df.columns)}
+    """)
     
     # Calculate metrics with default threshold for initial display
     initial_threshold = 0.5
@@ -390,7 +403,7 @@ def main():
         "Probability Threshold", 
         min_value=0.0, 
         max_value=1.0, 
-        value=0.15, 
+        value=0.5,
         step=0.01
     )
     

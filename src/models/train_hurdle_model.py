@@ -283,21 +283,30 @@ def main():
     else:
         best_params = tune_hyperparameters(X_train, y_train, X_tune, y_tune)
     
-    # Train final model on training data with best parameters
-    logger.info("Training final model...")
-    final_model = LogisticRegression(**best_params)
-    final_model.fit(X_train, y_train)
+    # First evaluate model trained only on training data
+    logger.info("Evaluating model trained on training data only...")
+    train_only_model = LogisticRegression(**best_params)
+    train_only_model.fit(X_train, y_train)
     
-    # Create complete pipeline
+    train_metrics = evaluate_model(train_only_model, X_train, y_train, "training")
+    tune_metrics = evaluate_model(train_only_model, X_tune, y_tune, "tuning")
+    
+    # Now refit on combined training + validation data for final evaluation
+    logger.info("Refitting final model on training + validation data...")
+    X_train_val = pd.concat([X_train, X_tune])
+    y_train_val = pd.concat([y_train, y_tune])
+    
+    final_model = LogisticRegression(**best_params)
+    final_model.fit(X_train_val, y_train_val)
+    
+    # Create complete pipeline with final model
     full_pipeline = Pipeline([
         ('preprocessing', preprocessing_pipeline),
         ('model', final_model)
     ])
     
-    # Evaluate on all sets
-    train_metrics = evaluate_model(final_model, X_train, y_train, "training")
-    tune_metrics = evaluate_model(final_model, X_tune, y_tune, "tuning")
-    test_metrics = evaluate_model(final_model, X_test, y_test, "test")
+    # Evaluate final model on test set
+    test_metrics = evaluate_model(final_model, X_test, y_test, "test (using model fit on train+validation)")
     
     # Initialize experiment tracker and create new experiment
     tracker = ExperimentTracker("hurdle", args.output_dir)

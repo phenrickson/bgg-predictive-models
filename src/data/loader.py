@@ -47,8 +47,11 @@ class BGGDataLoader:
         FROM `{self.config.project_id}.{self.config.dataset}.games_features_materialized`
         """
         
-        if where_clause:
-            query += f" WHERE {where_clause}"
+        # Add year_published IS NOT NULL filter
+        if not where_clause:
+            query += " WHERE year_published IS NOT NULL"
+        else:
+            query += f" WHERE ({where_clause}) AND year_published IS NOT NULL"
         
         # Execute query and convert to polars DataFrame
         print(f"Executing query: {query}")

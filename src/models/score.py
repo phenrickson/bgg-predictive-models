@@ -15,15 +15,27 @@ def load_model(experiment_name: str):
     # Determine model type from experiment name
     model_types = ['hurdle', 'rating', 'complexity', 'users_rated']
     
+    # Print diagnostic information
+    print(f"Attempting to load experiment: {experiment_name}")
+    print(f"Searching in model types: {model_types}")
+    
     # Try each model type until successful
     for model_type in model_types:
         try:
+            print(f"Trying model type: {model_type}")
             tracker = ExperimentTracker(model_type)
+            
+            # Print available experiments for this model type
+            experiments = tracker.list_experiments()
+            print(f"Available experiments for {model_type}: {[exp['full_name'] for exp in experiments]}")
+            
             experiment = tracker.load_experiment(experiment_name)
             
             # Load the finalized model directly
+            print(f"Successfully loaded experiment: {experiment.name}")
             return experiment.load_finalized_model()
-        except (ValueError, Exception):
+        except (ValueError, Exception) as e:
+            print(f"Failed to load in {model_type} model type: {e}")
             continue
     
     # If no model type works, raise an error
@@ -50,6 +62,7 @@ def score_data(
     from src.data.loader import BGGDataLoader
     from src.data.config import load_config
     from src.models.experiments import ExperimentTracker
+    from datetime import datetime
 
     # Load configuration and data loader
     config = load_config()
@@ -73,15 +86,32 @@ def score_data(
         # Load from CSV if provided
         df = pl.read_csv(data_path)
     else:
+        # Determine start and end years for scoring
+        if start_year is None or end_year is None:
+            # Retrieve the model training date from experiment metadata
+            tracker = ExperimentTracker("hurdle")
+            experiment = tracker.load_experiment(experiment_name)
+            
+            # Use the training end year and validation/test window
+            train_end_year = experiment.metadata.get('train_end_year', 2022)  # Default to 2022 if not found
+            valid_window = experiment.metadata.get('valid_window', 2)
+            test_window = experiment.metadata.get('test_window', 2)
+            
+            # Set start year to the last year of validation
+            start_year = train_end_year + valid_window
+            
+            # Set end year to a future year if not specified
+            end_year = datetime.now().year + 5  # 5 years into the future
+        
         # Construct where clause for year filtering
-        where_clause = []
-        if start_year is not None:
-            where_clause.append(f"year_published >= {start_year}")
+        where_clause = [f"year_published > {start_year}"]
+        
+        # Add end year filtering if specified
         if end_year is not None:
             where_clause.append(f"year_published <= {end_year}")
         
         # Combine where clauses
-        where_str = " AND ".join(where_clause) if where_clause else None
+        where_str = " AND ".join(where_clause)
         
         # Load data with optional filtering
         df = loader.load_data(
@@ -109,10 +139,16 @@ def score_data(
     elif not output_path.endswith('.parquet'):
         output_path = output_path.rsplit('.', 1)[0] + '.parquet'
     
+    # Dynamically determine end year if not specified
+    if end_year is None:
+        # Use the current year or a sufficiently far future year
+        from datetime import datetime
+        end_year = datetime.now().year
+    
     # Save results
     results.write_parquet(output_path)
     print(f"Predictions for {experiment_name} saved to {output_path}")
-    print(f"Data loaded from year {start_year or 'beginning'} to {end_year or 'present'}")
+    print(f"Data loaded from year {start_year or 'beginning'} to {end_year}")
     
     # Display sample of results
     print("\nSample predictions:")
