@@ -1,6 +1,8 @@
 """Score new data using the finalized hurdle model."""
 import argparse
+import json
 import polars as pl
+from datetime import datetime
 from src.models.experiments import ExperimentTracker
 
 def load_model(experiment_name: str):
@@ -29,7 +31,15 @@ def load_model(experiment_name: str):
             experiments = tracker.list_experiments()
             print(f"Available experiments for {model_type}: {[exp['full_name'] for exp in experiments]}")
             
-            experiment = tracker.load_experiment(experiment_name)
+            # Handle cases with or without version
+            if '/' in experiment_name:
+                # If version is specified (e.g., 'hurdle_model/v1')
+                base_name, version_str = experiment_name.split('/')
+                version = int(version_str[1:])
+                experiment = tracker.load_experiment(base_name, version)
+            else:
+                # If no version specified, load latest
+                experiment = tracker.load_experiment(experiment_name)
             
             # Load the finalized model directly
             print(f"Successfully loaded experiment: {experiment.name}")
@@ -62,19 +72,24 @@ def score_data(
     from src.data.loader import BGGDataLoader
     from src.data.config import load_config
     from src.models.experiments import ExperimentTracker
-    from datetime import datetime
 
     # Load configuration and data loader
     config = load_config()
     loader = BGGDataLoader(config)
     
+    # Determine model type
+    model_type = "hurdle"  # Default model type
+    if experiment_name is not None and '/' in experiment_name:
+        # If experiment name includes model type (e.g., 'rating/full-features')
+        model_type, experiment_name = experiment_name.split('/')
+
     # Determine experiment name
     if experiment_name is None:
-        # Use the latest hurdle model experiment if not specified
-        tracker = ExperimentTracker("hurdle")
+        # Use the latest model experiment if not specified
+        tracker = ExperimentTracker(model_type)
         experiments = tracker.list_experiments()
         if not experiments:
-            raise ValueError("No hurdle model experiments found.")
+            raise ValueError(f"No {model_type} model experiments found.")
         experiment = max(experiments, key=lambda x: x.metadata.get('timestamp', 0))
         experiment_name = experiment.name
     
@@ -86,25 +101,31 @@ def score_data(
         # Load from CSV if provided
         df = pl.read_csv(data_path)
     else:
+        # Retrieve the finalized model metadata
+        tracker = ExperimentTracker("hurdle")
+        experiment = tracker.load_experiment(experiment_name)
+        
+        # Check finalized model metadata for final end year
+        finalized_dir = experiment.exp_dir / "finalized"
+        info_path = finalized_dir / "info.json"
+        
+        if info_path.exists():
+            with open(info_path, 'r') as f:
+                finalized_info = json.load(f)
+                final_end_year = finalized_info.get('final_end_year')
+        else:
+            final_end_year = None
+        
         # Determine start and end years for scoring
-        if start_year is None or end_year is None:
-            # Retrieve the model training date from experiment metadata
-            tracker = ExperimentTracker("hurdle")
-            experiment = tracker.load_experiment(experiment_name)
-            
-            # Use the training end year and validation/test window
-            train_end_year = experiment.metadata.get('train_end_year', 2022)  # Default to 2022 if not found
-            valid_window = experiment.metadata.get('valid_window', 2)
-            test_window = experiment.metadata.get('test_window', 2)
-            
-            # Set start year to the last year of validation
-            start_year = train_end_year + valid_window
-            
-            # Set end year to a future year if not specified
-            end_year = datetime.now().year + 5  # 5 years into the future
+        if start_year is None:
+            start_year = final_end_year + 1 if final_end_year else 0
+        
+        if end_year is None:
+            # Default to 5 years greater than the current year
+            end_year = datetime.now().year + 5
         
         # Construct where clause for year filtering
-        where_clause = [f"year_published > {start_year}"]
+        where_clause = [f"year_published >= {start_year}"]
         
         # Add end year filtering if specified
         if end_year is not None:
@@ -139,12 +160,6 @@ def score_data(
     elif not output_path.endswith('.parquet'):
         output_path = output_path.rsplit('.', 1)[0] + '.parquet'
     
-    # Dynamically determine end year if not specified
-    if end_year is None:
-        # Use the current year or a sufficiently far future year
-        from datetime import datetime
-        end_year = datetime.now().year
-    
     # Save results
     results.write_parquet(output_path)
     print(f"Predictions for {experiment_name} saved to {output_path}")
@@ -166,7 +181,9 @@ def main():
     parser.add_argument("--data", 
                        help="Optional path to CSV file containing data to score")
     parser.add_argument("--experiment", 
-                       help="Name of experiment with finalized model")
+                       help="Name of experiment with finalized model. Can include model type (e.g., 'rating/full-features')")
+    parser.add_argument("--model-type", default="hurdle",
+                       help="Model type directory to search for experiments (default: hurdle)")
     parser.add_argument("--start-year", type=int,
                        help="First year of data to include")
     parser.add_argument("--end-year", type=int,
@@ -177,9 +194,17 @@ def main():
                        help="Path to save predictions")
     
     args = parser.parse_args()
+    
+    # If experiment includes model type, override model-type argument
+    if args.experiment and '/' in args.experiment:
+        model_type, experiment_name = args.experiment.split('/')
+    else:
+        model_type = args.model_type
+        experiment_name = args.experiment
+    
     score_data(
         data_path=args.data,
-        experiment_name=args.experiment,
+        experiment_name=experiment_name,
         start_year=args.start_year,
         end_year=args.end_year,
         min_ratings=args.min_ratings,

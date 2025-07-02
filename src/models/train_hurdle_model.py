@@ -207,19 +207,19 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Train/Tune/Test Hurdle Model")
-    parser.add_argument("--train-end-year", type=int, default=2015, 
+    parser.add_argument("--train-end-year", type=int, default=2022, 
                        help="End year for training (exclusive)")
-    parser.add_argument("--tune-start-year", type=int, default=2015,
+    parser.add_argument("--tune-start-year", type=int, default=2022,
                        help="Start year for tuning (inclusive)")
-    parser.add_argument("--tune-end-year", type=int, default=2017,
+    parser.add_argument("--tune-end-year", type=int, default=2023,
                        help="End year for tuning (inclusive)")
-    parser.add_argument("--test-start-year", type=int, default=2018,
+    parser.add_argument("--test-start-year", type=int, default=2024,
                        help="Start year for testing (inclusive)")
-    parser.add_argument("--test-end-year", type=int, default=2019,
+    parser.add_argument("--test-end-year", type=int, default=2025,
                        help="End year for testing (inclusive)")
     parser.add_argument("--output-dir", type=str, default="./models/experiments")
-    parser.add_argument("--experiment-name", type=str, 
-                       default=f"hurdle_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    parser.add_argument("--experiment", type=str, 
+                       default="hurdle_model")
     parser.add_argument("--description", type=str,
                        help="Description of the experiment")
     parser.add_argument("--c", type=float,
@@ -229,6 +229,9 @@ def main():
     
     # Setup logging
     logger = setup_logging()
+    
+    # Log experiment name
+    logger.info(f"Training experiment: {args.experiment_name}")
     
     # Load data (load through the latest test year)
     config = load_config()

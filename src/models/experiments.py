@@ -57,6 +57,7 @@ class ExperimentTracker:
             description: Optional description
             metadata: Optional metadata dictionary
             version: Optional version number. If None, auto-increments from existing versions.
+            config: Optional configuration dictionary for tracking experiment details
             
         Returns:
             Experiment object
@@ -71,24 +72,15 @@ class ExperimentTracker:
         }
         exp_hash = compute_hash(exp_config)
         
-        # Check for existing experiments with same hash
-        for exp_dir in self.model_dir.glob(f"{name}_*"):
-            if not exp_dir.is_dir():
-                continue
-            
-            metadata_file = exp_dir / "metadata.json"
-            if metadata_file.exists():
-                with open(metadata_file) as f:
-                    existing_metadata = json.load(f)
-                    if existing_metadata.get('hash') == exp_hash:
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Found existing experiment with same configuration: {exp_dir.name}")
+        # Find existing experiment directories
+        experiment_dir = self.model_dir / name
+        experiment_dir.mkdir(parents=True, exist_ok=True)
         
         # Find existing versions and determine next version
         existing_versions = [
-            int(p.name.split('_v')[-1].split('_')[0])  # Handle hash suffix
-            for p in self.model_dir.glob(f"{name}_v*")
-            if p.name.split('_v')[-1].split('_')[0].isdigit()
+            int(p.name[1:])
+            for p in experiment_dir.iterdir() 
+            if p.is_dir() and p.name.startswith('v') and p.name[1:].isdigit()
         ]
         
         if version is None:
@@ -96,14 +88,18 @@ class ExperimentTracker:
         elif version in existing_versions:
             raise ValueError(f"Version {version} already exists for experiment {name}")
         
-        versioned_name = f"{name}_v{version}_{exp_hash}"
+        # Create version subdirectory
+        versioned_dir = experiment_dir / f"v{version}"
+        versioned_dir.mkdir(parents=True, exist_ok=True)
         
         # Add hash to metadata
         if metadata is None:
             metadata = {}
         metadata['hash'] = exp_hash
         metadata['config_hash'] = exp_hash  # For backwards compatibility
-        return Experiment(versioned_name, self.model_dir, description, metadata)
+        metadata['config'] = config or {}
+        
+        return Experiment(name, versioned_dir, description, metadata)
     
     def list_experiments(self) -> List[Dict[str, Any]]:
         """List all experiments for this model type with their versions."""
@@ -112,37 +108,35 @@ class ExperimentTracker:
             if not exp_dir.is_dir():
                 continue
             
-            # More flexible parsing of experiment names
-            name_parts = exp_dir.name.split('_')
+            # Get all version subdirectories
+            versions = [
+                (int(v.name[1:]), v) 
+                for v in exp_dir.iterdir() 
+                if v.is_dir() and v.name.startswith('v') and v.name[1:].isdigit()
+            ]
             
-            # Try to find a version and hash
-            version = None
-            base_name = exp_dir.name
-            
-            for i, part in enumerate(name_parts):
-                if part.startswith('v') and part[1:].isdigit():
-                    version = int(part[1:])
-                    base_name = '_'.join(name_parts[:i] + name_parts[i+1:])
-                    break
-            
-            # If no version found, skip
-            if version is None:
+            # If no versions, skip
+            if not versions:
                 continue
             
-            # Load metadata if available
-            metadata_file = exp_dir / "metadata.json"
-            metadata = {}
-            if metadata_file.exists():
-                with open(metadata_file) as f:
-                    metadata = json.load(f)
+            # Sort versions
+            versions.sort(key=lambda x: x[0])
             
-            experiments.append({
-                'name': base_name,
-                'version': version,
-                'full_name': exp_dir.name,
-                'description': metadata.get('description'),
-                'timestamp': metadata.get('timestamp')
-            })
+            for version, version_dir in versions:
+                # Load metadata if available
+                metadata_file = version_dir / "metadata.json"
+                metadata = {}
+                if metadata_file.exists():
+                    with open(metadata_file) as f:
+                        metadata = json.load(f)
+                
+                experiments.append({
+                    'name': exp_dir.name,
+                    'version': version,
+                    'full_name': f"{exp_dir.name}/v{version}",
+                    'description': metadata.get('description'),
+                    'timestamp': metadata.get('timestamp')
+                })
         
         return sorted(experiments, key=lambda x: (x['name'], x['version']))
     
@@ -156,49 +150,33 @@ class ExperimentTracker:
         Returns:
             Experiment object
         """
-        # More flexible experiment name matching
-        matching_experiments = [
-            p for p in self.model_dir.iterdir() 
-            if p.is_dir() and name in p.name
+        # Find the experiment directory
+        experiment_dir = self.model_dir / name
+        
+        if not experiment_dir.exists():
+            raise ValueError(f"No experiment found matching '{name}'")
+        
+        # Find version subdirectories
+        versions = [
+            int(v.name[1:]) 
+            for v in experiment_dir.iterdir() 
+            if v.is_dir() and v.name.startswith('v') and v.name[1:].isdigit()
         ]
         
-        if not matching_experiments:
-            raise ValueError(f"No experiments found matching '{name}'")
+        if not versions:
+            raise ValueError(f"No versions found for experiment '{name}'")
         
         # If version is not specified, find the latest
         if version is None:
-            # Extract versions from matching experiments
-            versions = []
-            for exp_path in matching_experiments:
-                try:
-                    # More flexible version extraction
-                    name_parts = exp_path.name.split('_')
-                    for part in name_parts:
-                        if part.startswith('v') and part[1:].isdigit():
-                            versions.append(int(part[1:]))
-                            break
-                except (IndexError, ValueError):
-                    continue
-            
-            if not versions:
-                raise ValueError(f"No versions found for experiment '{name}'")
             version = max(versions)
-        
-        # Find the exact experiment matching version
-        matching_version_exps = [
-            p for p in matching_experiments 
-            if f'_v{version}_' in p.name
-        ]
-        
-        if not matching_version_exps:
+        elif version not in versions:
             raise ValueError(f"Version {version} not found for experiment '{name}'")
         
-        # Use the first matching experiment
-        exp_dir = matching_version_exps[0]
-        versioned_name = exp_dir.name
+        # Select the version directory
+        version_dir = experiment_dir / f"v{version}"
         
         # Load metadata
-        metadata_file = exp_dir / "metadata.json"
+        metadata_file = version_dir / "metadata.json"
         metadata = {}
         if metadata_file.exists():
             with open(metadata_file) as f:
@@ -206,8 +184,8 @@ class ExperimentTracker:
         
         # Create and return experiment
         return Experiment(
-            name=versioned_name,  # Use full name including version and hash
-            base_dir=self.model_dir,  # Use model-specific directory
+            name=name,  # Use base experiment name
+            base_dir=version_dir,  # Use specific version directory
             description=metadata.get("description"),
             metadata=metadata.get("metadata", {})
         )
@@ -231,7 +209,7 @@ class Experiment:
             metadata: Optional metadata dictionary
         """
         self.name = name
-        self.exp_dir = base_dir / name
+        self.exp_dir = base_dir
         self.exp_dir.mkdir(parents=True, exist_ok=True)
         
         self.description = description
@@ -311,7 +289,8 @@ class Experiment:
         self,
         X: Any,
         y: Any,
-        description: str = "Finalized model for production use"
+        description: str = "Finalized model for production use",
+        final_end_year: Optional[int] = None
     ) -> Path:
         """Create production version by fitting pipeline on full dataset.
         
@@ -319,6 +298,7 @@ class Experiment:
             X: Features to fit on
             y: Target to fit on
             description: Description of finalized model
+            final_end_year: Final year of data used in model training
             
         Returns:
             Path to finalized model directory
@@ -345,7 +325,8 @@ class Experiment:
             "experiment_name": self.name,
             "experiment_hash": self.metadata.get("hash"),
             "model_type": self.metadata.get("model_type"),
-            "target": self.metadata.get("target")
+            "target": self.metadata.get("target"),
+            "final_end_year": final_end_year
         }
         
         info_path = finalized_dir / "info.json"

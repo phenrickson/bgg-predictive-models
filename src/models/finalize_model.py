@@ -2,6 +2,7 @@
 import argparse
 import logging
 from typing import Optional
+from datetime import datetime
 
 from src.models.experiments import ExperimentTracker
 from src.data.config import load_config
@@ -40,8 +41,15 @@ def finalize_model(
     config = load_config()
     loader = BGGDataLoader(config)
     if end_year is None:
-        # Use same end year as experiment
-        end_year = experiment.metadata.get('test_end_year', 2020)
+        # Dynamically calculate end year, excluding last two years
+        current_year = datetime.now().year
+        end_year = current_year - 2
+        
+        # Check if the experiment's test set overlaps with the last two years
+        test_end_year = experiment.metadata.get('test_end_year', 0)
+        if test_end_year > current_year - 2:
+            logger.warning(f"Test set extends into recent years (up to {test_end_year}). "
+                           f"Automatically filtering to exclude games published in the last two years (before {end_year}).")
     
     logger.info(f"Loading data through {end_year}")
     df = loader.load_training_data(end_train_year=end_year + 1, min_ratings=0)
@@ -50,15 +58,21 @@ def finalize_model(
     X = df.drop("hurdle").to_pandas()
     y = df.select("hurdle").to_pandas().squeeze()
     
+    # Determine final end year (accounting for potential filtering)
+    current_year = datetime.now().year
+    final_end_year = end_year if end_year is not None else current_year - 2
+    
     # Finalize model
     logger.info("Fitting pipeline on full dataset...")
     finalized_dir = experiment.finalize_model(
         X=X,
         y=y,
-        description=description or f"Production model trained on data through {end_year}"
+        description=description or f"Production model trained on data through {final_end_year}",
+        final_end_year=final_end_year
     )
     
     logger.info(f"Model finalized and saved to {finalized_dir}")
+    logger.info(f"Final end year for model training: {final_end_year}")
     return finalized_dir
 
 def main():

@@ -45,7 +45,7 @@ htmlcov/
 *.whl
 
 # Project-specific
-# models/
+models/
 logs/
 notebooks/.ipynb_checkpoints/
 credentials/
