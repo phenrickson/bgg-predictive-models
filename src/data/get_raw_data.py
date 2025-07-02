@@ -6,9 +6,10 @@ import polars as pl
 from google.cloud import bigquery
 
 from .config import load_config
+from .loader import BGGDataLoader
 
-
-def get_raw_data(output_dir: str) -> None:
+# Load data
+def get_raw_data(output_dir = 'data/raw') -> None:
     """Fetch raw data from the materialized view and save locally.
     
     Args:
@@ -20,32 +21,10 @@ def get_raw_data(output_dir: str) -> None:
     
     # Initialize BigQuery client from config
     config = load_config()
-    client = config.get_client()
+    loader = BGGDataLoader(config)
     
-    # Query to get all data from the materialized view
-    query = f"""
-    SELECT *
-    FROM `{config.project_id}.{config.dataset}.games_features_materialized`
-    """
-    
-    print("Fetching data from BigQuery...")
-    
-    # Execute query and convert result to polars DataFrame
-    pandas_df = client.query(query).to_dataframe()
-    df = pl.from_pandas(pandas_df)
-    
-    print(f"Retrieved {len(df)} rows with {len(df.columns)} columns")
-    
-    # Save raw data as parquet
-    output_file = output_path / "games_features_raw.parquet"
-    df.write_parquet(output_file)
-    print(f"Saved raw data to {output_file}")
-    
-    # Print column information
-    print("\nColumn information:")
-    for col in df.columns:
-        col_type = df[col].dtype
-        print(f"  {col}: {col_type}")
+    df = loader.load_training_data(end_train_year = 2022, min_ratings = 0)
+    df.write_parquet('data/raw/game_features.parquet')
 
 
 def main():
@@ -60,8 +39,7 @@ def main():
         help="Directory to save data files (default: data/raw)",
     )
     
-    args = parser.parse_args()
-    get_raw_data(args.output_dir)
+    get_raw_data()
 
 
 if __name__ == "__main__":

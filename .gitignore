@@ -64,4 +64,5 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # ignore local data
-/data
+/data/
+!src/models
