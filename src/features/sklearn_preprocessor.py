@@ -102,6 +102,7 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         # Year transformation parameters
         reference_year: int = 2000,
         normalization_factor: int = 25,
+        year_transform_type: str = 'normalized',  # New parameter
         
         # Logging parameters
         verbose: bool = False,
@@ -130,15 +131,18 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         create_artist_features: bool = True,
         create_publisher_features: bool = True,
         create_family_features: bool = True,
+        create_missingness_features: bool = False,  # New parameter
         
         # Feature selection parameters
         include_base_numeric: bool = True,
         include_average_weight: bool = False,
+        variance_threshold: float = 0.0,  # New parameter to drop zero-variance features
     ):
         """Initialize the preprocessor."""
         self.max_player_count = max_player_count
         self.reference_year = reference_year
         self.normalization_factor = normalization_factor
+        self.year_transform_type = year_transform_type  # Add this line
         self.category_min_freq = category_min_freq
         self.mechanic_min_freq = mechanic_min_freq
         self.designer_min_freq = designer_min_freq
@@ -160,6 +164,7 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         self.create_artist_features = create_artist_features
         self.create_publisher_features = create_publisher_features
         self.create_family_features = create_family_features
+        self.create_missingness_features = create_missingness_features  # New attribute
         self.include_base_numeric = include_base_numeric
         self.include_average_weight = include_average_weight
         self.verbose = verbose
@@ -221,55 +226,53 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         """Create a safe column name from a string."""
         return str(name).lower().replace(' ', '_').replace('-', '_').replace(':', '').replace('/', '_')
     
-    def _handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Replace zeros with NaN and apply log transformation to numeric features."""
+    def _handle_missing_values(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Replace zeros with NaN, create missingness indicators, and apply log transformation to numeric features."""
         if not self.handle_missing_values:
-            return df
+            return df, pd.DataFrame(index=df.index)
         
         logger = logging.getLogger(__name__)
         logger.info("Processing missing values:")
         
         df = df.copy()
+        missingness_df = pd.DataFrame(index=df.index)
         
-        # Replace zeros with NaN
-        columns_to_replace = [
-            "year_published",
-            "min_age", "min_playtime", "max_playtime", 
-            "min_players", "max_players"
-        ]
+        # Dynamically identify numeric columns
+        numeric_columns = df.select_dtypes(include=['int64', 'float64']).columns
         
-        for col in columns_to_replace:
-            if col in df.columns:
-                zero_count = (df[col] == 0).sum()
-                if zero_count > 0:
-                    logger.info(f"  {col}: replacing {zero_count} zeros with NaN ({(zero_count/len(df))*100:.2f}% of values)")
+        # Replace zeros with NaN for numeric columns
+        for col in numeric_columns:
+            zero_count = (df[col] == 0).sum()
+            if zero_count > 0:
+                logger.info(f"  {col}: replacing {zero_count} zeros with NaN ({(zero_count/len(df))*100:.2f}% of values)")
                 df[col] = df[col].replace(0, np.nan)
-                nan_count = df[col].isna().sum()
-                if nan_count > 0:
-                    logger.info(f"  {col}: now has {nan_count} NaN values ({(nan_count/len(df))*100:.2f}% of values)")
+            
+            # Create missingness indicator if feature is enabled
+            if self.create_missingness_features:
+                missingness_df[f"{col}_missing"] = df[col].isna().astype(int)
         
         # Handle numeric features
-        numeric_features = ["min_age", "min_playtime", "max_playtime"]
-        for col in numeric_features:
-            if col in df.columns:
-                # First compute median from non-zero values
-                non_zero_vals = df[df[col] > 0][col]
-                if len(non_zero_vals) > 0:
-                    median_val = non_zero_vals.median()
-                else:
-                    # If no non-zero values, use a small default value
-                    median_val = 1.0
-                    logger.warning(f"  {col}: no non-zero values found, using default value {median_val}")
-                
-                # Then impute NaN values with median
-                df[col] = df[col].fillna(median_val)
-                logger.info(f"  {col}: imputed NaN values with median {median_val:.1f}")
-                
-                # Finally apply log transformation
+        for col in numeric_columns:
+            # Compute median from non-zero values (SimpleImputer-like strategy)
+            non_zero_vals = df[df[col] > 0][col]
+            if len(non_zero_vals) > 0:
+                median_val = non_zero_vals.median()
+            else:
+                # If no non-zero values, use a small default value
+                median_val = 1.0
+                logger.warning(f"  {col}: no non-zero values found, using default value {median_val}")
+            
+            # Impute NaN values with median
+            df[col] = df[col].fillna(median_val)
+            logger.info(f"  {col}: imputed NaN values with median {median_val:.1f}")
+            
+            # Apply log transformation for specific columns
+            log_transform_columns = ['min_age', 'min_playtime', 'max_playtime', 'users_rated']
+            if col in log_transform_columns:
                 df[col] = np.log1p(df[col])
                 logger.info(f"  {col}: applied log1p transformation")
         
-        return df
+        return df, missingness_df
     
     def _transform_year(self, df: pd.DataFrame) -> pd.DataFrame:
         """Transform year_published variable."""
@@ -292,7 +295,14 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
             np.log(np.maximum(df["year_published"] - self.reference_year + 1, 1e-8))
         )
         
-        return df
+        # Select the appropriate year transformation
+        year_transform_column = {
+            'centered': 'year_published_centered',
+            'normalized': 'year_published_normalized',
+            'transformed': 'year_published_transformed'
+        }.get(self.year_transform_type, 'year_published_normalized')
+        
+        return df[[year_transform_column]]
     
     def _create_mechanics_count(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add a feature counting the number of mechanics a game has."""
@@ -493,6 +503,15 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
                 "min_playtime",
                 "max_playtime"
             ])
+            
+            # Missingness features
+            if self.create_missingness_features:
+                feature_names.extend([
+                    "min_age_missing",
+                    "min_playtime_missing",
+                    "max_playtime_missing",
+                    "year_published_missing"
+                ])
         
         # Average weight
         if self.include_average_weight:
@@ -549,18 +568,24 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         # Create a copy of input data for base transformations
         X_base = X.copy()
         
-        # Handle missing values
+        # Handle missing values and get missingness indicators
         if self.handle_missing_values:
-            X_base = self._handle_missing_values(X_base)
+            X_base, missingness_df = self._handle_missing_values(X_base)
+        else:
+            missingness_df = pd.DataFrame(index=X_base.index)
         
         # Initialize list to store all feature DataFrames
         feature_dfs = []
+        
+        # Add missingness features if enabled
+        if self.create_missingness_features and not missingness_df.empty:
+            feature_dfs.append(missingness_df)
         
         # Transform year features if enabled
         if self.transform_year and "year_published" in X_base.columns:
             year_df = self._transform_year(X_base[["year_published"]])
             if not year_df.empty:
-                feature_dfs.append(year_df[["year_published_centered", "year_published_normalized", "year_published_transformed"]])
+                feature_dfs.append(year_df)
         
         # Create mechanics count if mechanics column exists
         if "mechanics" in X_base.columns:
@@ -601,11 +626,25 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         if self.include_base_numeric:
             numeric_features = ["min_age", "min_playtime", "max_playtime"]
             base_numeric_df = pd.DataFrame(index=X_base.index)
+            missingness_df = pd.DataFrame(index=X_base.index)
+            
             for col in numeric_features:
                 if col in X_base.columns:
                     base_numeric_df[col] = X_base[col]
+                    
+                    # Add missingness features if enabled
+                    if self.create_missingness_features:
+                        missingness_df[f"{col}_missing"] = X_base[col].isna().astype(int)
+            
+            # Add year published missingness if enabled
+            if self.create_missingness_features and "year_published" in X_base.columns:
+                missingness_df["year_published_missing"] = X_base["year_published"].isna().astype(int)
+            
             if not base_numeric_df.empty:
                 feature_dfs.append(base_numeric_df)
+            
+            if self.create_missingness_features and not missingness_df.empty:
+                feature_dfs.append(missingness_df)
         
         # Add average weight if enabled
         if self.include_average_weight and "average_weight" in X_base.columns:

@@ -7,7 +7,7 @@ from datetime import datetime
 from src.models.experiments import ExperimentTracker
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
-from src.models.train_hurdle_model import setup_logging
+from src.models.hurdle import setup_logging
 
 def finalize_model(
     model_type: str,

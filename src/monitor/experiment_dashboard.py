@@ -27,11 +27,14 @@ def load_all_experiment_details(model_type: str):
             full_name = exp['full_name'] if 'full_name' in exp else exp['name']
             version = exp['version']
             
-            # Try loading experiment with full name first
-            experiment = tracker.load_experiment(full_name, version)
+            # Split full name to get base experiment name
+            base_name = full_name.split('/')[0]
+            
+            # Try loading experiment with base name
+            experiment = tracker.load_experiment(base_name, version)
             
             # Load metadata
-            with open(Path("models/experiments") / model_type / full_name / "metadata.json", "r") as f:
+            with open(Path("models/experiments") / model_type / base_name / f"v{version}" / "metadata.json", "r") as f:
                 metadata = json.load(f)
             
             # Debug: Print full metadata
@@ -146,6 +149,36 @@ def create_parameters_overview(experiments):
     
     return pl.DataFrame(params_data)
 
+def compare_experiments(experiments):
+    """Compare experiments and highlight similarities/differences."""
+    if len(experiments) < 2:
+        return None
+    
+    # Compare metadata
+    metadata_comparison = {}
+    for exp in experiments:
+        metadata_comparison[exp['name']] = {}
+        for key, value in exp['metadata'].items():
+            metadata_comparison[exp['name']][key] = value
+    
+    # Compare parameters
+    parameter_comparison = {}
+    for exp in experiments:
+        parameter_comparison[exp['name']] = exp['parameters']
+    
+    # Compare metrics
+    metrics_comparison = {}
+    for exp in experiments:
+        metrics_comparison[exp['name']] = {}
+        for dataset in ['train', 'tune', 'test']:
+            metrics_comparison[exp['name']][dataset] = exp['metrics'].get(dataset, {})
+    
+    return {
+        'metadata': metadata_comparison,
+        'parameters': parameter_comparison,
+        'metrics': metrics_comparison
+    }
+
 def create_feature_importance_plot(experiments):
     """Create feature importance visualization."""
     feature_data = []
@@ -184,11 +217,12 @@ def main():
     experiments = load_all_experiment_details(selected_model_type)
     
     # Dashboard Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         'Metrics Overview', 
         'Parameters', 
         'Feature Importance', 
-        'Model Information'
+        'Model Information',
+        'Experiment Metadata'
     ])
     
     with tab1:
@@ -221,12 +255,14 @@ def main():
         st.header('Model Information')
         for exp in experiments:
             with st.expander(f"{exp['name']} Details"):
-                # Display full metadata
-                st.subheader('Full Metadata')
-                st.json(exp['metadata'])
-                
                 st.subheader('Model Info')
                 st.json(exp['model_info'])
+    
+    with tab5:
+        st.header('Experiment Metadata')
+        for exp in experiments:
+            with st.expander(f"{exp['name']} Metadata"):
+                st.json(exp['metadata'])
 
 if __name__ == '__main__':
     main()
