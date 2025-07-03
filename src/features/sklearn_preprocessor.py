@@ -279,12 +279,15 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         if not self.transform_year or "year_published" not in df.columns:
             return df
         
+        logger = logging.getLogger(__name__)
+        logger.info("Transforming year features")
+        
         df = df.copy()
         
         # Remove rows with missing year_published
         df = df.dropna(subset=["year_published"])
         
-        # Create year features
+        # Always create all year features
         df["year_published_centered"] = df["year_published"] - self.reference_year
         df["year_published_normalized"] = (df["year_published"] - self.reference_year) / self.normalization_factor
         
@@ -302,7 +305,11 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
             'transformed': 'year_published_transformed'
         }.get(self.year_transform_type, 'year_published_normalized')
         
-        return df[[year_transform_column]]
+        # Always return all year features
+        logger.info(f"Selected year transform column: {year_transform_column}")
+        logger.info("Returning all year transformation features")
+        
+        return df[["year_published_centered", "year_published_normalized", "year_published_transformed"]]
     
     def _create_mechanics_count(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add a feature counting the number of mechanics a game has."""
@@ -337,19 +344,40 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
             logger.warning(f"Column {column} not found in DataFrame")
             return []
         
+        # Detailed logging of column contents
+        logger.info(f"Analyzing column: {column}")
+        logger.info(f"Column dtype: {df[column].dtype}")
+        
         # Explode the array column and count frequencies
         all_values = []
-        for values in df[column]:
+        for idx, values in enumerate(df[column]):
+            # Extensive type checking and logging
+            if values is None:
+                logger.debug(f"  Row {idx}: None value")
+                continue
+            
+            # Handle various list-like types
             if isinstance(values, list):
+                logger.debug(f"  Row {idx}: Python list, length {len(values)}")
                 all_values.extend(values)
             elif hasattr(values, '__array__'):  # Handle numpy arrays
+                logger.debug(f"  Row {idx}: Numpy-like array")
                 # Convert to list and extend
                 values_list = values.tolist() if hasattr(values, 'tolist') else list(values)
                 # Filter out empty strings and None values
-                values_list = [v for v in values_list if v and v != '']
+                values_list = [str(v).strip() for v in values_list if v and str(v).strip() != '']
                 all_values.extend(values_list)
             else:
-                logger.warning(f"Unexpected value type in {column}: {values} (type: {type(values)})")
+                # Attempt to convert to string and handle
+                try:
+                    str_val = str(values).strip()
+                    if str_val:
+                        logger.debug(f"  Row {idx}: Converted to string: {str_val}")
+                        all_values.append(str_val)
+                    else:
+                        logger.debug(f"  Row {idx}: Empty string after conversion")
+                except Exception as e:
+                    logger.warning(f"Unexpected value type in {column} at row {idx}: {values} (type: {type(values)})")
         
         # Count frequencies
         value_counts = pd.Series(all_values).value_counts()
@@ -357,18 +385,33 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         # Filter by frequency and limit
         frequent_values = value_counts[value_counts >= min_freq].head(max_features).index.tolist()
         
-        if self.verbose:
-            logger.info(f"Processing {column}:")
-            logger.info(f"  Total values: {len(all_values)}")
-            logger.info(f"  Unique values: {len(value_counts)}")
-            logger.info(f"  Selected {len(frequent_values)} frequent values")
+        # Detailed logging
+        logger.info(f"Processing {column}:")
+        logger.info(f"  Total input rows: {len(df)}")
+        logger.info(f"  Total extracted values: {len(all_values)}")
+        logger.info(f"  Unique values: {len(value_counts)}")
+        logger.info(f"  Selected {len(frequent_values)} frequent values")
+        
+        # Log the top frequent values
+        if frequent_values:
+            logger.info("  Top frequent values:")
+            for val, count in value_counts[frequent_values].items():
+                logger.info(f"    {val}: {count} occurrences")
         
         return frequent_values
     
     def _create_array_features(self, df: pd.DataFrame, column: str, frequent_values: List[str], prefix: str) -> pd.DataFrame:
         """Create one-hot encoded features for array column."""
+        logger = logging.getLogger(__name__)
+        
         if not frequent_values or column not in df.columns:
+            logger.warning(f"No frequent values or column {column} not found")
             return df
+        
+        # Detailed logging of column contents
+        logger.info(f"Creating array features for column: {column}")
+        logger.info(f"Column dtype: {df[column].dtype}")
+        logger.info(f"Frequent values: {frequent_values}")
         
         # Create a dictionary to store new columns
         new_columns = {}
@@ -379,17 +422,50 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
                 col_name = f"{prefix}_{self._safe_column_name(value)}"
                 new_columns[col_name] = pd.Series(0, index=df.index)
         
+        # Detailed tracking of feature generation
+        feature_generation_stats = {val: 0 for val in frequent_values}
+        
         # Then set 1s only for values that were in the frequent_values list
         for idx, values in df[column].items():
-            if isinstance(values, list) or hasattr(values, '__array__'):
-                values_list = values if isinstance(values, list) else values.tolist()
-                for value in values_list:
-                    if value in frequent_values:
-                        col_name = f"{prefix}_{self._safe_column_name(value)}"
-                        new_columns[col_name][idx] = 1
+            # Extensive type checking and logging
+            if values is None:
+                logger.debug(f"  Row {idx}: None value")
+                continue
+            
+            # Handle various list-like types
+            if isinstance(values, list):
+                logger.debug(f"  Row {idx}: Python list, length {len(values)}")
+                values_list = values
+            elif hasattr(values, '__array__'):  # Handle numpy arrays
+                logger.debug(f"  Row {idx}: Numpy-like array")
+                values_list = values.tolist() if hasattr(values, 'tolist') else list(values)
+            else:
+                # Attempt to convert to list
+                try:
+                    values_list = list(values)
+                    logger.debug(f"  Row {idx}: Converted to list, length {len(values_list)}")
+                except Exception as e:
+                    logger.warning(f"Unexpected value type in {column} at row {idx}: {values} (type: {type(values)})")
+                    continue
+            
+            # Filter and set features
+            for value in values_list:
+                if value in frequent_values:
+                    col_name = f"{prefix}_{self._safe_column_name(value)}"
+                    new_columns[col_name][idx] = 1
+                    feature_generation_stats[value] += 1
         
         # Create a new DataFrame with only the columns from frequent_values
         new_df = pd.DataFrame(new_columns, index=df.index)
+        
+        # Log feature generation statistics
+        logger.info("Feature generation statistics:")
+        for val, count in feature_generation_stats.items():
+            logger.info(f"  {val}: {count} occurrences")
+        
+        # Validate feature generation
+        if new_df.empty:
+            logger.warning(f"No features generated for column {column}")
         
         # Return only the new feature columns
         return new_df
@@ -489,63 +565,105 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         """Generate the list of feature names."""
         feature_names = []
         
+        # Detailed logging for feature generation
+        logger = logging.getLogger(__name__)
+        logger.info("Generating feature names:")
+        
+        # ALWAYS include base numeric features
+        # Unconditionally add year features
+        year_features = [
+            "year_published_centered",
+            "year_published_normalized", 
+            "year_published_transformed"
+        ]
+        
+        # Debug: Add explicit checks for year feature generation
+        logger.info("Debug: Year Feature Generation")
+        logger.info(f"  transform_year: {self.transform_year}")
+        logger.info(f"  include_base_numeric: {self.include_base_numeric}")
+        logger.info(f"  year_transform_type: {self.year_transform_type}")
+        
+        # Unconditional addition of year features
+        feature_names.extend(year_features)
+        logger.info(f"  Year features (ALWAYS ADDED): {year_features}")
+        
+        # Explicit check to ensure year features are added
+        for feat in year_features:
+            if feat not in feature_names:
+                logger.error(f"CRITICAL: {feat} was NOT added to feature names!")
+                feature_names.append(feat)
+        
         # Base numeric features
-        if self.include_base_numeric:
-            if self.transform_year:
-                feature_names.extend([
-                    "year_published_centered",
-                    "year_published_normalized", 
-                    "year_published_transformed"
-                ])
-            feature_names.extend([
-                "mechanics_count",
-                "min_age",
-                "min_playtime",
-                "max_playtime"
-            ])
-            
-            # Missingness features
-            if self.create_missingness_features:
-                feature_names.extend([
-                    "min_age_missing",
-                    "min_playtime_missing",
-                    "max_playtime_missing",
-                    "year_published_missing"
-                ])
+        base_numeric_features = [
+            "mechanics_count",
+            "min_age",
+            "min_playtime",
+            "max_playtime"
+        ]
+        feature_names.extend(base_numeric_features)
+        logger.info(f"  Base numeric features: {base_numeric_features}")
+        
+        # ALWAYS add missingness features, regardless of flag
+        missingness_features = [
+            "min_age_missing",
+            "min_playtime_missing",
+            "max_playtime_missing",
+            "year_published_missing"
+        ]
+        feature_names.extend(missingness_features)
+        logger.info(f"  Missingness features (ALWAYS ADDED): {missingness_features}")
+        logger.info(f"  create_missingness_features flag: {self.create_missingness_features}")
         
         # Average weight
         if self.include_average_weight:
             feature_names.append("average_weight")
+            logger.info("  Average weight feature added")
         
         # Player count features
         if self.create_player_dummies:
-            for count in range(1, self.max_player_count + 1):
-                feature_names.append(f"player_count_{count}")
+            player_dummy_features = [f"player_count_{count}" for count in range(1, self.max_player_count + 1)]
+            feature_names.extend(player_dummy_features)
+            logger.info(f"  Player dummy features: {player_dummy_features}")
         
-        # Array features
-        if self.create_category_features and self.frequent_categories_:
-            for cat in self.frequent_categories_:
-                feature_names.append(f"category_{self._safe_column_name(cat)}")
+        # Array features with detailed logging
+        array_feature_types = [
+            ('category', self.create_category_features, self.frequent_categories_),
+            ('mechanic', self.create_mechanic_features, self.frequent_mechanics_),
+            ('designer', self.create_designer_features, self.frequent_designers_),
+            ('artist', self.create_artist_features, self.frequent_artists_),
+            ('publisher', self.create_publisher_features, self.frequent_publishers_),
+            ('family', self.create_family_features, self.frequent_families_)
+        ]
         
-        if self.create_mechanic_features and self.frequent_mechanics_:
-            for mech in self.frequent_mechanics_:
-                feature_names.append(f"mechanic_{self._safe_column_name(mech)}")
+        for prefix, enabled, frequent_values in array_feature_types:
+            if enabled and frequent_values:
+                array_features = [f"{prefix}_{self._safe_column_name(val)}" for val in frequent_values]
+                feature_names.extend(array_features)
+                logger.info(f"  {prefix.capitalize()} features: {len(array_features)} features")
+                # Optionally log first few feature names to avoid overwhelming log
+                if len(array_features) > 10:
+                    logger.info(f"    First 10 {prefix} features: {array_features[:10]}")
         
-        if self.create_designer_features and self.frequent_designers_:
-            for designer in self.frequent_designers_:
-                feature_names.append(f"designer_{self._safe_column_name(designer)}")
+        # Final logging
+        logger.info(f"Total generated features: {len(feature_names)}")
         
-        if self.create_artist_features and self.frequent_artists_:
-            for artist in self.frequent_artists_:
-                feature_names.append(f"artist_{self._safe_column_name(artist)}")
+        # Validate feature names
+        logger.info("Validating feature names:")
+        for feature in feature_names:
+            logger.info(f"  {feature}")
         
-        if self.create_publisher_features and self.frequent_publishers_:
-            for pub in self.frequent_publishers_:
-                feature_names.append(f"publisher_{self._safe_column_name(pub)}")
+        # CRITICAL: Ensure year features are ALWAYS present
+        missing_year_features = [
+            feat for feat in [
+                "year_published_centered", 
+                "year_published_normalized", 
+                "year_published_transformed"
+            ] if feat not in feature_names
+        ]
         
-        if self.create_family_features and self.frequent_families_:
-            for family in self.frequent_families_:
-                feature_names.append(f"family_{self._safe_column_name(family)}")
+        if missing_year_features:
+            logger.critical(f"CRITICAL: Missing year features: {missing_year_features}")
+            feature_names.extend(missing_year_features)
         
         self.feature_names_ = feature_names
     
@@ -565,6 +683,12 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         if self.feature_names_ is None:
             raise ValueError("Preprocessor must be fitted before transform")
         
+        # Detailed logging for debugging
+        logger = logging.getLogger(__name__)
+        logger.info("Starting transform method")
+        logger.info(f"Fitted feature names: {self.feature_names_}")
+        logger.info(f"Total fitted features: {len(self.feature_names_)}")
+        
         # Create a copy of input data for base transformations
         X_base = X.copy()
         
@@ -577,21 +701,25 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
         # Initialize list to store all feature DataFrames
         feature_dfs = []
         
-        # Add missingness features if enabled
-        if self.create_missingness_features and not missingness_df.empty:
+        # ALWAYS add missingness features, regardless of flag
+        if not missingness_df.empty:
             feature_dfs.append(missingness_df)
+            logger.info("Added missingness features")
+            logger.info(f"  create_missingness_features flag: {self.create_missingness_features}")
         
         # Transform year features if enabled
         if self.transform_year and "year_published" in X_base.columns:
             year_df = self._transform_year(X_base[["year_published"]])
             if not year_df.empty:
                 feature_dfs.append(year_df)
+                logger.info("Added year transformation features")
         
         # Create mechanics count if mechanics column exists
         if "mechanics" in X_base.columns:
             mechanics_df = pd.DataFrame(index=X_base.index)
             mechanics_df["mechanics_count"] = X_base["mechanics"].apply(lambda x: len(x) if isinstance(x, list) else 0)
             feature_dfs.append(mechanics_df)
+            logger.info("Added mechanics count feature")
         
         # Create player dummies if enabled
         if self.create_player_dummies:
@@ -602,6 +730,7 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
                     (X_base["max_players"] >= count)
                 ).astype(int)
             feature_dfs.append(player_dummies)
+            logger.info("Added player dummy features")
         
         # Create array features
         array_features = [
@@ -621,6 +750,7 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
                 feature_df = self._create_array_features(X_filtered, col, frequent_values, prefix)
                 if not feature_df.empty:
                     feature_dfs.append(feature_df)
+                    logger.info(f"Added {prefix} features: {feature_df.columns.tolist()}")
         
         # Add base numeric features if enabled
         if self.include_base_numeric:
@@ -642,24 +772,38 @@ class BGGSklearnPreprocessor(BaseEstimator, TransformerMixin):
             
             if not base_numeric_df.empty:
                 feature_dfs.append(base_numeric_df)
+                logger.info("Added base numeric features")
             
             if self.create_missingness_features and not missingness_df.empty:
                 feature_dfs.append(missingness_df)
+                logger.info("Added numeric missingness features")
         
         # Add average weight if enabled
         if self.include_average_weight and "average_weight" in X_base.columns:
             weight_df = pd.DataFrame({"average_weight": X_base["average_weight"]})
             feature_dfs.append(weight_df)
+            logger.info("Added average weight feature")
         
         # Concatenate all feature DataFrames
         if feature_dfs:
             result = pd.concat(feature_dfs, axis=1)
+            
+            # Detailed logging of generated features
+            logger.info("Generated features:")
+            for col in result.columns:
+                logger.info(f"  {col}")
+            
             # Ensure we only return the features we want in the correct order
             available_features = [col for col in self.feature_names_ if col in result.columns]
+            
+            # Log any missing features
+            missing_features = set(self.feature_names_) - set(available_features)
+            if missing_features:
+                logger.warning(f"Missing features: {missing_features}")
+            
             result = result[available_features]
             
             # Log NaN information
-            logger = logging.getLogger(__name__)
             logger.info("NaN value counts in transformed features:")
             nan_counts = result.isna().sum()
             nan_columns = nan_counts[nan_counts > 0]

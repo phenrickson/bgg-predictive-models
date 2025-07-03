@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 # Import required modules
-from src.models.train_hurdle_model import main as train_hurdle_model
+from src.models.hurdle import main as train_hurdle_model
 from src.models.finalize_model import finalize_model
 from src.models.score import score_data
 

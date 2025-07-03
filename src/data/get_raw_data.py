@@ -23,9 +23,8 @@ def get_raw_data(output_dir = 'data/raw') -> None:
     config = load_config()
     loader = BGGDataLoader(config)
     
-    df = loader.load_training_data(end_train_year = 2022, min_ratings = 0)
+    df = loader.load_data()
     df.write_parquet('data/raw/game_features.parquet')
-
 
 def main():
     """Main entry point."""
