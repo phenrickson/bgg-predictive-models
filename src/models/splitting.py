@@ -10,7 +10,8 @@ def time_based_split(
     prediction_window: int = 2,
     test_window: Optional[int] = None,
     time_col: str = "year_published",
-    return_dict: bool = False
+    return_dict: bool = False,
+    to_pandas = True
 ) -> Union[Dict[str, pl.DataFrame], Tuple[pl.DataFrame, pl.DataFrame], Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]]:
     """
     Split a dataset into training, validation, and optionally test sets based on time.

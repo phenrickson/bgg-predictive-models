@@ -27,9 +27,8 @@ from sklearn.metrics import (
 # Project imports
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
-from src.features.sklearn_preprocessor import BGGSklearnPreprocessor
+from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split
-from src.features.imputation import *
 
 def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     """Configure logging for the training process."""
@@ -48,47 +47,50 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     
     return logger
 
+# function to select column and conver tto pandas
+def select_X_y(df, y_column, to_pandas = True):
+    X = df.drop(y_column)
+    y = df.select(y_column)
+    
+    if to_pandas:
+        X = X.to_pandas()
+        y = y.to_pandas().squeeze()
+        return X, y
+    else:
+        return X, y
+
 def create_preprocessing_pipeline() -> Pipeline:
     """Create preprocessing pipeline with feature engineering, imputation, and scaling."""
-    # Create preprocessor with all features enabled and lower frequency thresholds
-    preprocessor = BGGSklearnPreprocessor(
-        # Disable verbose logging
-        verbose=False,
-        
-        # Lower minimum frequency thresholds
-        category_min_freq=5,
-        mechanic_min_freq=5,
-        designer_min_freq=10,
-        artist_min_freq=10,
-        publisher_min_freq=5,
-        family_min_freq=5,
-        
-        # Increase max features
-       max_artist_features=250,
-       max_publisher_features=250,
-       max_designer_features=250,
-       max_family_features=250,
-       max_mechanic_features=500,
-       max_category_features=500,
-        
-        # Enable all feature types
-        create_category_features=True,
-        create_mechanic_features=True,
-        create_designer_features=True,
-        create_artist_features=True,
-        create_publisher_features=True,
-        create_family_features=True,
-        create_player_dummies=True,
-        transform_year=True,
-        include_base_numeric=True,
-        create_missingness_features=False  # Add missingness features
+    # Create preprocessing pipeline using the standard BGG preprocessor
+    pipeline = create_bgg_preprocessor(
+        reference_year=2000,
+        normalization_factor=25,
+        log_columns=['min_age', 'min_playtime', 'max_playtime']
     )
     
-    # Create pipeline that applies BGG preprocessing and scaling
-    pipeline = Pipeline([
-        ('bgg_preprocessor', preprocessor),
-        ('scaler', StandardScaler()),
-    ])
+    # Update the BGG preprocessor with custom parameters
+    bgg_preprocessor = pipeline.named_steps['bgg_preprocessor']
+    bgg_preprocessor.verbose = True
+    bgg_preprocessor.category_min_freq = 0
+    bgg_preprocessor.mechanic_min_freq = 0
+    bgg_preprocessor.designer_min_freq = 10
+    bgg_preprocessor.artist_min_freq = 10
+    bgg_preprocessor.publisher_min_freq = 5
+    bgg_preprocessor.family_min_freq = 10
+    bgg_preprocessor.max_artist_features = 250
+    bgg_preprocessor.max_publisher_features = 250
+    bgg_preprocessor.max_designer_features = 250
+    bgg_preprocessor.max_family_features = 250
+    bgg_preprocessor.max_mechanic_features = 500
+    bgg_preprocessor.max_category_features = 500
+    bgg_preprocessor.create_category_features = True
+    bgg_preprocessor.create_mechanic_features = True
+    bgg_preprocessor.create_designer_features = True
+    bgg_preprocessor.create_artist_features = True
+    bgg_preprocessor.create_publisher_features = True
+    bgg_preprocessor.create_family_features = True
+    bgg_preprocessor.create_player_dummies = True
+    bgg_preprocessor.include_base_numeric = True
     
     return pipeline
 
@@ -129,7 +131,7 @@ def preprocess_data(
     
     # Get feature names from BGG preprocessor
     try:
-        feature_names = preprocessing_pipeline.named_steps['bgg_preprocessor'].get_feature_names()
+        feature_names = preprocessing_pipeline.named_steps['bgg_preprocessor'].get_feature_names_out()
     except Exception as e:
         feature_names = [f"feature_{i}" for i in range(features.shape[1])]
     
@@ -242,50 +244,68 @@ def main():
     logger.info(f"Loaded {len(df)} total rows")
     logger.info(f"Year range: {df['year_published'].min()} - {df['year_published'].max()}")
     
-    # Create data splits
+    # Create data splits using time_based_split function
     logger.info("Creating data splits...")
     
-    # Training data: < train_end_year
-    train_df = df.filter(pl.col("year_published") < args.train_end_year)
+    # Calculate windows for validation and test sets
+    validation_window = args.tune_end_year - args.tune_start_year + 1
+    test_window = args.test_end_year - args.test_start_year + 1
     
-    # Tuning data: tune_start_year <= year <= tune_end_year
-    tune_df = df.filter(
-        (pl.col("year_published") >= args.tune_start_year) & 
-        (pl.col("year_published") <= args.tune_end_year)
-    )
-    
-    # Test data: test_start_year <= year <= test_end_year
-    test_df = df.filter(
-        (pl.col("year_published") >= args.test_start_year) & 
-        (pl.col("year_published") <= args.test_end_year)
+    # Use time_based_split to get all three splits
+    train_df, tune_df, test_df = time_based_split(
+        df=df,
+        train_end_year=args.train_end_year,
+        prediction_window=validation_window,
+        test_window=test_window,
+        time_col="year_published",
+        return_dict=False,
+        to_pandas = True
     )
     
     logger.info(f"Training data: {len(train_df)} rows (years < {args.train_end_year})")
     logger.info(f"Tuning data: {len(tune_df)} rows (years {args.tune_start_year}-{args.tune_end_year})")
     logger.info(f"Test data: {len(test_df)} rows (years {args.test_start_year}-{args.test_end_year})")
     
-    # Create preprocessing pipeline
-    preprocessing_pipeline = create_preprocessing_pipeline()
+    # Preprocessing pipeline to be used with model
+    preprocessor = create_preprocessing_pipeline()
     
-    # Preprocess data
-    logger.info("Preprocessing data...")
-    X_train = preprocess_data(train_df, preprocessing_pipeline, fit=True, dataset_name="training")
-    X_tune = preprocess_data(tune_df, preprocessing_pipeline, fit=False, dataset_name="tuning")
-    X_test = preprocess_data(test_df, preprocessing_pipeline, fit=False, dataset_name="test")
+    # Create pipeine to be used with model
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', LogisticRegression())
+    ])
     
-    # Get targets
-    y_train = train_df.select("hurdle").to_pandas().squeeze()
-    y_tune = tune_df.select("hurdle").to_pandas().squeeze()
-    y_test = test_df.select("hurdle").to_pandas().squeeze()
+    # Get X, y for train and validation set
+    train_X, train_y = select_X_y(train_df, y_column = 'hurdle')
+    tune_X, tune_y = select_X_y(tune_df, y_column = 'hurdle')
     
-    logger.info(f"Feature dimensions: Train {X_train.shape}, Tune {X_tune.shape}, Test {X_test.shape}")
+    logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
     
+    # fit to training set
+    pipeline.fit(train_X, train_y)
+    train_only_model = pipeline
+    
+    # evaluate
+    train_metrics = evaluate_model(train_only_model, train_X, train_y, "training")
+    tune_metrics = evaluate_model(train_only_model, tune_X, tune_y, "tuning")
+    
+    # Now refit on combined training + validation data for final evaluation
+    logger.info("Refitting final model on training + validation data...")
+    X_train_val = pd.concat([train_X, tune_X])
+    y_train_val = pd.concat([train_y, tune_y])
+    
+    logger.info(f"Feature dimensions: Train + Tune {train_X_val.shape}")
+
+    # fit
+    final_model = LogisticRegression(**best_params)
+    final_model.fit(train_X train_y_val)
+
     # Use provided C value or tune hyperparameters
     if args.c is not None:
         best_params = {'C': args.c, 'max_iter': 4000, 'penalty': 'l2'}
         logger.info(f"Using provided C value: {args.c}")
     else:
-        best_params = tune_hyperparameters(X_train, y_train, X_tune, y_tune)
+        best_params = tune_hyperparameters(train_X, train_y, tune_X, tune_y)
     
     # First evaluate model trained only on training data
     logger.info("Evaluating model trained on training data only...")
@@ -295,13 +315,8 @@ def main():
     train_metrics = evaluate_model(train_only_model, X_train, y_train, "training")
     tune_metrics = evaluate_model(train_only_model, X_tune, y_tune, "tuning")
     
-    # Now refit on combined training + validation data for final evaluation
-    logger.info("Refitting final model on training + validation data...")
-    X_train_val = pd.concat([X_train, X_tune])
-    y_train_val = pd.concat([y_train, y_tune])
-    
+
     final_model = LogisticRegression(**best_params)
-    final_model.fit(X_train_val, y_train_val)
     
     # Create complete pipeline with final model
     full_pipeline = Pipeline([
@@ -319,8 +334,11 @@ def main():
     config = {
         'model_params': best_params,
         'preprocessing': {
-            'category_min_freq': 5,
-            'mechanic_min_freq': 5,
+            'reference_year': 2000,
+            'normalization_factor': 25,
+            'log_columns': ['min_age', 'min_playtime', 'max_playtime'],
+            'category_min_freq': 0,
+            'mechanic_min_freq': 0,
             'designer_min_freq': 10,
             'artist_min_freq': 10,
             'publisher_min_freq': 5,
@@ -338,7 +356,6 @@ def main():
             'create_publisher_features': True,
             'create_family_features': True,
             'create_player_dummies': True,
-            'transform_year': True,
             'include_base_numeric': True
         },
         'data_splits': {
