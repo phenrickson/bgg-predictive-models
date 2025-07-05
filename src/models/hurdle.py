@@ -31,7 +31,92 @@ from sklearn.metrics import (
     matthews_corrcoef,
     confusion_matrix
 )
+
+# CatBoost imports
+from catboost import CatBoostClassifier
 from typing import Type, Union, Tuple
+
+def extract_feature_importance(
+    fitted_pipeline: Pipeline, 
+    classifier_type: Type[BaseEstimator]
+) -> pd.DataFrame:
+    """
+    Extract feature importance for different classifier types.
+    
+    Parameters
+    ----------
+    fitted_pipeline : Pipeline
+        A fitted scikit-learn pipeline containing a preprocessor and classifier
+    classifier_type : Type[BaseEstimator]
+        The type of classifier to extract feature importance for
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing feature names, importance values, 
+        and absolute importance, sorted in descending order.
+    """
+    # Get the preprocessor and classifier from pipeline
+    preprocessor = fitted_pipeline.named_steps['preprocessor']
+    classifier = fitted_pipeline.named_steps['classifier']
+    
+    # Find feature names
+    steps = list(preprocessor.named_steps.items())
+    feature_names = None
+    
+    for name, step in reversed(steps):
+        try:
+            feature_names = step.get_feature_names_out()
+            break
+        except (AttributeError, TypeError):
+            continue
+    
+    if feature_names is None:
+        try:
+            feature_names = preprocessor.get_feature_names_out()
+        except:
+            if hasattr(preprocessor, 'feature_names_'):
+                feature_names = preprocessor.feature_names_
+            else:
+                raise ValueError("Could not get feature names from any preprocessing step")
+    
+    # Extract feature importance based on classifier type
+    from sklearn.linear_model import LogisticRegression
+    from catboost import CatBoostClassifier
+    
+    if classifier_type == LogisticRegression:
+        # Use existing extract_model_coefficients for LogisticRegression
+        return extract_model_coefficients(fitted_pipeline)
+    
+    elif classifier_type == CatBoostClassifier:
+        # For CatBoost, use feature importance from the model
+        importance = classifier.get_feature_importance()
+        
+        # Validate lengths match
+        if len(feature_names) != len(importance):
+            raise ValueError(
+                f"Mismatch between number of features ({len(feature_names)}) "
+                f"and feature importance values ({len(importance)})"
+            )
+        
+        # Create DataFrame with feature importance
+        importance_df = pd.DataFrame({
+            'feature': feature_names,
+            'importance': importance,
+            'abs_importance': np.abs(importance)
+        })
+        
+        # Sort by importance
+        importance_df = importance_df.sort_values('abs_importance', ascending=False)
+        
+        # Add rank
+        importance_df['rank'] = range(1, len(importance_df) + 1)
+        
+        return importance_df
+    
+    else:
+        # For other classifiers, raise an error or handle differently
+        raise ValueError(f"Feature importance extraction not implemented for {classifier_type.__name__}")
 
 # Project imports
 from src.data.config import load_config
@@ -132,6 +217,88 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
     coef_df['rank'] = range(1, len(coef_df) + 1)
     
     return coef_df
+
+def extract_feature_importance(
+    fitted_pipeline: Pipeline, 
+    classifier_type: Type[BaseEstimator]
+) -> pd.DataFrame:
+    """
+    Extract feature importance for different classifier types.
+    
+    Parameters
+    ----------
+    fitted_pipeline : Pipeline
+        A fitted scikit-learn pipeline containing a preprocessor and classifier
+    classifier_type : Type[BaseEstimator]
+        The type of classifier to extract feature importance for
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing feature names, importance values, 
+        and absolute importance, sorted in descending order.
+    """
+    # Get the preprocessor and classifier from pipeline
+    preprocessor = fitted_pipeline.named_steps['preprocessor']
+    classifier = fitted_pipeline.named_steps['classifier']
+    
+    # Find feature names
+    steps = list(preprocessor.named_steps.items())
+    feature_names = None
+    
+    for name, step in reversed(steps):
+        try:
+            feature_names = step.get_feature_names_out()
+            break
+        except (AttributeError, TypeError):
+            continue
+    
+    if feature_names is None:
+        try:
+            feature_names = preprocessor.get_feature_names_out()
+        except:
+            if hasattr(preprocessor, 'feature_names_'):
+                feature_names = preprocessor.feature_names_
+            else:
+                raise ValueError("Could not get feature names from any preprocessing step")
+    
+    # Extract feature importance based on classifier type
+    from sklearn.linear_model import LogisticRegression
+    from catboost import CatBoostClassifier
+    
+    if classifier_type == LogisticRegression:
+        # Use existing extract_model_coefficients for LogisticRegression
+        return extract_model_coefficients(fitted_pipeline)
+    
+    elif classifier_type == CatBoostClassifier:
+        # For CatBoost, use feature importance from the model
+        importance = classifier.get_feature_importance()
+        
+        # Validate lengths match
+        if len(feature_names) != len(importance):
+            raise ValueError(
+                f"Mismatch between number of features ({len(feature_names)}) "
+                f"and feature importance values ({len(importance)})"
+            )
+        
+        # Create DataFrame with feature importance
+        importance_df = pd.DataFrame({
+            'feature': feature_names,
+            'importance': importance,
+            'abs_importance': np.abs(importance)
+        })
+        
+        # Sort by importance
+        importance_df = importance_df.sort_values('abs_importance', ascending=False)
+        
+        # Add rank
+        importance_df['rank'] = range(1, len(importance_df) + 1)
+        
+        return importance_df
+    
+    else:
+        # For other classifiers, raise an error or handle differently
+        raise ValueError(f"Feature importance extraction not implemented for {classifier_type.__name__}")
 
 # function to select column and convert to pandas
 def select_X_y(df, y_column, to_pandas = True):
@@ -566,7 +733,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
     parser.add_argument("--classifier", type=str, default="logistic",
-                       choices=['logistic', 'rf', 'svc'],
+                       choices=['logistic', 'rf', 'svc', 'catboost'],
                        help="Classifier type to use")
     parser.add_argument("--metric", type=str, default="log_loss",
                        choices=["log_loss", "f1", "auc"],
@@ -659,7 +826,8 @@ def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]
     CLASSIFIER_MAPPING = {
         'logistic': LogisticRegression,
         'rf': RandomForestClassifier,
-        'svc': SVC
+        'svc': SVC,
+        'catboost': CatBoostClassifier
     }
     
     PARAM_GRIDS = {
@@ -677,6 +845,13 @@ def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]
             'classifier__C': [0.1, 1.0, 10.0],
             'classifier__kernel': ['rbf', 'linear'],
             'classifier__gamma': ['scale', 'auto', 0.1, 0.01]
+        },
+        'catboost': {
+            'classifier__iterations': [100, 300, 500],
+            'classifier__learning_rate': [0.01, 0.1, 0.3],
+            'classifier__depth': [4, 6, 8],
+            'classifier__l2_leaf_reg': [1, 3, 5],
+            'classifier__random_strength': [0.5, 1.0, 1.5]
         }
     }
     
@@ -780,22 +955,33 @@ def log_experiment(
     experiment.log_metrics(test_metrics, "test")
     experiment.log_parameters(best_params)
     
-    # Extract and save coefficients
+    # Extract and save feature importance
+    logger = logging.getLogger(__name__)
     try:
-        coefficients_df = extract_model_coefficients(pipeline)
-        coefficients_pl = pl.from_pandas(coefficients_df)
-        experiment.log_coefficients(coefficients_pl)
+        from sklearn.linear_model import LogisticRegression
+        from catboost import CatBoostClassifier
+        
+        # Determine the classifier type
+        classifier_type = type(pipeline.named_steps['classifier'])
+        
+        # Extract feature importance
+        importance_df = extract_feature_importance(pipeline, classifier_type)
+        importance_pl = pl.from_pandas(importance_df)
+        experiment.log_coefficients(importance_pl)
         
         # Log top features
-        logger = logging.getLogger(__name__)
-        logger.info("Top 10 most important features (by absolute coefficient):")
-        for _, row in coefficients_df.head(10).iterrows():
-            logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
+        if classifier_type == LogisticRegression:
+            logger.info("Top 10 most important features (by absolute coefficient):")
+            for _, row in importance_df.head(10).iterrows():
+                logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
+        else:
+            logger.info("Top 10 most important features (by importance):")
+            for _, row in importance_df.head(10).iterrows():
+                logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['importance']:8.4f}")
         
         # Save model info
         model_info = {
-            'intercept': float(pipeline.named_steps['classifier'].intercept_[0]),
-            'n_features': len(coefficients_df),
+            'n_features': len(importance_df),
             'best_params': best_params,
             'threshold': test_metrics.get('threshold', 0.5),  # Get optimal threshold from test metrics
             'threshold_f1_score': test_metrics.get('f1_score', None),  # Score at optimal threshold
@@ -804,11 +990,16 @@ def log_experiment(
                 'test': {k: test_metrics[k] for k in ['true_positives', 'true_negatives', 'false_positives', 'false_negatives']}
             }
         }
+        
+        # Add intercept only for Logistic Regression
+        if classifier_type == LogisticRegression:
+            model_info['intercept'] = float(pipeline.named_steps['classifier'].intercept_[0])
+        
         experiment.log_model_info(model_info)
         
     except Exception as e:
-        logger.error(f"Error extracting model coefficients: {e}")
-        logger.error("Continuing without saving coefficients")
+        logger.error(f"Error extracting feature importance: {e}")
+        logger.error("Continuing without saving feature importance")
     
     # Save pipeline
     experiment.save_pipeline(pipeline)
