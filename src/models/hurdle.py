@@ -26,7 +26,9 @@ from sklearn.metrics import (
     recall_score, 
     f1_score, 
     roc_auc_score,
-    log_loss
+    log_loss,
+    fbeta_score,
+    matthews_corrcoef
 )
 from typing import Type, Union, Tuple
 
@@ -414,21 +416,103 @@ def tune_model(
     
     return tuned_pipeline, best_params
 
+def find_optimal_threshold(
+    y_true: pd.Series, 
+    y_pred_proba: np.ndarray, 
+    metric: str = 'f1'
+) -> Dict[str, float]:
+    """
+    Find the optimal probability threshold for classification.
+    
+    Parameters
+    ----------
+    y_true : pd.Series
+        True binary labels
+    y_pred_proba : np.ndarray
+        Predicted probabilities for the positive class
+    metric : str, optional (default='f1')
+        Metric to optimize. Options: 'f1', 'precision', 'recall', 'accuracy'
+    
+    Returns
+    -------
+    Dict[str, float]
+        Dictionary containing the optimal threshold and corresponding metric value
+    """
+    # Validate metric
+    valid_metrics = ['f1', 'precision', 'recall', 'accuracy', 'f2']
+    if metric not in valid_metrics:
+        raise ValueError(f"Metric must be one of {valid_metrics}")
+    
+    # Scoring functions
+    scoring_functions = {
+        'f1': f1_score,
+        'precision': precision_score,
+        'recall': recall_score,
+        'accuracy': accuracy_score,
+        'f2': lambda y_true, y_pred: fbeta_score(y_true, y_pred, beta=2.0)  # F2 score weights recall higher than precision
+    }
+    
+    # Thresholds to test
+    thresholds = np.linspace(0, 1, 101)  # 101 points from 0 to 1
+    
+    # Track best threshold
+    best_threshold = 0.5
+    best_score = 0
+    
+    # Track best scores
+    best_f1 = 0
+    
+    # Evaluate each threshold
+    for threshold in thresholds:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        
+        # Calculate scores
+        score = scoring_functions[metric](y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)  # Always calculate F1 for reference
+        
+        # Update best threshold if needed
+        if score > best_score:
+            best_score = score
+            best_threshold = threshold
+            best_f1 = f1
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Optimal Threshold Analysis:")
+    logger.info(f"  Best {metric} threshold: {best_threshold:.4f}")
+    logger.info(f"  Best {metric} score: {best_score:.4f}")
+    logger.info(f"  F1 score at optimal threshold: {best_f1:.4f}")
+    
+    return {
+        'threshold': best_threshold,
+        f'{metric}_score': best_score,
+        'f1_score': best_f1
+    }
+
 def evaluate_model(
     model: LogisticRegression, 
     X: pd.DataFrame, 
     y: pd.Series,
-    dataset_name: str = "test"
+    dataset_name: str = "test",
+    find_threshold: bool = False,
+    threshold: Optional[float] = None
 ) -> Dict[str, float]:
     """Evaluate model performance."""
-    y_pred = model.predict(X)
     y_pred_proba = model.predict_proba(X)[:, 1]
+    
+    # Use provided threshold or default to 0.5
+    if threshold is not None:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        logger = logging.getLogger(__name__)
+        logger.info(f"Using threshold {threshold:.4f} for {dataset_name} predictions")
+    else:
+        y_pred = model.predict(X)
     
     metrics = {
         'accuracy': accuracy_score(y, y_pred),
         'precision': precision_score(y, y_pred),
         'recall': recall_score(y, y_pred),
         'f1_score': f1_score(y, y_pred),
+        'mcc': matthews_corrcoef(y, y_pred),  # Matthews Correlation Coefficient
         'roc_auc': roc_auc_score(y, y_pred_proba),
         'log_loss': log_loss(y, model.predict_proba(X))
     }
@@ -437,6 +521,11 @@ def evaluate_model(
     logger.info(f"{dataset_name.title()} Performance:")
     for metric, value in metrics.items():
         logger.info(f"  {metric}: {value:.4f}")
+    
+    # Optional threshold optimization
+    if find_threshold:
+        threshold_results = find_optimal_threshold(y, y_pred_proba)
+        metrics.update(threshold_results)
     
     return metrics
 
@@ -691,7 +780,9 @@ def log_experiment(
         model_info = {
             'intercept': float(pipeline.named_steps['classifier'].intercept_[0]),
             'n_features': len(coefficients_df),
-            'best_params': best_params
+            'best_params': best_params,
+            'threshold': test_metrics.get('threshold', 0.5),  # Get optimal threshold from test metrics
+            'threshold_f1_score': test_metrics.get('f1_score', None)  # Score at optimal threshold
         }
         experiment.log_model_info(model_info)
         
@@ -749,14 +840,29 @@ def main():
     train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
     tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning")
     
+    # Find optimal threshold using tuning data with F2 score
+    tune_pred_proba = train_pipeline.predict_proba(tune_X)[:, 1]
+    threshold_results = find_optimal_threshold(tune_y, tune_pred_proba, metric='f2')
+    optimal_threshold = threshold_results['threshold']
+    logger.info(f"Found optimal threshold {optimal_threshold:.4f} on tuning data")
+    
     # Fit final model on combined train+tune data
     logger.info("Fitting final model on combined training + validation data...")
     X_combined = pd.concat([train_X, tune_X])
     y_combined = pd.concat([train_y, tune_y])
     final_pipeline = fit_model(tuned_pipeline, X_combined, y_combined)
     
-    # Evaluate on test set
-    test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
+    # Evaluate on test set with optimal threshold
+    test_metrics = evaluate_model(
+        final_pipeline, 
+        test_X, 
+        test_y, 
+        "test", 
+        threshold=optimal_threshold
+    )
+    
+    # Add threshold to test metrics
+    test_metrics.update(threshold_results)
     
     # Log experiment results
     tracker = ExperimentTracker("hurdle", args.output_dir)
