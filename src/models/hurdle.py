@@ -28,7 +28,8 @@ from sklearn.metrics import (
     roc_auc_score,
     log_loss,
     fbeta_score,
-    matthews_corrcoef
+    matthews_corrcoef,
+    confusion_matrix
 )
 from typing import Type, Union, Tuple
 
@@ -488,6 +489,16 @@ def find_optimal_threshold(
         'f1_score': best_f1
     }
 
+def format_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, int]:
+    """Format confusion matrix results into a dictionary."""
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    return {
+        'true_negatives': int(tn),
+        'false_positives': int(fp),
+        'false_negatives': int(fn),
+        'true_positives': int(tp)
+    }
+
 def evaluate_model(
     model: LogisticRegression, 
     X: pd.DataFrame, 
@@ -495,7 +506,7 @@ def evaluate_model(
     dataset_name: str = "test",
     find_threshold: bool = False,
     threshold: Optional[float] = None
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Evaluate model performance."""
     y_pred_proba = model.predict_proba(X)[:, 1]
     
@@ -507,6 +518,7 @@ def evaluate_model(
     else:
         y_pred = model.predict(X)
     
+    # Calculate standard metrics
     metrics = {
         'accuracy': accuracy_score(y, y_pred),
         'precision': precision_score(y, y_pred),
@@ -516,6 +528,10 @@ def evaluate_model(
         'roc_auc': roc_auc_score(y, y_pred_proba),
         'log_loss': log_loss(y, model.predict_proba(X))
     }
+    
+    # Add confusion matrix results
+    confusion_results = format_confusion_matrix(y, y_pred)
+    metrics.update(confusion_results)
     
     logger = logging.getLogger(__name__)
     logger.info(f"{dataset_name.title()} Performance:")
@@ -782,7 +798,11 @@ def log_experiment(
             'n_features': len(coefficients_df),
             'best_params': best_params,
             'threshold': test_metrics.get('threshold', 0.5),  # Get optimal threshold from test metrics
-            'threshold_f1_score': test_metrics.get('f1_score', None)  # Score at optimal threshold
+            'threshold_f1_score': test_metrics.get('f1_score', None),  # Score at optimal threshold
+            'confusion_matrix': {
+                'validation': {k: tune_metrics[k] for k in ['true_positives', 'true_negatives', 'false_positives', 'false_negatives']},
+                'test': {k: test_metrics[k] for k in ['true_positives', 'true_negatives', 'false_positives', 'false_negatives']}
+            }
         }
         experiment.log_model_info(model_info)
         
@@ -838,13 +858,16 @@ def main():
     # Fit on train data only and evaluate
     train_pipeline = fit_model(tuned_pipeline, train_X, train_y)
     train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
-    tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning")
     
     # Find optimal threshold using tuning data with F2 score
     tune_pred_proba = train_pipeline.predict_proba(tune_X)[:, 1]
     threshold_results = find_optimal_threshold(tune_y, tune_pred_proba, metric='f2')
     optimal_threshold = threshold_results['threshold']
     logger.info(f"Found optimal threshold {optimal_threshold:.4f} on tuning data")
+    
+    # Evaluate tuning set with optimal threshold
+    tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning", threshold=optimal_threshold)
+    tune_metrics.update(threshold_results)  # Add threshold info to tuning metrics
     
     # Fit final model on combined train+tune data
     logger.info("Fitting final model on combined training + validation data...")
