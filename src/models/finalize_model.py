@@ -5,9 +5,65 @@ from typing import Optional
 from datetime import datetime
 
 from src.models.experiments import ExperimentTracker
+from src.models.experiments import Experiment
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.hurdle import setup_logging
+
+def extract_model_threshold(experiment: Experiment) -> Optional[float]:
+    """
+    Safely extract the model threshold from experiment metadata.
+    
+    Args:
+        experiment: ExperimentTracker experiment object
+    
+    Returns:
+        float: Threshold value if found, None otherwise
+    """
+    try:
+        # Check multiple possible locations for threshold
+        threshold_paths = [
+            ('model_info', 'threshold'),  # From log_experiment in hurdle.py
+            ('threshold',),               # Direct metadata key
+        ]
+        
+        for path in threshold_paths:
+            current = experiment.metadata
+            for key in path:
+                current = current.get(key)
+                if current is None:
+                    break
+            if current is not None:
+                return float(current)
+        
+        return None
+    except Exception:
+        return None
+
+def generate_model_description(
+    base_description: Optional[str], 
+    final_end_year: int, 
+    threshold: Optional[float] = None
+) -> str:
+    """
+    Generate a model description, optionally including threshold information.
+    
+    Args:
+        base_description: Optional user-provided description
+        final_end_year: Year of model training
+        threshold: Optional model threshold
+    
+    Returns:
+        str: Descriptive string for the model
+    """
+    # Start with base description or create default
+    description = base_description or f"Production model trained on data through {final_end_year}"
+    
+    # Append threshold if available
+    if threshold is not None:
+        description += f". Optimal classification threshold: {threshold:.4f}"
+    
+    return description
 
 def finalize_model(
     model_type: str,
@@ -62,12 +118,22 @@ def finalize_model(
     current_year = datetime.now().year
     final_end_year = end_year if end_year is not None else current_year - 2
     
+    # Extract threshold if available
+    threshold = extract_model_threshold(experiment)
+    
+    # Generate description with threshold info if available
+    description = generate_model_description(
+        base_description=description,
+        final_end_year=final_end_year,
+        threshold=threshold
+    )
+    
     # Finalize model
     logger.info("Fitting pipeline on full dataset...")
     finalized_dir = experiment.finalize_model(
         X=X,
         y=y,
-        description=description or f"Production model trained on data through {final_end_year}",
+        description=description,
         final_end_year=final_end_year
     )
     

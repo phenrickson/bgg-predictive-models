@@ -3,7 +3,39 @@ import argparse
 import json
 import polars as pl
 from datetime import datetime
+from pathlib import Path
+from typing import Optional, Tuple
+
 from src.models.experiments import ExperimentTracker
+
+def get_model_info(finalized_dir: Path) -> Tuple[Optional[float], Optional[int]]:
+    """Extract model information from finalized model directory.
+    
+    Args:
+        finalized_dir: Path to finalized model directory
+        
+    Returns:
+        Tuple containing:
+        - threshold: Classification threshold if found, None otherwise
+        - final_end_year: Final training end year if found, None otherwise
+    """
+    info_path = finalized_dir / "info.json"
+    threshold = None
+    final_end_year = None
+    
+    if info_path.exists():
+        try:
+            with open(info_path, 'r') as f:
+                info = json.load(f)
+                # Check both possible locations for threshold
+                threshold = info.get('model_info', {}).get('threshold')
+                if threshold is None:
+                    threshold = info.get('threshold')
+                final_end_year = info.get('final_end_year')
+        except Exception as e:
+            print(f"Warning: Error reading model info: {e}")
+    
+    return threshold, final_end_year
 
 def load_model(experiment_name: str):
     """Load the finalized model and preprocessing pipeline.
@@ -105,16 +137,9 @@ def score_data(
         tracker = ExperimentTracker("hurdle")
         experiment = tracker.load_experiment(experiment_name)
         
-        # Check finalized model metadata for final end year
+        # Get model info
         finalized_dir = experiment.exp_dir / "finalized"
-        info_path = finalized_dir / "info.json"
-        
-        if info_path.exists():
-            with open(info_path, 'r') as f:
-                finalized_info = json.load(f)
-                final_end_year = finalized_info.get('final_end_year')
-        else:
-            final_end_year = None
+        _, final_end_year = get_model_info(finalized_dir)
         
         # Determine start and end years for scoring
         if start_year is None:
@@ -140,6 +165,16 @@ def score_data(
             preprocessor=None
         )
     
+    # Get model threshold from finalized model info
+    tracker = ExperimentTracker("hurdle")
+    experiment = tracker.load_experiment(experiment_name)
+    finalized_dir = experiment.exp_dir / "finalized"
+    threshold, _ = get_model_info(finalized_dir)
+    
+    # Use default threshold of 0.5 if none found
+    threshold = threshold if threshold is not None else 0.5
+    print(f"Using classification threshold: {threshold}")
+    
     # Preprocess and predict in one step
     predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
     
@@ -150,8 +185,9 @@ def score_data(
         "year_published"
     ]).with_columns([
         pl.Series("predicted_prob", predictions),
-        pl.Series("predicted_class", predictions >= 0.5),
-        pl.Series("hurdle", df.select("hurdle").to_pandas().squeeze())
+        pl.Series("predicted_class", predictions >= threshold),
+        pl.Series("hurdle", df.select("hurdle").to_pandas().squeeze()),
+        pl.Series("threshold", [threshold] * len(df))  # Add threshold used
     ])
     
     # Determine output path if not provided
@@ -170,7 +206,8 @@ def score_data(
     sample_columns = [
         "game_id", "name", "year_published", 
         "predicted_prob", "predicted_class", 
-        "hurdle"  # Actual outcome
+        "hurdle",  # Actual outcome
+        "threshold"  # Classification threshold used
     ]
     print(results.select(sample_columns).head())
 
