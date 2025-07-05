@@ -347,10 +347,10 @@ def create_preprocessing_pipeline() -> Pipeline:
     bgg_preprocessor.artist_min_freq = 10
     bgg_preprocessor.publisher_min_freq = 5
     bgg_preprocessor.family_min_freq = 10
-    bgg_preprocessor.max_artist_features = 250
+    bgg_preprocessor.max_artist_features = 500
     bgg_preprocessor.max_publisher_features = 250
-    bgg_preprocessor.max_designer_features = 250
-    bgg_preprocessor.max_family_features = 250
+    bgg_preprocessor.max_designer_features = 500
+    bgg_preprocessor.max_family_features = 500
     bgg_preprocessor.max_mechanic_features = 500
     bgg_preprocessor.max_category_features = 500
     bgg_preprocessor.create_category_features = True
