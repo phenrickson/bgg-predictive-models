@@ -185,10 +185,10 @@ def create_preprocessing_pipeline() -> Pipeline:
     bgg_preprocessor.max_category_features = 500
     bgg_preprocessor.create_category_features = True
     bgg_preprocessor.create_mechanic_features = True
-    bgg_preprocessor.create_designer_features = True
-    bgg_preprocessor.create_artist_features = True
-    bgg_preprocessor.create_publisher_features = True
-    bgg_preprocessor.create_family_features = True
+    bgg_preprocessor.create_designer_features = False
+    bgg_preprocessor.create_artist_features = False
+    bgg_preprocessor.create_publisher_features = False
+    bgg_preprocessor.create_family_features = False
     bgg_preprocessor.create_player_dummies = True
     bgg_preprocessor.include_base_numeric = True
     
