@@ -1,5 +1,6 @@
 """Train/Tune/Test Hurdle Model for Board Game Ratings Prediction"""
 import logging
+import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -27,7 +28,7 @@ from sklearn.metrics import (
     roc_auc_score,
     log_loss
 )
-from typing import Type, Union
+from typing import Type, Union, Tuple
 
 # Project imports
 from src.data.config import load_config
@@ -238,18 +239,17 @@ def preprocess_data(
     features = pd.DataFrame(features, columns=feature_names)
     return features
 
-def tune_hyperparameters(
-    pipeline,
-    X_train: pd.DataFrame, 
-    y_train: pd.Series,
-    X_tune: pd.DataFrame,
-    y_tune: pd.Series,
-    classifier_type: Type[BaseEstimator],
-    param_grid: Optional[Dict[str, Any]] = None,
+def tune_model(
+    pipeline: Pipeline,
+    train_X: pd.DataFrame, 
+    train_y: pd.Series,
+    tune_X: pd.DataFrame,
+    tune_y: pd.Series,
+    param_grid: Dict[str, Any],
     metric: str = 'log_loss',
     patience: int = 5,
     min_delta: float = 1e-4
-) -> Dict[str, Any]:
+) -> Tuple[Pipeline, Dict[str, Any]]:
     """
     Tune hyperparameters using separate tuning set.
     
@@ -279,8 +279,8 @@ def tune_hyperparameters(
     
     # Fit and transform the data once with the preprocessor
     logger.info("Fitting preprocessor and transforming data...")
-    X_train_transformed = preprocessor.fit_transform(X_train)
-    X_tune_transformed = preprocessor.transform(X_tune)
+    X_train_transformed = preprocessor.fit_transform(train_X)
+    X_tune_transformed = preprocessor.transform(tune_X)
     logger.info(f"Transformed features shape: Train {X_train_transformed.shape}, Tune {X_tune_transformed.shape}")
     
     # Default parameter grid if not provided
@@ -347,15 +347,15 @@ def tune_hyperparameters(
                 current_classifier.set_params(**{k.replace('classifier__', ''): v for k, v in params.items()})
                 
                 # Train classifier with these parameters on transformed data
-                current_classifier.fit(X_train_transformed, y_train)
+                current_classifier.fit(X_train_transformed, train_y)
                 
                 # Evaluate on tuning set
                 if metric == 'f1':
                     y_tune_pred = current_classifier.predict(X_tune_transformed)
-                    score = score_func(y_tune, y_tune_pred)
+                    score = score_func(tune_y, y_tune_pred)
                 else:
                     y_tune_pred_proba = current_classifier.predict_proba(X_tune_transformed)
-                    score = score_func(y_tune, y_tune_pred_proba)
+                    score = score_func(tune_y, y_tune_pred_proba)
                 
                 # Store detailed results
                 result = {
@@ -406,15 +406,13 @@ def tune_hyperparameters(
     if best_params is None:
         raise ValueError("Hyperparameter tuning failed to find any valid parameters. Check your data and parameter grid.")
     
-    # Return best parameters, fitted preprocessor, best model and additional info
-    return {
-        'best_params': best_params,
-        'best_score': best_score,
-        'metric': metric,
-        'n_combinations_tested': len(tuning_results),
-        'fitted_preprocessor': preprocessor,
-        'best_model': best_model
-    }
+    # Create new pipeline with fitted preprocessor and best model
+    tuned_pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', best_model)
+    ])
+    
+    return tuned_pipeline, best_params
 
 def evaluate_model(
     model: LogisticRegression, 
@@ -442,60 +440,8 @@ def evaluate_model(
     
     return metrics
 
-def main():
-    """
-    Main script for training, tuning, and testing a hurdle model for board game ratings prediction.
-    
-    This script implements a complete machine learning pipeline for predicting whether board games
-    will reach a certain threshold of user ratings (the "hurdle"). It includes:
-    
-    1. Data loading from BigQuery or local parquet file
-    2. Time-based data splitting into train/tune/test sets
-    3. Feature preprocessing with the BGG preprocessor
-    4. Model training with hyperparameter tuning
-    5. Model evaluation on test data
-    6. Experiment tracking and result logging
-    
-    The script supports multiple classifier types and optimization metrics.
-    
-    Example usage:
-        # Basic usage with default parameters
-        python src/models/hurdle.py
-        
-        # Custom configuration
-        python src/models/hurdle.py --classifier rf --metric f1 --train-end-year 2021 --tune-start-year 2021 --tune-end-year 2022 --test-start-year 2023 --test-end-year 2024
-        
-        # Use local data file
-        python src/models/hurdle.py --local-data ./data/processed/games.parquet
-    """
-    import argparse
-    
-    # Define available classifiers
-    CLASSIFIER_MAPPING = {
-        'logistic': LogisticRegression,
-        'rf': RandomForestClassifier,
-        'svc': SVC
-    }
-    
-    # Default parameter grids for different classifiers
-    PARAM_GRIDS = {
-        'logistic': {
-            'classifier__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
-            'classifier__penalty': ['l2'],
-            'classifier__max_iter': [4000]
-        },
-        'rf': {
-            'classifier__n_estimators': [100, 200, 300],
-            'classifier__max_depth': [None, 10, 20, 30],
-            'classifier__min_samples_split': [2, 5, 10]
-        },
-        'svc': {
-            'classifier__C': [0.1, 1.0, 10.0],
-            'classifier__kernel': ['rbf', 'linear'],
-            'classifier__gamma': ['scale', 'auto', 0.1, 0.01]
-        }
-    }
-    
+def parse_arguments() -> argparse.Namespace:
+    """Parse and validate command line arguments."""
     parser = argparse.ArgumentParser(description="Train/Tune/Test Hurdle Model")
     parser.add_argument("--train-end-year", type=int, default=2022, 
                        help="End year for training (exclusive)")
@@ -515,7 +461,7 @@ def main():
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
     parser.add_argument("--classifier", type=str, default="logistic",
-                       choices=list(CLASSIFIER_MAPPING.keys()),
+                       choices=['logistic', 'rf', 'svc'],
                        help="Classifier type to use")
     parser.add_argument("--metric", type=str, default="log_loss",
                        choices=["log_loss", "f1", "auc"],
@@ -526,49 +472,36 @@ def main():
     args = parser.parse_args()
     
     # Validate year ranges
-    # Note: In time_based_split, tune_start_year should equal train_end_year
     if args.tune_start_year != args.train_end_year:
         raise ValueError(f"tune_start_year ({args.tune_start_year}) must equal train_end_year ({args.train_end_year})")
     
-    # Validate the rest of the year ranges
     if not (args.tune_start_year <= args.tune_end_year < args.test_start_year <= args.test_end_year):
         raise ValueError("Invalid year ranges. Must satisfy: tune_start <= tune_end < test_start <= test_end")
     
-    # Setup logging
-    logger = setup_logging()
+    return args
+
+def load_data(local_data_path: Optional[str] = None, end_train_year: Optional[int] = None) -> pl.DataFrame:
+    """Load data from either local parquet or BigQuery."""
+    logger = logging.getLogger(__name__)
     
-    # Initialize classifier and get parameter grid
-    classifier = CLASSIFIER_MAPPING[args.classifier]()
-    PARAM_GRID = PARAM_GRIDS[args.classifier]
-    
-    # Log experiment name
-    logger.info(f"Training experiment: {args.experiment}")
-    logger.info(f"Classifier: {classifier.__class__.__name__}")
-    logger.info(f"Parameter Grid: {PARAM_GRID}")
-    logger.info(f"Optimization metric: {args.metric}")
-    
-    # Load data (load through the latest test year)
-    if args.local_data:
-        # Load from local parquet file
+    if local_data_path:
         try:
-            df = pl.read_parquet(args.local_data)
-            logger.info(f"Loaded local data from {args.local_data}: {len(df)} rows")
+            df = pl.read_parquet(local_data_path)
+            logger.info(f"Loaded local data from {local_data_path}: {len(df)} rows")
             
-            # Verify required columns exist
             required_columns = ['year_published', 'hurdle']
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
                 raise ValueError(f"Missing required columns in data: {missing_columns}")
                 
         except Exception as e:
-            logger.error(f"Error loading local data from {args.local_data}: {e}")
+            logger.error(f"Error loading local data from {local_data_path}: {e}")
             raise
     else:
-        # Load from BigQuery using existing loader
         try:
             config = load_config()
             loader = BGGDataLoader(config)
-            df = loader.load_training_data(end_train_year=args.test_end_year + 1, min_ratings=0)
+            df = loader.load_training_data(end_train_year=end_train_year + 1, min_ratings=0)
             logger.info(f"Loaded data from BigQuery: {len(df)} total rows")
         except Exception as e:
             logger.error(f"Error loading data from BigQuery: {e}")
@@ -576,16 +509,20 @@ def main():
             raise
     
     logger.info(f"Year range: {df['year_published'].min()} - {df['year_published'].max()}")
-    
-    # Create data splits using time_based_split function
+    return df
+
+def create_data_splits(
+    df: pl.DataFrame,
+    args: argparse.Namespace
+) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Create train/tune/test splits based on provided arguments."""
+    logger = logging.getLogger(__name__)
     logger.info("Creating data splits...")
     
-    # Calculate windows for validation and test sets
     validation_window = args.tune_end_year - args.tune_start_year + 1
     test_window = args.test_end_year - args.test_start_year + 1
     
     try:
-        # Use time_based_split to get all three splits
         train_df, tune_df, test_df = time_based_split(
             df=df,
             train_end_year=args.train_end_year,
@@ -595,7 +532,6 @@ def main():
             return_dict=False
         )
         
-        # Check if any split is empty
         if len(train_df) == 0:
             raise ValueError(f"Training set is empty. Check train_end_year={args.train_end_year}")
         if len(tune_df) == 0:
@@ -611,100 +547,100 @@ def main():
     logger.info(f"Tuning data: {len(tune_df)} rows (years {args.tune_start_year}-{args.tune_end_year})")
     logger.info(f"Test data: {len(test_df)} rows (years {args.test_start_year}-{args.test_end_year})")
     
-    # Preprocessing pipeline to be used with model
-    preprocessor = create_preprocessing_pipeline()
+    return train_df, tune_df, test_df
 
-    # Combine preprocessor and model
-    pipeline = Pipeline([
-        ('preprocessor', preprocessor),
-        ('classifier', classifier)
-    ])
+def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+    """Set up classifier and parameter grid based on classifier type."""
+    CLASSIFIER_MAPPING = {
+        'logistic': LogisticRegression,
+        'rf': RandomForestClassifier,
+        'svc': SVC
+    }
+    
+    PARAM_GRIDS = {
+        'logistic': {
+            'classifier__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
+            'classifier__penalty': ['l2'],
+            'classifier__max_iter': [4000]
+        },
+        'rf': {
+            'classifier__n_estimators': [100, 200, 300],
+            'classifier__max_depth': [None, 10, 20, 30],
+            'classifier__min_samples_split': [2, 5, 10]
+        },
+        'svc': {
+            'classifier__C': [0.1, 1.0, 10.0],
+            'classifier__kernel': ['rbf', 'linear'],
+            'classifier__gamma': ['scale', 'auto', 0.1, 0.01]
+        }
+    }
+    
+    classifier = CLASSIFIER_MAPPING[classifier_name]()
+    param_grid = PARAM_GRIDS[classifier_name]
+    
+    return classifier, param_grid
+
+def fit_model(
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: pd.Series
+) -> Pipeline:
+    """
+    Fit model on provided data.
+    
+    Parameters
+    ----------
+    pipeline : Pipeline
+        The sklearn pipeline to fit
+    X : pd.DataFrame
+        Feature matrix
+    y : pd.Series
+        Target variable
         
-    # Get X, y for train and validation set
-    train_X, train_y = select_X_y(train_df, y_column = 'hurdle')
-    tune_X, tune_y = select_X_y(tune_df, y_column = 'hurdle')
-    
-    logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
-    
-    # Tune hyperparameters
-    tuning_result = tune_hyperparameters(
-        pipeline, 
-        train_X, 
-        train_y, 
-        tune_X, 
-        tune_y, 
-        classifier.__class__, 
-        PARAM_GRID,
-        metric=args.metric,
-        patience=args.patience
-    )
-    best_params = tuning_result['best_params']
-    
-    # Create new pipeline with fitted preprocessor and best model
-    pipeline = Pipeline([
-        ('preprocessor', tuning_result['fitted_preprocessor']),
-        ('classifier', tuning_result['best_model'])
-    ])
-    
-    # fit to training set only
-    train_only_model = pipeline.fit(train_X, train_y)
-    
-    # Evaluate on training and tuning sets
-    train_metrics = evaluate_model(train_only_model, train_X, train_y, "training")
-    tune_metrics = evaluate_model(train_only_model, tune_X, tune_y, "tuning")
-    
-    # Get test data
-    test_X, test_y = select_X_y(test_df, y_column='hurdle')
+    Returns
+    -------
+    Pipeline
+        Fitted pipeline
+    """
+    return clone(pipeline).fit(X, y)
 
-    # Refit on combined training + validation data for final evaluation
-    logger.info("Refitting final model on training + validation data...")
-    X_train_val = pd.concat([train_X, tune_X])
-    y_train_val = pd.concat([train_y, tune_y])
+def log_experiment(
+    experiment: ExperimentTracker,
+    pipeline: Pipeline,
+    train_metrics: Dict[str, float],
+    tune_metrics: Dict[str, float],
+    test_metrics: Dict[str, float],
+    best_params: Dict[str, Any],
+    args: argparse.Namespace
+) -> None:
+    """Log all experiment results and artifacts."""
+    # Extract preprocessing settings from pipeline
+    bgg_preprocessor = pipeline.named_steps['preprocessor'].named_steps['bgg_preprocessor']
     
-    logger.info(f"Feature dimensions: Train + Tune {X_train_val.shape}")
-    
-    # Create final pipeline with preprocessor and final classifier
-    final_classifier = clone(tuning_result['best_model'])
-    final_pipeline = Pipeline([
-        ('preprocessor', preprocessor),
-        ('classifier', final_classifier)
-    ])
-    # Refit model on combined training + validation data for final evaluation
-    final_pipeline.fit(X_train_val, y_train_val)
-    
-    # Evaluate final model on test set
-    test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test (using model fit on train+validation)")
-    
-    # Initialize experiment tracker and create new experiment
-    tracker = ExperimentTracker("hurdle", args.output_dir)
-    
-    # Create configuration dictionary for hashing
+    # Create configuration dictionary
     config = {
         'model_params': best_params,
         'preprocessing': {
-            'reference_year': 2000,
-            'normalization_factor': 25,
-            'log_columns': ['min_age', 'min_playtime', 'max_playtime'],
-            'category_min_freq': 0,
-            'mechanic_min_freq': 0,
-            'designer_min_freq': 10,
-            'artist_min_freq': 10,
-            'publisher_min_freq': 5,
-            'family_min_freq': 5,
-            'max_artist_features': 250,
-            'max_publisher_features': 250,
-            'max_designer_features': 250,
-            'max_family_features': 250,
-            'max_mechanic_features': 500,
-            'max_category_features': 500,
-            'create_category_features': True,
-            'create_mechanic_features': True,
-            'create_designer_features': True,
-            'create_artist_features': True,
-            'create_publisher_features': True,
-            'create_family_features': True,
-            'create_player_dummies': True,
-            'include_base_numeric': True
+            'category_min_freq': bgg_preprocessor.category_min_freq,
+            'mechanic_min_freq': bgg_preprocessor.mechanic_min_freq,
+            'designer_min_freq': bgg_preprocessor.designer_min_freq,
+            'artist_min_freq': bgg_preprocessor.artist_min_freq,
+            'publisher_min_freq': bgg_preprocessor.publisher_min_freq,
+            'family_min_freq': bgg_preprocessor.family_min_freq,
+            'max_artist_features': bgg_preprocessor.max_artist_features,
+            'max_publisher_features': bgg_preprocessor.max_publisher_features,
+            'max_designer_features': bgg_preprocessor.max_designer_features,
+            'max_family_features': bgg_preprocessor.max_family_features,
+            'max_mechanic_features': bgg_preprocessor.max_mechanic_features,
+            'max_category_features': bgg_preprocessor.max_category_features,
+            'create_category_features': bgg_preprocessor.create_category_features,
+            'create_mechanic_features': bgg_preprocessor.create_mechanic_features,
+            'create_designer_features': bgg_preprocessor.create_designer_features,
+            'create_artist_features': bgg_preprocessor.create_artist_features,
+            'create_publisher_features': bgg_preprocessor.create_publisher_features,
+            'create_family_features': bgg_preprocessor.create_family_features,
+            'create_player_dummies': bgg_preprocessor.create_player_dummies,
+            'include_base_numeric': bgg_preprocessor.include_base_numeric
         },
         'data_splits': {
             'train_end_year': args.train_end_year,
@@ -717,7 +653,8 @@ def main():
         'target_type': 'binary_classification'
     }
     
-    experiment = tracker.create_experiment(
+    # Create experiment
+    experiment = experiment.create_experiment(
         name=args.experiment,
         description=args.description,
         metadata={
@@ -732,31 +669,27 @@ def main():
         config=config
     )
     
-    # Log metrics for each dataset
+    # Log metrics
     experiment.log_metrics(train_metrics, "train")
     experiment.log_metrics(tune_metrics, "tune")
     experiment.log_metrics(test_metrics, "test")
-    
-    # Log best parameters and tuning results
     experiment.log_parameters(best_params)
-    experiment.log_metrics({'tuning_score': tuning_result['best_score']}, "tuning_result")
     
-    # Extract and save model coefficients
+    # Extract and save coefficients
     try:
-        coefficients_df = extract_model_coefficients(final_pipeline)
-        
-        # Convert to polars for saving
+        coefficients_df = extract_model_coefficients(pipeline)
         coefficients_pl = pl.from_pandas(coefficients_df)
         experiment.log_coefficients(coefficients_pl)
         
-        # Log top 10 most important features
+        # Log top features
+        logger = logging.getLogger(__name__)
         logger.info("Top 10 most important features (by absolute coefficient):")
         for _, row in coefficients_df.head(10).iterrows():
             logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
         
         # Save model info
         model_info = {
-            'intercept': float(final_pipeline.named_steps['classifier'].intercept_[0]),
+            'intercept': float(pipeline.named_steps['classifier'].intercept_[0]),
             'n_features': len(coefficients_df),
             'best_params': best_params
         }
@@ -766,10 +699,77 @@ def main():
         logger.error(f"Error extracting model coefficients: {e}")
         logger.error("Continuing without saving coefficients")
     
-    # Save complete pipeline
-    experiment.save_pipeline(final_pipeline)
+    # Save pipeline
+    experiment.save_pipeline(pipeline)
+
+def main():
+    """Main script for training, tuning, and testing a hurdle model."""
+    # Parse arguments and setup logging
+    args = parse_arguments()
+    logger = setup_logging()
     
-    logger.info(f"Results saved to {experiment.exp_dir}")
+    # Load and split data
+    df = load_data(args.local_data, args.test_end_year)
+    train_df, tune_df, test_df = create_data_splits(df, args)
+    
+    # Get X, y splits
+    train_X, train_y = select_X_y(train_df, y_column='hurdle')
+    tune_X, tune_y = select_X_y(tune_df, y_column='hurdle')
+    test_X, test_y = select_X_y(test_df, y_column='hurdle')
+    
+    # Setup model and pipeline
+    classifier, param_grid = configure_model(args.classifier)
+    preprocessor = create_preprocessing_pipeline()
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', classifier)
+    ])
+    
+    # Log experiment details
+    logger.info(f"Training experiment: {args.experiment}")
+    logger.info(f"Classifier: {classifier.__class__.__name__}")
+    logger.info(f"Parameter Grid: {param_grid}")
+    logger.info(f"Optimization metric: {args.metric}")
+    logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
+    
+    # Tune model
+    tuned_pipeline, best_params = tune_model(
+        pipeline=pipeline,
+        train_X=train_X,
+        train_y=train_y,
+        tune_X=tune_X,
+        tune_y=tune_y,
+        param_grid=param_grid,
+        metric=args.metric,
+        patience=args.patience
+    )
+    
+    # Fit on train data only and evaluate
+    train_pipeline = fit_model(tuned_pipeline, train_X, train_y)
+    train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
+    tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning")
+    
+    # Fit final model on combined train+tune data
+    logger.info("Fitting final model on combined training + validation data...")
+    X_combined = pd.concat([train_X, tune_X])
+    y_combined = pd.concat([train_y, tune_y])
+    final_pipeline = fit_model(tuned_pipeline, X_combined, y_combined)
+    
+    # Evaluate on test set
+    test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
+    
+    # Log experiment results
+    tracker = ExperimentTracker("hurdle", args.output_dir)
+    log_experiment(
+        experiment=tracker,
+        pipeline=final_pipeline,
+        train_metrics=train_metrics,
+        tune_metrics=tune_metrics,
+        test_metrics=test_metrics,
+        best_params=best_params,
+        args=args
+    )
+    
     logger.info("Training complete!")
 
 if __name__ == "__main__":
