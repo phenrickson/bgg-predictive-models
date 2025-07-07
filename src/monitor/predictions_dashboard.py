@@ -10,65 +10,124 @@ def load_predictions(file_path):
     """Load predictions from a Parquet file."""
     return pl.read_parquet(file_path)
 
-def calculate_metrics(df, threshold):
-    """Calculate comprehensive model performance metrics."""
-    # Prepare data with updated predicted class based on threshold
-    df_with_threshold = df.with_columns(
-        predicted_class_dynamic=(df["predicted_prob"] >= threshold).cast(pl.Int8)
-    )
-    
-    # Convert to pandas for sklearn metrics
-    pdf = df_with_threshold.to_pandas()
+def calculate_metrics(df, threshold, prediction_type='hurdle'):
+    """Calculate comprehensive model performance metrics with dynamic column handling."""
+    # Dynamically detect columns based on prediction type
+    pdf = df.to_pandas()
     
     from sklearn.metrics import (
         precision_score, 
         recall_score, 
         f1_score, 
         accuracy_score, 
-        balanced_accuracy_score
+        balanced_accuracy_score,
+        mean_absolute_error, 
+        mean_squared_error, 
+        r2_score
     )
     
-    return {
-        "total_games": len(df),
-        "total_hurdle_games": int(df.select("hurdle").to_numpy().sum()),
-        "games_above_threshold": int((df.filter(pl.col("predicted_prob") >= threshold)).height),
+    if prediction_type == 'hurdle':
+        # Dynamically find probability and ground truth columns
+        prob_col = next((col for col in df.columns if 'predicted_prob' in col.lower()), None)
+        truth_col = next((col for col in df.columns if 'hurdle' in col.lower()), None)
         
-        # Model performance metrics
-        "precision": precision_score(pdf["hurdle"], pdf["predicted_class_dynamic"]),
-        "recall": recall_score(pdf["hurdle"], pdf["predicted_class_dynamic"]),
-        "f1_score": f1_score(pdf["hurdle"], pdf["predicted_class_dynamic"]),
-        "accuracy": accuracy_score(pdf["hurdle"], pdf["predicted_class_dynamic"]),
-        "balanced_accuracy": balanced_accuracy_score(pdf["hurdle"], pdf["predicted_class_dynamic"])
-    }
+        if not prob_col or not truth_col:
+            raise ValueError(f"Could not find probability and ground truth columns for hurdle prediction. Available columns: {df.columns}")
+        
+        # Compute predicted class based on threshold
+        pdf['predicted_class_dynamic'] = (pdf[prob_col] >= threshold).astype(int)
+        
+        return {
+            "total_games": len(df),
+            "total_hurdle_games": int(pdf[truth_col].sum()),
+            "games_above_threshold": int((pdf[prob_col] >= threshold).sum()),
+            
+            # Model performance metrics
+            "precision": precision_score(pdf[truth_col], pdf['predicted_class_dynamic']),
+            "recall": recall_score(pdf[truth_col], pdf['predicted_class_dynamic']),
+            "f1_score": f1_score(pdf[truth_col], pdf['predicted_class_dynamic']),
+            "accuracy": accuracy_score(pdf[truth_col], pdf['predicted_class_dynamic']),
+            "balanced_accuracy": balanced_accuracy_score(pdf[truth_col], pdf['predicted_class_dynamic'])
+        }
+    
+    elif prediction_type == 'complexity':
+        # Dynamically find predicted and true complexity columns
+        pred_col = next((col for col in df.columns if 'predicted_complexity' in col.lower()), None)
+        true_col = next((col for col in df.columns if 'complexity' in col.lower() and 'predicted' not in col.lower()), None)
+        
+        if not pred_col or not true_col:
+            raise ValueError(f"Could not find predicted and true complexity columns. Available columns: {df.columns}")
+        
+        return {
+            "total_games": len(df),
+            "mean_absolute_error": mean_absolute_error(pdf[true_col], pdf[pred_col]),
+            "mean_squared_error": mean_squared_error(pdf[true_col], pdf[pred_col]),
+            "r2_score": r2_score(pdf[true_col], pdf[pred_col])
+        }
 
-def format_predictions_table(df, threshold):
-    """Format the predictions dataframe for better display."""
-    # Prepare data with dynamic predicted class
-    formatted_df = df.with_columns([
-        pl.col("predicted_prob").round(3).alias("Probability"),
-        (pl.col("predicted_prob") >= threshold).cast(pl.Int8).alias("Predicted"),
-        pl.col("hurdle").alias("Actual"),
-        pl.col("name").alias("Game Name"),
-        pl.col("year_published").alias("Year"),
-        pl.col("game_id").alias("Game ID")
-    ]).to_pandas()
+def format_predictions_table(df, threshold, prediction_type='hurdle'):
+    """Format the predictions dataframe with dynamic column handling."""
+    pdf = df.to_pandas()
     
-    # Create status indicators (simple text)
-    def create_status_text(predicted, actual):
-        if predicted == 1 and actual == 1:
-            return "True Positive"
-        elif predicted == 0 and actual == 0:
-            return "True Negative"
-        elif predicted == 1 and actual == 0:
-            return "False Positive"
-        else:
-            return "False Negative"
+    if prediction_type == 'hurdle':
+        # Dynamically find columns
+        prob_col = next((col for col in df.columns if 'predicted_prob' in col.lower()), None)
+        truth_col = next((col for col in df.columns if 'hurdle' in col.lower()), None)
+        
+        if not prob_col or not truth_col:
+            raise ValueError(f"Could not find probability and ground truth columns. Available columns: {df.columns}")
+        
+        # Prepare data with dynamic predicted class
+        pdf['Probability'] = pdf[prob_col].round(3)
+        pdf['Predicted'] = (pdf[prob_col] >= threshold).astype(int)
+        pdf['Actual'] = pdf[truth_col]
+        
+        # Create status indicators
+        def create_status_text(predicted, actual):
+            if predicted == 1 and actual == 1:
+                return "True Positive"
+            elif predicted == 0 and actual == 0:
+                return "True Negative"
+            elif predicted == 1 and actual == 0:
+                return "False Positive"
+            else:
+                return "False Negative"
+        
+        pdf['Status'] = pdf.apply(
+            lambda row: create_status_text(row['Predicted'], row['Actual']), axis=1
+        )
+        
+        return pdf[['game_id', 'name', 'year_published', 'Probability', 'Predicted', 'Actual', 'Status']].rename(
+            columns={
+                'game_id': 'Game ID', 
+                'name': 'Game Name', 
+                'year_published': 'Year'
+            }
+        )
     
-    formatted_df['Status'] = formatted_df.apply(
-        lambda row: create_status_text(row['Predicted'], row['Actual']), axis=1
-    )
-    
-    return formatted_df[['Game ID', 'Game Name', 'Year', 'Probability', 'Predicted', 'Actual', 'Status']]
+    elif prediction_type == 'complexity':
+        # Dynamically find predicted and true complexity columns
+        pred_col = next((col for col in df.columns if 'predicted_complexity' in col.lower()), None)
+        true_col = next((col for col in df.columns if 'complexity' in col.lower() and 'predicted' not in col.lower()), None)
+        
+        if not pred_col or not true_col:
+            raise ValueError(f"Could not find predicted and true complexity columns. Available columns: {df.columns}")
+        
+        # Prepare data for complexity predictions
+        pdf['Predicted Complexity'] = pdf[pred_col].round(3)
+        pdf['True Complexity'] = pdf[true_col].round(3)
+        
+        # Calculate prediction error
+        pdf['Absolute Error'] = abs(pdf['Predicted Complexity'] - pdf['True Complexity'])
+        
+        return pdf[['game_id', 'name', 'year_published', 'Predicted Complexity', 'True Complexity', 'Absolute Error']].rename(
+            columns={
+                'game_id': 'Game ID', 
+                'name': 'Game Name', 
+                'year_published': 'Year'
+            }
+        )
+
 
 def plot_probability_distribution(df, threshold):
     """Create a histogram of prediction probabilities with overlapping distributions."""
@@ -139,7 +198,7 @@ def plot_confusion_matrix(df, threshold):
 
 def main():
     st.set_page_config(
-        page_title="Game Hurdle Predictions Dashboard", 
+        page_title="Game Predictions Dashboard", 
         layout="wide",
         page_icon="🎲"
     )
@@ -172,24 +231,48 @@ def main():
     """, unsafe_allow_html=True)
     
     # Simple title
-    st.title("🎲 Game Hurdle Predictions Dashboard")
+    st.title("🎲 Game Predictions Dashboard")
     
     # Automatically load the latest predictions file
     import os
     predictions_dir = "data/predictions"
     
-    # Get all parquet files in the directory
-    prediction_files = [f for f in os.listdir(predictions_dir) if f.endswith('.parquet')]
+    # Get prediction files from both complexity and hurdle subfolders
+    complexity_files = [f for f in os.listdir(os.path.join(predictions_dir, 'complexity')) if f.endswith('.parquet')]
+    hurdle_files = [f for f in os.listdir(os.path.join(predictions_dir, 'hurdle')) if f.endswith('.parquet')]
     
-    if not prediction_files:
+    if not complexity_files and not hurdle_files:
         st.error("No prediction files found in data/predictions")
         return
     
-    # Sort files by modification time, most recent first
-    latest_file = max(
-        [os.path.join(predictions_dir, f) for f in prediction_files], 
-        key=os.path.getmtime
+    # Model selection dropdown
+    prediction_type = st.selectbox(
+        "Select Prediction Type", 
+        ["Hurdle Prediction", "Complexity Prediction"],
+        help="Choose between predicting game hurdle status or complexity"
     )
+    
+    # Determine the prediction type for subsequent processing
+    if prediction_type == "Hurdle Prediction":
+        current_prediction_type = 'hurdle'
+        prediction_files = hurdle_files
+        subfolder = 'hurdle'
+        st.subheader("🎲 Hurdle Prediction Dashboard")
+    else:
+        current_prediction_type = 'complexity'
+        prediction_files = complexity_files
+        subfolder = 'complexity'
+        st.subheader("📊 Complexity Prediction Dashboard")
+    
+    # File selection dropdown
+    selected_file = st.selectbox(
+        "Select Prediction File", 
+        prediction_files,
+        help="Choose a specific prediction file to analyze"
+    )
+    
+    # Full path to the selected file
+    latest_file = os.path.join(predictions_dir, subfolder, selected_file)
     
     # Load predictions
     df = pl.read_parquet(latest_file)
@@ -210,13 +293,15 @@ def main():
     """)
     
     # Calculate metrics with default threshold for initial display
-    initial_threshold = 0.5
-    metrics = calculate_metrics(df, initial_threshold)
+    initial_threshold = 0.5 if current_prediction_type == 'hurdle' else None
+    metrics = calculate_metrics(df, initial_threshold, current_prediction_type)
     
     # Metrics display
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Games", metrics["total_games"])
-    col2.metric("Games Above Threshold", metrics["games_above_threshold"])
+    
+    if current_prediction_type == 'hurdle':
+        col2.metric("Games Above Threshold", metrics["games_above_threshold"])
     
     # Enhanced Predictions Table
     st.subheader("🎲 Game Predictions")
@@ -225,26 +310,47 @@ def main():
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         search_term = st.text_input("🔍 Search Game Name", placeholder="Enter game name...")
-    with col2:
-        filter_status = st.selectbox(
-            "Filter by Status",
-            ["All", "True Positives", "True Negatives", "False Positives", "False Negatives"]
-        )
+    
+    # Dynamically adjust filter options based on prediction type
+    if current_prediction_type == 'hurdle':
+        with col2:
+            filter_status = st.selectbox(
+                "Filter by Status",
+                ["All", "True Positives", "True Negatives", "False Positives", "False Negatives"]
+            )
+    else:
+        with col2:
+            filter_status = st.selectbox(
+                "Filter by Error Range",
+                ["All", "Low Error", "Medium Error", "High Error"]
+            )
+    
     with col3:
         year_filter = st.selectbox(
             "Year Published",
             ["All"] + sorted(df.select("year_published").unique().to_pandas()["year_published"].dropna().astype(int).tolist(), reverse=True)
         )
-    with col4:
-        min_prob = st.number_input("Min Probability", 0.0, 1.0, 0.0, 0.01)
-    with col5:
-        max_prob = st.number_input("Max Probability", 0.0, 1.0, 1.0, 0.01)
+    
+    # Adjust probability/error range inputs based on prediction type
+    if current_prediction_type == 'hurdle':
+        with col4:
+            min_prob = st.number_input("Min Probability", 0.0, 1.0, 0.0, 0.01)
+        with col5:
+            max_prob = st.number_input("Max Probability", 0.0, 1.0, 1.0, 0.01)
+    else:
+        with col4:
+            min_error = st.number_input("Min Absolute Error", 0.0, 10.0, 0.0, 0.1)
+        with col5:
+            max_error = st.number_input("Max Absolute Error", 0.0, 10.0, 10.0, 0.1)
     
     # Format the table (use initial threshold for now, will be updated when user changes slider)
-    formatted_table = format_predictions_table(df, initial_threshold)
+    formatted_table = format_predictions_table(df, initial_threshold, current_prediction_type)
     
-    # Sort by probability in descending order by default
-    formatted_table = formatted_table.sort_values('Probability', ascending=False)
+    # Sort based on prediction type
+    if current_prediction_type == 'hurdle':
+        formatted_table = formatted_table.sort_values('Probability', ascending=False)
+    else:
+        formatted_table = formatted_table.sort_values('Absolute Error', ascending=True)
     
     # Apply filters
     filtered_table = formatted_table.copy()
@@ -255,22 +361,44 @@ def main():
             filtered_table['Game Name'].str.contains(search_term, case=False, na=False)
         ]
     
-    # Filter by status
-    if filter_status != "All":
-        status_map = {
-            "True Positives": "True Positive",
-            "True Negatives": "True Negative", 
-            "False Positives": "False Positive",
-            "False Negatives": "False Negative"
-        }
-        filtered_table = filtered_table[filtered_table['Status'] == status_map[filter_status]]
+    # Filter by status/error range
+    if current_prediction_type == 'hurdle':
+        if filter_status != "All":
+            status_map = {
+                "True Positives": "True Positive",
+                "True Negatives": "True Negative", 
+                "False Positives": "False Positive",
+                "False Negatives": "False Negative"
+            }
+            filtered_table = filtered_table[filtered_table['Status'] == status_map[filter_status]]
+    else:  # complexity
+        if filter_status != "All":
+            # Define error ranges for complexity predictions
+            def categorize_error(error):
+                if error < 0.5:
+                    return "Low Error"
+                elif error < 1.5:
+                    return "Medium Error"
+                else:
+                    return "High Error"
+            
+            # Add error category column
+            filtered_table['Error Category'] = filtered_table['Absolute Error'].apply(categorize_error)
+            
+            # Filter by error category
+            filtered_table = filtered_table[filtered_table['Error Category'] == filter_status]
     
     # Filter by year
     if year_filter != "All":
         filtered_table = filtered_table[filtered_table['Year'] == year_filter]
     
-    # Filter by probability range
-    filtered_table = filtered_table[(filtered_table['Probability'] >= min_prob) & (filtered_table['Probability'] <= max_prob)]
+    # Filter based on prediction type
+    if current_prediction_type == 'hurdle':
+        # Filter by probability range
+        filtered_table = filtered_table[(filtered_table['Probability'] >= min_prob) & (filtered_table['Probability'] <= max_prob)]
+    else:
+        # Filter by absolute error range
+        filtered_table = filtered_table[(filtered_table['Absolute Error'] >= min_error) & (filtered_table['Absolute Error'] <= max_error)]
     
     # Add custom CSS for better table styling
     st.markdown("""
@@ -354,9 +482,14 @@ def main():
             else:
                 return 'background-color: #1F4E79; color: white; font-weight: bold; text-align: center;'  # Navy for non-hurdle
         
-        styled_table = display_table.style.map(style_probability, subset=['Probability']) \
-                                         .map(style_prediction, subset=['Predicted', 'Actual']) \
-                                         .format({'Probability': '{:.3f}'})
+        # Dynamically determine column names for styling
+        prob_column = 'Probability' if 'Probability' in display_table.columns else 'Predicted Complexity'
+        pred_column = 'Predicted' if 'Predicted' in display_table.columns else 'Predicted Complexity'
+        actual_column = 'Actual' if 'Actual' in display_table.columns else 'True Complexity'
+        
+        styled_table = display_table.style.map(style_probability, subset=[prob_column]) \
+                                         .map(style_prediction, subset=[pred_column, actual_column]) \
+                                         .format({prob_column: '{:.3f}'})
         
         st.dataframe(
             styled_table, 
@@ -398,37 +531,84 @@ def main():
     else:
         st.warning("No games match the current filters.")
     
-    # Probability threshold slider
-    threshold = st.slider(
-        "Probability Threshold", 
-        min_value=0.0, 
-        max_value=1.0, 
-        value=0.5,
-        step=0.01
-    )
+    # Dynamically handle threshold and metrics based on prediction type
+    if current_prediction_type == 'hurdle':
+        # Probability threshold slider for hurdle predictions
+        threshold = st.slider(
+            "Probability Threshold", 
+            min_value=0.0, 
+            max_value=1.0, 
+            value=0.5,
+            step=0.01
+        )
+        
+        # Recalculate metrics with user-selected threshold
+        metrics = calculate_metrics(df, threshold, current_prediction_type)
+        
+        # Model performance metrics for hurdle predictions
+        st.subheader("Hurdle Prediction Model Performance Metrics")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Precision", f"{metrics['precision']:.3f}")
+        col2.metric("Recall", f"{metrics['recall']:.3f}")
+        col3.metric("F1 Score", f"{metrics['f1_score']:.3f}")
+        col4.metric("Accuracy", f"{metrics['accuracy']:.3f}")
+        col5.metric("Balanced Accuracy", f"{metrics['balanced_accuracy']:.3f}")
+        
+        # Probability distribution and confusion matrix side by side
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Probability Distribution")
+            st.plotly_chart(plot_probability_distribution(df, threshold), use_container_width=True)
+        
+        with col2:
+            st.subheader("Confusion Matrix")
+            st.plotly_chart(plot_confusion_matrix(df, threshold), use_container_width=True)
     
-    # Recalculate metrics with user-selected threshold
-    metrics = calculate_metrics(df, threshold)
-    
-    # Model performance metrics
-    st.subheader("Model Performance Metrics")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Precision", f"{metrics['precision']:.3f}")
-    col2.metric("Recall", f"{metrics['recall']:.3f}")
-    col3.metric("F1 Score", f"{metrics['f1_score']:.3f}")
-    col4.metric("Accuracy", f"{metrics['accuracy']:.3f}")
-    col5.metric("Balanced Accuracy", f"{metrics['balanced_accuracy']:.3f}")
-    
-    # Probability distribution and confusion matrix side by side
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Probability Distribution")
-        st.plotly_chart(plot_probability_distribution(df, threshold), use_container_width=True)
-    
-    with col2:
-        st.subheader("Confusion Matrix")
-        st.plotly_chart(plot_confusion_matrix(df, threshold), use_container_width=True)
+    else:  # Complexity prediction
+        # Metrics for complexity predictions
+        metrics = calculate_metrics(df, None, current_prediction_type)
+        
+        # Model performance metrics for complexity predictions
+        st.subheader("Complexity Prediction Model Performance Metrics")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Mean Absolute Error", f"{metrics['mean_absolute_error']:.3f}")
+        col2.metric("Mean Squared Error", f"{metrics['mean_squared_error']:.3f}")
+        col3.metric("R² Score", f"{metrics['r2_score']:.3f}")
+        
+        # Scatter plot of predicted vs true complexity
+        pdf = df.to_pandas()
+        
+        # Dynamically find complexity columns
+        pred_col = next((col for col in df.columns if 'predicted_complexity' in col.lower()), None)
+        true_col = next((col for col in df.columns if 'complexity' in col.lower() and 'predicted' not in col.lower()), None)
+        
+        if not pred_col or not true_col:
+            st.error(f"Could not find predicted and true complexity columns. Available columns: {df.columns}")
+            return
+        
+        # Create scatter plot with regression line
+        fig = px.scatter(
+            pdf, 
+            x=true_col, 
+            y=pred_col, 
+            title="Predicted vs True Complexity",
+            labels={
+                true_col: "True Complexity", 
+                pred_col: "Predicted Complexity"
+            },
+            trendline="ols"  # Add regression line
+        )
+        
+        # Customize the plot
+        fig.update_layout(
+            xaxis_title="True Complexity",
+            yaxis_title="Predicted Complexity",
+            showlegend=False
+        )
+        
+        # Display the scatter plot
+        st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
