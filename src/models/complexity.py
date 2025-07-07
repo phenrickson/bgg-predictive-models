@@ -257,7 +257,7 @@ def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
         },
         'quantile': {
             'model__quantile': [0.4, 0.5, 0.6],  # Different quantiles to explore
-            'model__solver': ['highs'],
+            'model__solver': ['highs-ds'],
             'model__alpha': [1e-4, 1e-3, 1e-2, 0.1, 1.0],  # Regularization strength
             'model__fit_intercept': [True]
         }
