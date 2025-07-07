@@ -66,11 +66,12 @@ class BGGDataLoader:
         
         # Otherwise return raw data
         return df
-
+    
     def load_training_data(
         self,
         end_train_year: int = 2021,
         min_ratings: int = 25,
+        min_weights: Optional[float] = None,
         preprocessor = None,
     ) -> Union[pl.DataFrame, Tuple[pl.DataFrame, Dict[str, pl.Series]]]:
         """Load training data from warehouse.
@@ -78,6 +79,7 @@ class BGGDataLoader:
         Args:
             end_train_year: Last year to include in training
             min_ratings: Minimum number of ratings threshold
+            min_weights: Optional minimum game complexity weight threshold
             preprocessor: Optional preprocessor to transform data
             
         Returns:
@@ -86,7 +88,12 @@ class BGGDataLoader:
             If preprocessor is provided:
                 Tuple of (features_df, target_dict)
         """
-        where_clause = f"year_published <= {end_train_year}"
+        where_clauses = [f"year_published <= {end_train_year}"]
+        
+        if min_weights is not None:
+            where_clauses.append(f"num_weights >= {min_weights}")
+        
+        where_clause = " AND ".join(where_clauses)
         return self.load_data(where_clause, preprocessor)
 
     def load_prediction_data(

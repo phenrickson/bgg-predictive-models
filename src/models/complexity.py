@@ -430,7 +430,23 @@ def evaluate_model(
     dataset_name: str = "test"
 ) -> Dict[str, float]:
     """Evaluate regression model performance."""
-    predictions = constrain_predictions(model.predict(X))
+    # Diagnostic logging for raw predictions
+    logger = logging.getLogger(__name__)
+    
+    # Get raw predictions before constraining
+    raw_predictions = model.predict(X)
+    logger.info(f"Raw Predictions Diagnostic - {dataset_name}:")
+    logger.info(f"  Raw Prediction Range: min={raw_predictions.min():.4f}, max={raw_predictions.max():.4f}")
+    logger.info(f"  Raw Prediction Mean: {raw_predictions.mean():.4f}")
+    logger.info(f"  Raw Prediction Std Dev: {raw_predictions.std():.4f}")
+    
+    # Print first 10 raw predictions
+    logger.info("  First 10 Raw Predictions:")
+    for i, pred in enumerate(raw_predictions[:10], 1):
+        logger.info(f"    Prediction {i}: {pred:.4f}")
+    
+    # Constrain predictions
+    predictions = constrain_predictions(raw_predictions)
     
     metrics = {
         'rmse': np.sqrt(mean_squared_error(y, predictions)),
@@ -439,22 +455,19 @@ def evaluate_model(
         'mape': mean_absolute_percentage_error(y, predictions)
     }
     
-    logger = logging.getLogger(__name__)
     logger.info(f"{dataset_name.title()} Performance:")
     for metric, value in metrics.items():
         logger.info(f"  {metric}: {value:.4f}")
     
     return metrics
 
-def load_data(local_data_path: Optional[str] = None, end_train_year: Optional[int] = None) -> pl.DataFrame:
+def load_data(local_data_path: Optional[str] = None, min_weights = 0, end_train_year: Optional[int] = None) -> pl.DataFrame:
     """Load data from either local parquet or BigQuery."""
     logger = logging.getLogger(__name__)
     
     if local_data_path:
         try:
             df = pl.read_parquet(local_data_path)
-            df = df.filter(pl.col('users_rated') >=25)
-            df = df.filter(pl.col('num_weights') >=10)
             logger.info(f"Loaded local data from {local_data_path}: {len(df)} rows")
             
             required_columns = ['year_published', 'complexity', 'num_weights']
@@ -471,8 +484,9 @@ def load_data(local_data_path: Optional[str] = None, end_train_year: Optional[in
             loader = BGGDataLoader(config)
             df = loader.load_training_data(
                 end_train_year=end_train_year + 1, 
+                min_weights=min_weights,
                 min_ratings=0  # Filter for games with at least 10 weights
-            ).filter(pl.col('num_weights')>=10)
+            )
             logger.info(f"Loaded data from BigQuery: {len(df)} total rows")
         except Exception as e:
             logger.error(f"Error loading data from BigQuery: {e}")
@@ -589,7 +603,8 @@ def log_experiment(
             'test_start_year': args.test_start_year,
             'test_end_year': args.test_end_year,
             'model_type': 'complexity_regression',
-            'target': 'complexity'
+            'target': 'complexity',
+            'min_weights': args.min_weights,
         },
         config=config
     )
@@ -632,6 +647,15 @@ def log_experiment(
     # Create artifacts directory
     artifacts_dir = Path(experiment.exp_dir) / 'artifacts'
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save experiment model separately for easier loading
+    import joblib
+    experiment_model_path = Path(experiment.exp_dir) / 'experiment_model.pkl'
+    try:
+        joblib.dump(pipeline, experiment_model_path)
+        logger.info(f"Experiment model saved to {experiment_model_path}")
+    except Exception as e:
+        logger.error(f"Error saving experiment model: {e}")
     
     # Save predictions and scatter plots for both validation and test sets
     datasets = [
@@ -719,6 +743,7 @@ def parse_arguments() -> argparse.Namespace:
                        help="Start year for testing (inclusive)")
     parser.add_argument("--test-end-year", type=int, default=2025,
                        help="End year for testing (inclusive)")
+    parser.add_argument("--min-weights", type=int, default = 10)
     parser.add_argument("--output-dir", type=str, default="./models/experiments")
     parser.add_argument("--experiment", type=str, 
                        default="complexity_regression")
@@ -753,7 +778,11 @@ def main():
     logger = setup_logging()
     
     # Load and split data
-    df = load_data(args.local_data, args.test_end_year)
+    # load full data
+    df = load_data(local_data_path=args.local_data, min_weights = args.min_weights, end_train_year = args.test_end_year)
+    
+    # filtered for training/evaluation
+    logger.info(f"Training on games with at least {args.min_weights} weights")    
     train_df, tune_df, test_df = create_data_splits(df, args)
     
     # Get X, y splits
@@ -802,7 +831,7 @@ def main():
     
     final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
     
-    # Evaluate on test set
+    # Evaluate on test set (filtered)
     test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
 
     # Log experiment results

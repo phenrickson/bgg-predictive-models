@@ -275,11 +275,12 @@ def predict_data(
     elif model_type == "complexity":
         # Diagnostic logging for complexity model
         print("Complexity Model Prediction Diagnostics:")
-        print(f"Input DataFrame shape: {df.shape}")
-        print(f"Input columns: {df.columns}")
-        
+
         # Convert to pandas for prediction
         df_pandas = df.to_pandas()
+        
+        print(f"Input DataFrame shape: {df.shape}")
+        print(f"Input columns: {df.columns}")
         
         # Print first few rows of input data
         print("First few rows of input data:")

@@ -4,7 +4,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Read coefficients
-df = pl.read_csv('models/experiments/hurdle/hurdle_model/v4/coefficients.csv')
+model_type = 'complexity'
+experiment_name = 'linear-complexity/v5/'
+path = f"models/experiments/{model_type}/{experiment_name}"
+df = pl.read_csv(f"{path}/coefficients.csv")
 
 # Convert to pandas for easier plotting
 df_pd = df.to_pandas()
@@ -56,5 +59,6 @@ for i, bar in enumerate(bars):
 plt.tight_layout()
 
 # Save the plot
-plt.savefig('models/experiments/hurdle/hurdle_model/v4/feature_importance.png', dpi=300, bbox_inches='tight')
+plt.savefig(f"{path}/feature_importance.png", dpi=300, bbox_inches='tight')
 plt.close()
+

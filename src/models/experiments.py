@@ -303,11 +303,93 @@ class Experiment:
         Returns:
             Path to finalized model directory
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Load and clone pipeline
-        pipeline = clone(self.load_pipeline())
+        original_pipeline = self.load_pipeline()
+        pipeline = clone(original_pipeline)
+        
+        # Diagnostic logging for original pipeline
+        logger.info("Original Pipeline Steps:")
+        for name, step in original_pipeline.named_steps.items():
+            logger.info(f"  Step: {name}, Type: {type(step)}")
+            
+            # Try to get feature names and scaling details
+            try:
+                feature_names = step.get_feature_names_out()
+                logger.info(f"    Feature Names: {feature_names[:10]}")
+                logger.info(f"    Total Feature Names Count: {len(feature_names)}")
+            except Exception as e:
+                logger.info(f"    Could not extract feature names: {e}")
+            
+            # Check for scaling-related attributes
+            try:
+                if hasattr(step, 'scale_'):
+                    logger.info(f"    Scale: {step.scale_}")
+                if hasattr(step, 'mean_'):
+                    logger.info(f"    Mean: {step.mean_}")
+                if hasattr(step, 'var_'):
+                    logger.info(f"    Variance: {step.var_}")
+            except Exception as e:
+                logger.info(f"    Could not extract scaling details: {e}")
+            
+            # Additional diagnostic for preprocessor steps
+            if hasattr(step, 'named_steps'):
+                logger.info("    Preprocessor Sub-Steps:")
+                for sub_name, sub_step in step.named_steps.items():
+                    logger.info(f"      Sub-Step: {sub_name}, Type: {type(sub_step)}")
+                    try:
+                        sub_feature_names = sub_step.get_feature_names_out()
+                        logger.info(f"        Sub-Step Feature Names: {sub_feature_names[:10]}")
+                        logger.info(f"        Sub-Step Total Feature Names Count: {len(sub_feature_names)}")
+                    except Exception as e:
+                        logger.info(f"        Could not extract sub-step feature names: {e}")
+        
+        # Detailed input data diagnostics
+        logger.info("\nInput Data Diagnostics:")
+        logger.info(f"  Input Features Shape: {X.shape}")
+        logger.info(f"  Target Shape: {y.shape}")
+        logger.info(f"  Target Type: {type(y)}")
+        logger.info(f"  Target Range: min={y.min()}, max={y.max()}")
+        logger.info(f"  Target Mean: {y.mean()}")
+        logger.info(f"  Target Std Dev: {y.std()}")
         
         # Fit on full dataset
         pipeline.fit(X, y)
+        
+        # Diagnostic logging for fitted pipeline
+        logger.info("\nFitted Pipeline Steps:")
+        for name, step in pipeline.named_steps.items():
+            logger.info(f"  Step: {name}, Type: {type(step)}")
+            
+            # Try to get feature names and scaling details
+            try:
+                if hasattr(step, 'get_feature_names_out'):
+                    feature_names = step.get_feature_names_out()
+                    logger.info(f"    Feature Names: {feature_names[:10]}")
+                
+                # Check for scaling-related attributes
+                if hasattr(step, 'scale_'):
+                    logger.info(f"    Scale: {step.scale_}")
+                if hasattr(step, 'mean_'):
+                    logger.info(f"    Mean: {step.mean_}")
+                if hasattr(step, 'var_'):
+                    logger.info(f"    Variance: {step.var_}")
+                
+                # Additional diagnostic for preprocessor steps
+                if hasattr(step, 'named_steps'):
+                    logger.info("    Preprocessor Sub-Steps:")
+                    for sub_name, sub_step in step.named_steps.items():
+                        logger.info(f"      Sub-Step: {sub_name}, Type: {type(sub_step)}")
+                        try:
+                            if hasattr(sub_step, 'get_feature_names_out'):
+                                sub_feature_names = sub_step.get_feature_names_out()
+                                logger.info(f"        Sub-Step Feature Names: {sub_feature_names[:10]}")
+                        except Exception as e:
+                            logger.info(f"        Could not extract sub-step feature names: {e}")
+            except Exception as e:
+                logger.info(f"    Could not extract details: {e}")
         
         # Save to finalized directory
         finalized_dir = self.exp_dir / "finalized"
