@@ -38,31 +38,40 @@ def get_model_info(finalized_dir: Path) -> Tuple[Optional[float], Optional[int]]
     
     return threshold, final_end_year
 
-def load_model(experiment_name: str):
+def load_model(experiment_name: str, model_type: Optional[str] = None):
     """Load the finalized model and preprocessing pipeline.
     
     Attempts to load the experiment by extracting the model type from the experiment name.
     Supports experiments in different model type directories and more flexible path handling.
     
+    Args:
+        experiment_name: Name of the experiment to load
+        model_type: Optional model type to restrict the search
+    
     Returns:
         Finalized pipeline
     """
-    # Determine model type from experiment name
-    model_types = ['hurdle', 'rating', 'complexity', 'users_rated']
+    # Determine model types to search
+    if model_type:
+        # If model_type is provided, only search in that type
+        model_types = [model_type]
+    else:
+        # Otherwise, search in all known model types
+        model_types = ['hurdle', 'rating', 'complexity', 'users_rated']
     
     # Print diagnostic information
     print(f"Attempting to load experiment: {experiment_name}")
     print(f"Searching in model types: {model_types}")
     
     # Try each model type until successful
-    for model_type in model_types:
+    for current_model_type in model_types:
         try:
-            print(f"Trying model type: {model_type}")
-            tracker = ExperimentTracker(model_type)
+            print(f"Trying model type: {current_model_type}")
+            tracker = ExperimentTracker(current_model_type)
             
             # Print available experiments for this model type
             experiments = tracker.list_experiments()
-            print(f"Available experiments for {model_type}: {[exp['full_name'] for exp in experiments]}")
+            print(f"Available experiments for {current_model_type}: {[exp['full_name'] for exp in experiments]}")
             
             # Handle cases with or without version
             if '/' in experiment_name:
@@ -126,7 +135,7 @@ def load_model(experiment_name: str):
             raise FileNotFoundError(f"No finalized model found for {experiment_name}")
         
         except (ValueError, FileNotFoundError, Exception) as e:
-            print(f"Failed to load in {model_type} model type: {type(e).__name__}: {e}")
+            print(f"Failed to load in {current_model_type} model type: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -375,14 +384,29 @@ def save_and_display_results(
     Returns:
         Results DataFrame
     """
+    # Determine output path
+    from pathlib import Path
+    
+    # Create base predictions directory for the model type
+    base_predictions_dir = Path("data/predictions") / model_type
+    base_predictions_dir.mkdir(parents=True, exist_ok=True)
+    
     # Determine output path if not provided
     if output_path is None:
-        output_path = f"data/predictions/{experiment_name}_predictions.parquet"
-    elif not output_path.endswith('.parquet'):
-        output_path = output_path.rsplit('.', 1)[0] + '.parquet'
+        # Create a filename that includes just the experiment name
+        output_filename = f"{experiment_name}_predictions.parquet"
+        output_path = base_predictions_dir / output_filename
+    else:
+        # Ensure output path is within the predictions directory
+        output_path = Path(output_path)
+        if not output_path.suffix == '.parquet':
+            output_path = output_path.with_suffix('.parquet')
+        
+        # Ensure it's in the correct model type directory
+        output_path = base_predictions_dir / output_path.name
     
     # Save results
-    results.write_parquet(output_path)
+    results.write_parquet(str(output_path))
     print(f"Predictions for {experiment_name} saved to {output_path}")
     print(f"Data loaded from year {start_year or 'beginning'} to {end_year}")
     
