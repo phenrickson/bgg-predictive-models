@@ -4,11 +4,14 @@ import logging
 from typing import Optional
 from datetime import datetime
 
+import numpy as np
+
 from src.models.experiments import ExperimentTracker
 from src.models.experiments import Experiment
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.hurdle import setup_logging
+from src.models.complexity import calculate_complexity_weights
 
 def extract_model_threshold(experiment: Experiment) -> Optional[float]:
     """
@@ -219,12 +222,46 @@ def get_model_parameters(
     
     return description, threshold, min_weights
 
+def extract_sample_weights(experiment: Experiment) -> Optional[np.ndarray]:
+    """
+    Extract sample weights from experiment metadata if available.
+    
+    Args:
+        experiment: Experiment object
+    
+    Returns:
+        numpy array of sample weights or None
+    """
+    try:
+        # Check for sample weights in metadata or config
+        sample_weights_paths = [
+            ('model_info', 'sample_weights'),
+            ('sample_weights',)
+        ]
+        
+        for path in sample_weights_paths:
+            current = experiment.metadata
+            for key in path:
+                current = current.get(key)
+                if current is None:
+                    break
+            
+            # If found and is a list or numpy array, convert to numpy array
+            if current is not None:
+                return np.array(current)
+        
+        return None
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Error extracting sample weights: {e}")
+        return None
+
 def finalize_model(
     model_type: str,
     experiment_name: str,
     version: Optional[int] = None,
     end_year: Optional[int] = None,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    sample_weight_base: Optional[float] = 10.0  # Optional base for complexity weight calculation
 ):
     """Finalize a model by fitting its pipeline on full dataset.
     
@@ -234,6 +271,7 @@ def finalize_model(
         version: Optional specific version to finalize
         end_year: Optional end year for training data
         description: Optional description of finalized model
+        sample_weight_base: Optional base for complexity weight calculation
     """
     # Setup logging
     logger = setup_logging()
@@ -275,13 +313,32 @@ def finalize_model(
         description=description
     )
     
+    # Determine sample weights
+    sample_weights = None
+    
+    # 1. Try to extract existing sample weights from experiment metadata
+    extracted_sample_weights = extract_sample_weights(experiment)
+    
+    # 2. If no existing weights, generate weights for complexity model
+    if extracted_sample_weights is None and model_type == 'complexity' and sample_weight_base is not None:
+        extracted_sample_weights = calculate_complexity_weights(y.values, base=sample_weight_base)
+    
+    # Log sample weight diagnostics
+    if extracted_sample_weights is not None:
+        logger.info("Sample Weights Diagnostic:")
+        logger.info(f"  Weight Source: {'Extracted from metadata' if extracted_sample_weights is not None else 'Generated'}")
+        logger.info(f"  Weight Range: min={extracted_sample_weights.min():.2f}, max={extracted_sample_weights.max():.2f}")
+        logger.info(f"  Weight Mean: {extracted_sample_weights.mean():.2f}")
+        logger.info(f"  Weight Std Dev: {extracted_sample_weights.std():.2f}")
+    
     # Finalize model
     logger.info("Fitting pipeline on full dataset...")
     finalized_dir = experiment.finalize_model(
         X=X,
         y=y,
         description=description,
-        final_end_year=final_end_year
+        final_end_year=final_end_year,
+        sample_weight=extracted_sample_weights  # Pass sample weights if available
     )
     
     logger.info(f"Model finalized and saved to {finalized_dir}")

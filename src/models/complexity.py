@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, QuantileRegressor
 from sklearn.base import clone
 from sklearn.base import BaseEstimator, clone
 from tqdm import tqdm
@@ -232,7 +232,8 @@ def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
         'linear': LinearRegression,
         'ridge': Ridge,
         'lasso': Lasso,
-        'lightgbm': lgb.LGBMRegressor
+        'lightgbm': lgb.LGBMRegressor,
+        'quantile': QuantileRegressor
     }
     
     PARAM_GRIDS = {
@@ -253,6 +254,12 @@ def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
             'model__num_leaves': [50, 100],
             'model__min_child_samples': [10],
             'model__reg_alpha': [0.1],
+        },
+        'quantile': {
+            'model__quantile': [0.4, 0.5, 0.6],  # Different quantiles to explore
+            'model__solver': ['highs'],
+            'model__alpha': [1e-4, 1e-3, 1e-2, 0.1, 1.0],  # Regularization strength
+            'model__fit_intercept': [True]
         }
     }
     
@@ -359,7 +366,8 @@ def tune_model(
     param_grid: Dict[str, Any],
     metric: str = 'rmse',
     patience: int = 15,
-    min_delta: float = 1e-4
+    min_delta: float = 1e-4,
+    use_sample_weights: bool = False
 ) -> Tuple[Pipeline, Dict[str, Any]]:
     """
     Tune hyperparameters using separate tuning set.
@@ -398,7 +406,8 @@ def tune_model(
         param_grid = {}
     
     # Calculate sample weights for training data
-    sample_weights = calculate_complexity_weights(train_y.values)
+    if use_sample_weights:
+        sample_weights = calculate_complexity_weights(train_y.values)
     
     # Scoring functions for regression
     scoring_functions = {
@@ -442,8 +451,11 @@ def tune_model(
                     current_model.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
                 # Fit with sample weights
-                current_model.fit(X_train_transformed, train_y, sample_weight=sample_weights)
-                
+                if use_sample_weights:
+                    current_model.fit(X_train_transformed, train_y, sample_weight=sample_weights)
+                else:
+                    current_model.fit(X_train_transformed, train_y)
+
                 # Predict on tuning set
                 y_tune_pred = constrain_predictions(current_model.predict(X_tune_transformed))
                 
@@ -918,13 +930,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
     parser.add_argument("--model", type=str, default="ridge",
-                       choices=['linear', 'ridge', 'lasso', 'lightgbm'],
+                       choices=['linear', 'ridge', 'lasso', 'lightgbm', 'quantile'],
                        help="Regression model type to use")
+    parser.add_argument("--quantile", type=float, default=0.5,
+                       help="Quantile to use when model is 'quantile' (default: 0.5, median)")
     parser.add_argument("--metric", type=str, default="rmse",
                        choices=["rmse", "mae", "r2", "mape"],
                        help="Metric to optimize during hyperparameter tuning")
     parser.add_argument("--patience", type=int, default=5,
                        help="Number of iterations without improvement before early stopping")
+    parser.add_argument("--use-sample-weights", action="store_true",
+                       help="Enable sample weights based on complexity values")
     
     args = parser.parse_args()
     
@@ -934,6 +950,10 @@ def parse_arguments() -> argparse.Namespace:
     
     if not (args.tune_start_year <= args.tune_end_year < args.test_start_year <= args.test_end_year):
         raise ValueError("Invalid year ranges. Must satisfy: tune_start <= tune_end < test_start <= test_end")
+    
+    # Validate quantile argument
+    if args.model == 'quantile' and (args.quantile < 0 or args.quantile > 1):
+        raise ValueError("Quantile must be between 0 and 1")
     
     return args
 
@@ -972,10 +992,12 @@ def main():
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
     
     # Calculate sample weights for training data
-    train_sample_weights = calculate_complexity_weights(train_y.values)
-    logger.info("Training Sample Weights Diagnostic:")
-    logger.info(f"  Weight Range: min={train_sample_weights.min():.2f}, max={train_sample_weights.max():.2f}")
-    logger.info(f"  Weight Mean: {train_sample_weights.mean():.2f}")
+    train_sample_weights = None
+    if args.use_sample_weights:
+        train_sample_weights = calculate_complexity_weights(train_y.values)
+        logger.info("Training Sample Weights Diagnostic:")
+        logger.info(f"  Weight Range: min={train_sample_weights.min():.2f}, max={train_sample_weights.max():.2f}")
+        logger.info(f"  Weight Mean: {train_sample_weights.mean():.2f}")
     
     # Tune model
     tuned_pipeline, best_params = tune_model(
@@ -986,11 +1008,15 @@ def main():
         tune_y=tune_y,
         param_grid=param_grid,
         metric=args.metric,
-        patience=args.patience
+        patience=args.patience,
+        use_sample_weights=args.use_sample_weights
     )
     
-    # Fit on train data and evaluate with sample weights
-    train_pipeline = clone(tuned_pipeline).fit(train_X, train_y, model__sample_weight=train_sample_weights)
+    # Fit on train data with optional sample weights
+    if args.use_sample_weights:
+        train_pipeline = clone(tuned_pipeline).fit(train_X, train_y, model__sample_weight=train_sample_weights)
+    else:
+        train_pipeline = clone(tuned_pipeline).fit(train_X, train_y)
     train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
     
     # Evaluate tuning set
@@ -1002,12 +1028,18 @@ def main():
     y_combined = pd.concat([train_y, tune_y])
     
     # Calculate sample weights for combined data
-    combined_sample_weights = calculate_complexity_weights(y_combined.values)
-    logger.info("Combined Sample Weights Diagnostic:")
-    logger.info(f"  Weight Range: min={combined_sample_weights.min():.2f}, max={combined_sample_weights.max():.2f}")
-    logger.info(f"  Weight Mean: {combined_sample_weights.mean():.2f}")
+    combined_sample_weights = None
+    if args.use_sample_weights:
+        combined_sample_weights = calculate_complexity_weights(y_combined.values)
+        logger.info("Combined Sample Weights Diagnostic:")
+        logger.info(f"  Weight Range: min={combined_sample_weights.min():.2f}, max={combined_sample_weights.max():.2f}")
+        logger.info(f"  Weight Mean: {combined_sample_weights.mean():.2f}")
     
-    final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined, model__sample_weight=combined_sample_weights)
+    # Fit final model with optional sample weights
+    if args.use_sample_weights:
+        final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined, model__sample_weight=combined_sample_weights)
+    else:
+        final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
     
     # Evaluate on test set (filtered)
     test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
