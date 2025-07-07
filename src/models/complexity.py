@@ -10,6 +10,7 @@ from src.models.experiments import ExperimentTracker
 import numpy as np
 import pandas as pd
 import polars as pl
+import matplotlib.pyplot as plt
 from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -21,6 +22,7 @@ from sklearn.metrics import (
     mean_absolute_error, 
     r2_score
 )
+import lightgbm as lgb
 
 def mean_absolute_percentage_error(y_true, y_pred):
     """
@@ -173,29 +175,127 @@ def preprocess_data(
 
 def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
     """Set up regression model and parameter grid."""
-    REGRESSOR_MAPPING = {
+    model_MAPPING = {
         'linear': LinearRegression,
         'ridge': Ridge,
-        'lasso': Lasso
+        'lasso': Lasso,
+        'lightgbm': lgb.LGBMRegressor
     }
     
     PARAM_GRIDS = {
         'linear': {},  # Linear Regression has no hyperparameters to tune
         'ridge': {
-            'regressor__alpha': [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
-            'regressor__solver': ['auto'],
-            'regressor__fit_intercept': [True]
+            'model__alpha': [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
+            'model__solver': ['auto'],
+            'model__fit_intercept': [True]
         },
         'lasso': {
-            'regressor__alpha': [0.1, 1.0, 10.0],
-            'regressor__selection': ['cyclic', 'random']
+            'model__alpha': [0.1, 1.0, 10.0],
+            'model__selection': ['cyclic', 'random']
+        },
+        'lightgbm': {
+            'model__n_estimators': [500],
+            'model__learning_rate': [0.01],
+            'model__max_depth': [-1],  # -1 means no limit
+            'model__num_leaves': [50, 100],
+            'model__min_child_samples': [10],
+            'model__reg_alpha': [0.1],
         }
     }
     
-    regressor = REGRESSOR_MAPPING[model_name]()
+    model = model_MAPPING[model_name]()
     param_grid = PARAM_GRIDS[model_name]
     
-    return regressor, param_grid
+    return model, param_grid
+
+def plot_learning_curve(
+    pipeline: Pipeline,
+    train_X: pd.DataFrame,
+    train_y: pd.Series,
+    tune_X: pd.DataFrame,
+    tune_y: pd.Series,
+    metric: str = 'rmse',
+    train_sizes: np.ndarray = np.linspace(0.1, 1.0, 10)
+) -> Tuple[plt.Figure, Dict[str, np.ndarray]]:
+    """
+    Generate learning curve plot showing model performance vs training set size.
+    
+    Args:
+        pipeline: The pipeline to evaluate
+        train_X: Training features
+        train_y: Training target
+        tune_X: Tuning features
+        tune_y: Tuning target
+        metric: Metric to evaluate ('rmse', 'mae', 'r2', 'mape')
+        train_sizes: Array of training set size proportions
+        
+    Returns:
+        Tuple of (figure, learning curve data)
+    """
+    from sklearn.base import clone
+    import matplotlib.pyplot as plt
+    
+    # Setup scoring function
+    scoring_functions = {
+        'rmse': lambda y, y_pred: np.sqrt(mean_squared_error(y, y_pred)),
+        'mae': mean_absolute_error,
+        'r2': r2_score,
+        'mape': mean_absolute_percentage_error
+    }
+    
+    if metric not in scoring_functions:
+        raise ValueError(f"Unsupported metric: {metric}")
+    
+    score_func = scoring_functions[metric]
+    
+    # Calculate absolute sizes
+    n_samples = len(train_X)
+    train_sizes_abs = np.round(train_sizes * n_samples).astype(int)
+    
+    # Initialize arrays to store scores
+    train_scores = np.zeros(len(train_sizes))
+    val_scores = np.zeros(len(train_sizes))
+    
+    # For each training size
+    for idx, n_train in enumerate(train_sizes_abs):
+        # Get subset of training data
+        train_subset_X = train_X.iloc[:n_train]
+        train_subset_y = train_y.iloc[:n_train]
+        
+        # Fit model
+        current_pipeline = clone(pipeline)
+        current_pipeline.fit(train_subset_X, train_subset_y)
+        
+        # Get predictions
+        train_pred = constrain_predictions(current_pipeline.predict(train_subset_X))
+        val_pred = constrain_predictions(current_pipeline.predict(tune_X))
+        
+        # Calculate scores
+        train_scores[idx] = score_func(train_subset_y, train_pred)
+        val_scores[idx] = score_func(tune_y, val_pred)
+    
+    # Create plot
+    plt.figure(figsize=(10, 6))
+    plt.style.use('seaborn-v0_8-darkgrid')
+    
+    plt.plot(train_sizes, train_scores, 'o-', label='Training Score', color='blue')
+    plt.plot(train_sizes, val_scores, 'o-', label='Validation Score', color='red')
+    
+    plt.xlabel('Training Set Size (proportion)', fontsize=12)
+    plt.ylabel(f'{metric.upper()} Score', fontsize=12)
+    plt.title('Learning Curve', fontsize=14)
+    plt.legend(loc='best', fontsize=10)
+    plt.grid(True)
+    plt.tight_layout()
+    
+    # Return figure and data
+    curve_data = {
+        'train_sizes': train_sizes,
+        'train_scores': train_scores,
+        'val_scores': val_scores
+    }
+    
+    return plt.gcf(), curve_data
 
 def tune_model(
     pipeline: Pipeline,
@@ -230,8 +330,8 @@ def tune_model(
     
     logger = logging.getLogger(__name__)
     
-    # Get current regressor instance from pipeline
-    current_regressor = pipeline.named_steps['regressor']
+    # Get current model instance from pipeline
+    current_model = pipeline.named_steps['model']
     preprocessor = pipeline.named_steps['preprocessor']
     
     # Fit and transform the data once with the preprocessor
@@ -278,18 +378,18 @@ def tune_model(
             logger.info(f"Evaluating combination {i+1}/{n_combinations}: {params}")
             
             try:
-                # Create a fresh copy of the regressor
-                current_regressor = clone(pipeline.named_steps['regressor'])
+                # Create a fresh copy of the model
+                current_model = clone(pipeline.named_steps['model'])
                 
                 # Set parameters if any
                 if params:
-                    current_regressor.set_params(**{k.replace('regressor__', ''): v for k, v in params.items()})
+                    current_model.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
-                # Train regressor with these parameters on transformed data
-                current_regressor.fit(X_train_transformed, train_y)
+                # Standard fit for all models
+                current_model.fit(X_train_transformed, train_y)
                 
                 # Predict on tuning set
-                y_tune_pred = constrain_predictions(current_regressor.predict(X_tune_transformed))
+                y_tune_pred = constrain_predictions(current_model.predict(X_tune_transformed))
                 
                 # Calculate score
                 score = score_func(tune_y, y_tune_pred)
@@ -308,7 +408,7 @@ def tune_model(
                 if score < best_score - min_delta:  # Improvement beyond threshold
                     best_score = score
                     best_params = params.copy()  # Make a copy to be safe
-                    best_model = clone(current_regressor)
+                    best_model = clone(current_model)
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -323,8 +423,8 @@ def tune_model(
                 continue
             finally:
                 # Clean up to prevent memory leaks
-                if 'current_regressor' in locals():
-                    del current_regressor
+                if 'current_model' in locals():
+                    del current_model
                     gc.collect()
     
     except Exception as e:
@@ -346,7 +446,7 @@ def tune_model(
     # Create new pipeline with fitted preprocessor and best model
     tuned_pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('regressor', best_model or current_regressor)
+        ('model', best_model or current_model)
     ])
     
     return tuned_pipeline, best_params
@@ -358,7 +458,7 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
     Parameters
     ----------
     fitted_pipeline : Pipeline
-        A fitted scikit-learn pipeline containing a preprocessor and regressor
+        A fitted scikit-learn pipeline containing a preprocessor and model
         
     Returns
     -------
@@ -366,9 +466,9 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
         DataFrame containing feature names, coefficients, and absolute coefficients,
         sorted by absolute coefficient value in descending order.
     """
-    # Get the preprocessor and regressor from pipeline
+    # Get the preprocessor and model from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
-    regressor = fitted_pipeline.named_steps['regressor']
+    model = fitted_pipeline.named_steps['model']
     
     # Find feature names
     steps = list(preprocessor.named_steps.items())
@@ -395,11 +495,11 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
             else:
                 raise ValueError("Could not get feature names from any preprocessing step")
     
-    # Get coefficients from regressor
-    if not hasattr(regressor, 'coef_'):
-        raise ValueError("Regressor does not have coefficients")
+    # Get coefficients from model
+    if not hasattr(model, 'coef_'):
+        raise ValueError("model does not have coefficients")
         
-    coefficients = regressor.coef_
+    coefficients = model.coef_
     
     # Validate lengths match
     if len(feature_names) != len(coefficients):
@@ -592,22 +692,7 @@ def log_experiment(
         'target_type': 'regression'
     }
     
-    # Create experiment
-    experiment = experiment.create_experiment(
-        name=args.experiment,
-        description=args.description,
-        metadata={
-            'train_end_year_exclusive': args.train_end_year,
-            'tune_start_year': args.tune_start_year,
-            'tune_end_year': args.tune_end_year,
-            'test_start_year': args.test_start_year,
-            'test_end_year': args.test_end_year,
-            'model_type': 'complexity_regression',
-            'target': 'complexity',
-            'min_weights': args.min_weights,
-        },
-        config=config
-    )
+    # No need to recreate the experiment, use the passed experiment directly
     
     # Log metrics
     experiment.log_metrics(train_metrics, "train")
@@ -632,7 +717,7 @@ def log_experiment(
         model_info = {
             'n_features': len(importance_df),
             'best_params': best_params,
-            'intercept': float(pipeline.named_steps['regressor'].intercept_)
+            'intercept': float(pipeline.named_steps['model'].intercept_)
         }
         
         experiment.log_model_info(model_info)
@@ -751,9 +836,9 @@ def parse_arguments() -> argparse.Namespace:
                        help="Description of the experiment")
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
-    parser.add_argument("--regressor", type=str, default="ridge",
-                       choices=['linear', 'ridge', 'lasso'],
-                       help="Regressor type to use")
+    parser.add_argument("--model", type=str, default="ridge",
+                       choices=['linear', 'ridge', 'lasso', 'lightgbm'],
+                       help="Regression model type to use")
     parser.add_argument("--metric", type=str, default="rmse",
                        choices=["rmse", "mae", "r2", "mape"],
                        help="Metric to optimize during hyperparameter tuning")
@@ -791,16 +876,16 @@ def main():
     test_X, test_y = select_X_y(test_df, y_column='complexity')
     
     # Setup model and pipeline
-    regressor, param_grid = configure_model(args.regressor)
+    model, param_grid = configure_model(args.model)
     preprocessor = create_preprocessing_pipeline()
     pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('regressor', regressor)
+        ('model', model)
     ])
     
     # Log experiment details
     logger.info(f"Training experiment: {args.experiment}")
-    logger.info(f"Regressor: {regressor.__class__.__name__}")
+    logger.info(f"model: {model.__class__.__name__}")
     logger.info(f"Parameter Grid: {param_grid}")
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
@@ -836,8 +921,77 @@ def main():
 
     # Log experiment results
     tracker = ExperimentTracker("complexity", args.output_dir)
+    
+    # Create experiment
+    experiment = tracker.create_experiment(
+        name=args.experiment,
+        description=args.description,
+        metadata={
+            'train_end_year_exclusive': args.train_end_year,
+            'tune_start_year': args.tune_start_year,
+            'tune_end_year': args.tune_end_year,
+            'test_start_year': args.test_start_year,
+            'test_end_year': args.test_end_year,
+            'model_type': 'complexity_regression',
+            'target': 'complexity',
+            'min_weights': args.min_weights,
+        },
+        config={
+            'model_params': best_params,
+            'preprocessing': {
+                'category_min_freq': 0,
+                'mechanic_min_freq': 0,
+                'designer_min_freq': 10,
+                'artist_min_freq': 10,
+                'publisher_min_freq': 5,
+                'family_min_freq': 10,
+                'max_artist_features': 500,
+                'max_publisher_features': 250,
+                'max_designer_features': 500,
+                'max_family_features': 500,
+                'max_mechanic_features': 500,
+                'max_category_features': 500,
+                'create_category_features': True,
+                'create_mechanic_features': True,
+                'create_designer_features': True,
+                'create_artist_features': True,
+                'create_publisher_features': True,
+                'create_family_features': True,
+                'create_player_dummies': True,
+                'include_base_numeric': True
+            },
+            'data_splits': {
+                'train_end_year': args.train_end_year,
+                'tune_start_year': args.tune_start_year,
+                'tune_end_year': args.tune_end_year,
+                'test_start_year': args.test_start_year,
+                'test_end_year': args.test_end_year
+            },
+            'target': 'complexity',
+            'target_type': 'regression'
+        }
+    )
+    
+    # Generate and save learning curve
+    logger.info("Generating learning curve...")
+    try:
+        fig, curve_data = plot_learning_curve(
+            pipeline=final_pipeline,
+            train_X=train_X,
+            train_y=train_y,
+            tune_X=tune_X,
+            tune_y=tune_y,
+            metric=args.metric
+        )
+        learning_curve_path = Path(experiment.exp_dir) / "learning_curve.png"
+        fig.savefig(learning_curve_path, dpi=300)
+        plt.close()
+        logger.info(f"Learning curve saved to {learning_curve_path}")
+    except Exception as e:
+        logger.error(f"Error generating learning curve: {e}")
+    
     log_experiment(
-        experiment=tracker,
+        experiment=experiment,
         pipeline=final_pipeline,
         train_metrics=train_metrics,
         tune_metrics=tune_metrics,

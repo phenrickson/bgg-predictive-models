@@ -13,6 +13,7 @@ dependencies = [
     "google-cloud-bigquery>=3.34.0",
     "google-cloud-bigquery-storage>=2.32.0",
     "ipykernel>=6.29.5",
+    "lightgbm>=4.6.0",
     "matplotlib>=3.10.3",
     "pandas>=2.3.0",
     "plotly>=6.2.0",
