@@ -528,8 +528,14 @@ def log_experiment(
     test_metrics: Dict[str, float],
     best_params: Dict[str, Any],
     args: argparse.Namespace,
+    train_df: pl.DataFrame,
+    tune_df: pl.DataFrame,
     test_df: pl.DataFrame,
+    train_X: pd.DataFrame,
+    tune_X: pd.DataFrame,
     test_X: pd.DataFrame,
+    train_y: pd.Series,
+    tune_y: pd.Series,
     test_y: pd.Series
 ) -> None:
     """Log all experiment results and artifacts."""
@@ -623,29 +629,82 @@ def log_experiment(
     # Save pipeline
     experiment.save_pipeline(pipeline)
     
-    # Save test set predictions
-    try:
-        # Predict on test set
-        test_predictions = constrain_predictions(pipeline.predict(test_X))
-        
-        # Create predictions DataFrame
-        predictions_df = pd.DataFrame({
-            'game_id': test_df.select('game_id').to_pandas().squeeze(),
-            'name': test_df.select('name').to_pandas().squeeze(),
-            'year_published': test_df.select('year_published').to_pandas().squeeze(),
-            'true_complexity': test_y,
-            'predicted_complexity': test_predictions
-        })
-        
-        # Convert to Polars and save
-        predictions_pl = pl.from_pandas(predictions_df)
-        predictions_path = f"data/predictions/{args.experiment}_complexity_predictions.parquet"
-        predictions_pl.write_parquet(predictions_path)
-        
-        logger.info(f"Test set predictions saved to {predictions_path}")
-        
-    except Exception as e:
-        logger.error(f"Error saving test set predictions: {e}")
+    # Create artifacts directory
+    artifacts_dir = Path(experiment.exp_dir) / 'artifacts'
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save predictions and scatter plots for both validation and test sets
+    datasets = [
+        ('validation', tune_df, tune_X, tune_y),
+        ('test', test_df, test_X, test_y)
+    ]
+    
+    for dataset_name, df, X, y in datasets:
+        try:
+            # Predict on dataset
+            predictions = constrain_predictions(pipeline.predict(X))
+            
+            # Create predictions DataFrame
+            predictions_df = pd.DataFrame({
+                'game_id': df.select('game_id').to_pandas().squeeze(),
+                'name': df.select('name').to_pandas().squeeze(),
+                'year_published': df.select('year_published').to_pandas().squeeze(),
+                'true_complexity': y,
+                'predicted_complexity': predictions
+            })
+            
+            # Convert to Polars and save
+            predictions_pl = pl.from_pandas(predictions_df)
+            predictions_path = artifacts_dir / f"{dataset_name}_predictions.parquet"
+            predictions_pl.write_parquet(predictions_path)
+            
+            logger.info(f"{dataset_name.title()} set predictions saved to {predictions_path}")
+            
+            # Create scatter plot
+            import matplotlib.pyplot as plt
+            import numpy as np
+            from sklearn.metrics import r2_score, mean_squared_error
+            
+            plt.figure(figsize=(12, 8))
+            plt.style.use('seaborn-v0_8-darkgrid')
+            
+            # Scatter plot with color gradient based on year
+            scatter = plt.scatter(
+                predictions_df['true_complexity'], 
+                predictions_df['predicted_complexity'], 
+                c=predictions_df['year_published'], 
+                cmap='viridis', 
+                alpha=0.7,
+                edgecolors='black', 
+                linewidth=0.5
+            )
+            plt.colorbar(scatter, label='Year Published')
+            
+            # Perfect prediction line
+            min_val = min(predictions_df['true_complexity'].min(), predictions_df['predicted_complexity'].min())
+            max_val = max(predictions_df['true_complexity'].max(), predictions_df['predicted_complexity'].max())
+            plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Prediction')
+            
+            # Calculate R² and RMSE
+            r2 = r2_score(predictions_df['true_complexity'], predictions_df['predicted_complexity'])
+            rmse = np.sqrt(mean_squared_error(predictions_df['true_complexity'], predictions_df['predicted_complexity']))
+            
+            # Annotations
+            plt.title(f'{dataset_name.title()} Complexity Predictions\nR² = {r2:.4f}, RMSE = {rmse:.4f}', fontsize=14)
+            plt.xlabel('Actual Complexity', fontsize=12)
+            plt.ylabel('Predicted Complexity', fontsize=12)
+            plt.legend()
+            
+            # Tight layout and save
+            plt.tight_layout()
+            scatter_plot_path = artifacts_dir / f"{dataset_name}_predictions_scatter.png"
+            plt.savefig(scatter_plot_path, dpi=300)
+            plt.close()
+            
+            logger.info(f"{dataset_name.title()} scatter plot saved to {scatter_plot_path}")
+            
+        except Exception as e:
+            logger.error(f"Error saving {dataset_name} set predictions and scatter plot: {e}")
 
 def parse_arguments() -> argparse.Namespace:
     """Parse and validate command line arguments."""
@@ -754,9 +813,15 @@ def main():
         train_metrics=train_metrics,
         tune_metrics=tune_metrics,
         test_metrics=test_metrics,
-        test_df = test_df,
-        test_X = test_X,
-        test_y = test_y,
+        train_df=train_df,
+        tune_df=tune_df,
+        test_df=test_df,
+        train_X=train_X,
+        tune_X=tune_X,
+        test_X=test_X,
+        train_y=train_y,
+        tune_y=tune_y,
+        test_y=test_y,
         best_params=best_params,
         args=args
     )
