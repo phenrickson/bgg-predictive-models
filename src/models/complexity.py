@@ -15,6 +15,7 @@ from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.base import clone
 from sklearn.base import BaseEstimator, clone
 from tqdm import tqdm
 from sklearn.metrics import (
@@ -64,6 +65,58 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:
     """Constrain predictions to be between 1 and 5."""
     return np.clip(predictions, 1, 5)
+
+def calculate_complexity_weights(
+    complexities: np.ndarray, 
+    base: float = 10.0,  # Increased base for more dramatic weighting
+    min_weight: float = 1.0,
+    max_weight: float = 100.0  # Added max weight to prevent extreme values
+) -> np.ndarray:
+    """
+    Calculate exponential weights for complexity values.
+    
+    Args:
+        complexities (array-like): Complexity values
+        base (float): Base for exponential weighting. Higher values 
+                      create more dramatic weight increases
+        min_weight (float): Minimum weight to apply
+        max_weight (float): Maximum weight to prevent extreme values
+    
+    Returns:
+        numpy array of weights normalized to have mean 1.0
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Log input complexity distribution
+    logger.info("Complexity Weight Calculation Diagnostic:")
+    logger.info(f"  Complexity Range: min={complexities.min():.2f}, max={complexities.max():.2f}")
+    logger.info(f"  Complexity Mean: {complexities.mean():.2f}")
+    logger.info(f"  Complexity Std Dev: {complexities.std():.2f}")
+    
+    # Normalize complexities to start from 0
+    normalized_complexities = complexities - complexities.min()
+    
+    # Calculate exponential weights with more dramatic scaling
+    weights = np.power(base, normalized_complexities)
+    
+    # Clip weights to prevent extreme values
+    weights = np.clip(weights, min_weight, max_weight)
+    
+    # Normalize weights to have mean 1.0
+    weights = weights / np.mean(weights)
+    
+    # Log weight distribution
+    logger.info("  Weight Distribution:")
+    logger.info(f"    Weight Range: min={weights.min():.2f}, max={weights.max():.2f}")
+    logger.info(f"    Weight Mean: {weights.mean():.2f}")
+    logger.info(f"    Weight Std Dev: {weights.std():.2f}")
+    
+    # Log a few example mappings
+    logger.info("  Sample Complexity to Weight Mapping:")
+    for complexity, weight in zip(complexities[:10], weights[:10]):
+        logger.info(f"    Complexity {complexity:.2f} -> Weight {weight:.2f}")
+    
+    return weights
 
 def select_X_y(df, y_column, to_pandas = True):
     """
@@ -305,7 +358,7 @@ def tune_model(
     tune_y: pd.Series,
     param_grid: Dict[str, Any],
     metric: str = 'rmse',
-    patience: int = 5,
+    patience: int = 15,
     min_delta: float = 1e-4
 ) -> Tuple[Pipeline, Dict[str, Any]]:
     """
@@ -343,6 +396,9 @@ def tune_model(
     # Validate param_grid
     if param_grid is None:
         param_grid = {}
+    
+    # Calculate sample weights for training data
+    sample_weights = calculate_complexity_weights(train_y.values)
     
     # Scoring functions for regression
     scoring_functions = {
@@ -385,8 +441,8 @@ def tune_model(
                 if params:
                     current_model.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
-                # Standard fit for all models
-                current_model.fit(X_train_transformed, train_y)
+                # Fit with sample weights
+                current_model.fit(X_train_transformed, train_y, sample_weight=sample_weights)
                 
                 # Predict on tuning set
                 y_tune_pred = constrain_predictions(current_model.predict(X_tune_transformed))
@@ -700,6 +756,31 @@ def log_experiment(
     experiment.log_metrics(test_metrics, "test")
     experiment.log_parameters(best_params)
     
+    # Calculate and log sample weights for training and combined datasets
+    logger = logging.getLogger(__name__)
+    try:
+        # Calculate sample weights for training data
+        train_sample_weights = calculate_complexity_weights(train_y.values)
+        
+        # Calculate sample weights for combined data
+        y_combined = pd.concat([train_y, tune_y])
+        combined_sample_weights = calculate_complexity_weights(y_combined.values)
+        
+        # Log sample weights to experiment metadata
+        experiment.log_metadata({
+            'sample_weights': {
+                'train': train_sample_weights.tolist(),
+                'combined': combined_sample_weights.tolist()
+            }
+        })
+        
+        logger.info("Sample Weights Logged to Experiment Metadata:")
+        logger.info(f"  Train Weights - Range: {train_sample_weights.min():.2f} to {train_sample_weights.max():.2f}")
+        logger.info(f"  Combined Weights - Range: {combined_sample_weights.min():.2f} to {combined_sample_weights.max():.2f}")
+        
+    except Exception as e:
+        logger.error(f"Error logging sample weights: {e}")
+    
     # Extract and save feature importance
     logger = logging.getLogger(__name__)
     try:
@@ -890,6 +971,12 @@ def main():
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
     
+    # Calculate sample weights for training data
+    train_sample_weights = calculate_complexity_weights(train_y.values)
+    logger.info("Training Sample Weights Diagnostic:")
+    logger.info(f"  Weight Range: min={train_sample_weights.min():.2f}, max={train_sample_weights.max():.2f}")
+    logger.info(f"  Weight Mean: {train_sample_weights.mean():.2f}")
+    
     # Tune model
     tuned_pipeline, best_params = tune_model(
         pipeline=pipeline,
@@ -902,8 +989,8 @@ def main():
         patience=args.patience
     )
     
-    # Fit on train data and evaluate
-    train_pipeline = clone(tuned_pipeline).fit(train_X, train_y)
+    # Fit on train data and evaluate with sample weights
+    train_pipeline = clone(tuned_pipeline).fit(train_X, train_y, model__sample_weight=train_sample_weights)
     train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
     
     # Evaluate tuning set
@@ -914,7 +1001,13 @@ def main():
     X_combined = pd.concat([train_X, tune_X])
     y_combined = pd.concat([train_y, tune_y])
     
-    final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
+    # Calculate sample weights for combined data
+    combined_sample_weights = calculate_complexity_weights(y_combined.values)
+    logger.info("Combined Sample Weights Diagnostic:")
+    logger.info(f"  Weight Range: min={combined_sample_weights.min():.2f}, max={combined_sample_weights.max():.2f}")
+    logger.info(f"  Weight Mean: {combined_sample_weights.mean():.2f}")
+    
+    final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined, model__sample_weight=combined_sample_weights)
     
     # Evaluate on test set (filtered)
     test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
