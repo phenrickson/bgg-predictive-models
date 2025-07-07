@@ -754,6 +754,9 @@ def main():
         train_metrics=train_metrics,
         tune_metrics=tune_metrics,
         test_metrics=test_metrics,
+        test_df = test_df,
+        test_X = test_X,
+        test_y = test_y,
         best_params=best_params,
         args=args
     )
