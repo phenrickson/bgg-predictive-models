@@ -9,34 +9,87 @@ from typing import Optional, Tuple
 
 from src.models.experiments import ExperimentTracker
 
-def get_model_info(finalized_dir: Path) -> Tuple[Optional[float], Optional[int]]:
-    """Extract model information from finalized model directory.
+def get_model_info(finalized_dir: Path) -> Optional[int]:
+    """Extract final end year from finalized model directory.
     
     Args:
         finalized_dir: Path to finalized model directory
         
     Returns:
-        Tuple containing:
-        - threshold: Classification threshold if found, None otherwise
-        - final_end_year: Final training end year if found, None otherwise
+        Final training end year if found, None otherwise
     """
     info_path = finalized_dir / "info.json"
-    threshold = None
     final_end_year = None
     
     if info_path.exists():
         try:
             with open(info_path, 'r') as f:
                 info = json.load(f)
-                # Check both possible locations for threshold
-                threshold = info.get('model_info', {}).get('threshold')
-                if threshold is None:
-                    threshold = info.get('threshold')
                 final_end_year = info.get('final_end_year')
         except Exception as e:
             print(f"Warning: Error reading model info: {e}")
     
-    return threshold, final_end_year
+    return final_end_year
+
+def extract_threshold(
+    experiment_name: str, 
+    model_type: str
+) -> Optional[float]:
+    """Extract threshold from the most recent version's model_info.json file.
+    
+    Args:
+        experiment_name: Name of the experiment
+        model_type: Type of model
+        
+    Returns:
+        Threshold value if found, None otherwise
+    """
+    from src.models.experiments import ExperimentTracker
+    
+    # Get experiment tracker for the model type
+    tracker = ExperimentTracker(model_type)
+    
+    # Find the latest version of the experiment
+    experiments = tracker.list_experiments()
+    matching_experiments = [
+        exp for exp in experiments 
+        if exp['name'] == experiment_name
+    ]
+    
+    if not matching_experiments:
+        print(f"No experiments found matching {experiment_name}")
+        return None
+    
+    # Get the latest version
+    latest_experiment = max(
+        matching_experiments, 
+        key=lambda x: x['version']
+    )
+    
+    # Load the experiment with the latest version
+    experiment = tracker.load_experiment(
+        latest_experiment['name'], 
+        latest_experiment['version']
+    )
+    
+    # Look for model_info.json in the experiment directory
+    model_info_path = experiment.exp_dir / "model_info.json"
+    
+    if model_info_path.exists():
+        try:
+            with open(model_info_path, 'r') as f:
+                model_info = json.load(f)
+                threshold = model_info.get('threshold')
+                
+                if threshold is not None:
+                    print(f"Found threshold {threshold} in {model_info_path}")
+                    return threshold
+        except Exception as e:
+            print(f"Warning: Error reading {model_info_path}: {e}")
+    
+    # If no threshold found
+    print("No threshold found in model_info.json")
+    return None
 
 def load_model(experiment_name: str, model_type: Optional[str] = None):
     """Load the finalized model and preprocessing pipeline.
@@ -200,7 +253,7 @@ def load_scoring_data(
     
     # Get model info
     finalized_dir = experiment.exp_dir / "finalized"
-    _, final_end_year = get_model_info(finalized_dir)
+    final_end_year = get_model_info(finalized_dir)
     
     # Determine start and end years for scoring
     if start_year is None:
@@ -252,28 +305,8 @@ def predict_data(
         # Use predict_proba for hurdle model
         predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
         
-        # Get model threshold from finalized model info
-        tracker = ExperimentTracker(model_type)
-        
-        # Find the latest version of the experiment
-        experiments = tracker.list_experiments()
-        matching_experiments = [
-            exp for exp in experiments 
-            if exp['name'] == experiment_name
-        ]
-        latest_experiment = max(
-            matching_experiments, 
-            key=lambda x: x['version']
-        )
-        
-        # Load the experiment with the latest version
-        experiment = tracker.load_experiment(
-            latest_experiment['name'], 
-            latest_experiment['version']
-        )
-        
-        finalized_dir = experiment.exp_dir / "finalized"
-        threshold, _ = get_model_info(finalized_dir)
+        # Try to extract threshold from the experiment
+        threshold = extract_threshold(experiment_name, model_type)
         
         # Use default threshold of 0.5 if none found
         threshold = threshold if threshold is not None else 0.5
