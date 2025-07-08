@@ -1,220 +1,145 @@
 # BGG Predictive Models
 
-Python implementation of predictive models for BoardGameGeek data, focusing on predicting game ratings, complexity, and popularity metrics.
+## Project Overview
 
-## Overview
-
-This project implements a multi-stage modeling approach to predict various BoardGameGeek metrics:
-
-1. **Hurdle Model**: Predicts if a game will reach a minimum threshold of user ratings (default 25)
-2. **Complexity Model**: Predicts game weight/complexity on BGG's 1-5 scale
-3. **Rating Model**: Predicts average user rating
-4. **Users Rated Model**: Predicts number of user ratings
-5. **Bayesaverage**: Combines predictions to calculate BGG's weighted rating system
-
-The models use data from the BGG data warehouse and are designed to work with both existing and upcoming game releases.
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/phenrickson/bgg-predictive-models.git
-cd bgg-predictive-models
-```
-
-2. Create a Python virtual environment using UV:
-```bash
-uv venv
-source .venv/bin/activate  # On Unix/macOS
-# OR
-.venv\Scripts\activate  # On Windows
-```
-
-3. Install dependencies:
-```bash
-uv pip install -e ".[dev]"
-```
-
-## Configuration
-
-The project requires access to a BigQuery dataset containing BGG data. Set the following environment variables:
-
-```bash
-export BGG_PROJECT_ID="your-gcp-project-id"
-export BGG_DATASET="your-bigquery-dataset"
-export BGG_CREDENTIALS_PATH="/path/to/service-account-key.json"  # Optional
-```
-
-You can also use a `.env` file:
-
-```env
-BGG_PROJECT_ID=your-gcp-project-id
-BGG_DATASET=your-bigquery-dataset
-BGG_CREDENTIALS_PATH=/path/to/service-account-key.json
-```
-
-## Usage
-
-### Training Models
-
-Train the full pipeline using the provided script:
-
-```bash
-# Basic usage
-python -m src.bgg_predictive_models.scripts.train --output-dir models/
-
-# With custom parameters
-python -m src.bgg_predictive_models.scripts.train \
-    --end-train-year 2021 \
-    --valid-years 2 \
-    --min-ratings 25 \
-    --random-state 42 \
-    --output-dir models/ \
-    --log-file logs/training.log
-```
-
-### Making Predictions
-
-Use trained models to make predictions:
-
-```bash
-# Predict for specific games
-python -m src.bgg_predictive_models.scripts.predict \
-    --model-dir models/ \
-    --game-ids 174430 161936 224517 \
-    --output-file predictions.csv
-
-# Predict for all games
-python -m src.bgg_predictive_models.scripts.predict \
-    --model-dir models/ \
-    --output-file predictions.csv
-```
-
-### Python API
-
-You can also use the models programmatically:
-
-```python
-from bgg_predictive_models.data.config import get_config_from_env
-from bgg_predictive_models.data.loader import BGGDataLoader
-from bgg_predictive_models.models.pipeline import BGGPipeline
-
-# Load data
-config = get_config_from_env()
-loader = BGGDataLoader(config)
-features, targets = loader.load_training_data()
-
-# Train pipeline
-pipeline = BGGPipeline()
-pipeline.fit(
-    X=features,
-    y_hurdle=targets["hurdle"],
-    y_complexity=targets["complexity"],
-    y_rating=targets["rating"],
-    y_users_rated=targets["users_rated"],
-)
-
-# Make predictions
-predictions = pipeline.predict(features)
-bayesavg = pipeline.predict_bayesaverage(features)
-```
+This project develops predictive models for board game characteristics using BoardGameGeek (BGG) data, focusing on complexity estimation, rating prediction, and game feature analysis.
 
 ## Project Structure
 
 ```
 bgg-predictive-models/
-├── src/
-│   └── bgg_predictive_models/
-│       ├── data/
-│       │   ├── config.py      # Database configuration
-│       │   └── loader.py      # Data loading and preprocessing
-│       ├── models/
-│       │   ├── base.py        # Base model classes
-│       │   ├── hurdle.py      # Rating threshold prediction
-│       │   ├── complexity.py  # Game weight prediction
-│       │   ├── rating.py      # Average rating prediction
-│       │   ├── users_rated.py # Number of ratings prediction
-│       │   └── pipeline.py    # Multi-stage model pipeline
-│       └── scripts/
-│           ├── train.py       # Model training script
-│           └── predict.py     # Prediction script
-├── tests/                     # Unit tests
-├── notebooks/                 # Jupyter notebooks
-├── pyproject.toml            # Project configuration
-└── README.md                 # This file
+├── config/           # Configuration files
+├── credentials/      # Credential management
+├── data/             # Data storage
+├── figures/          # Visualization outputs
+├── scoring_service/  # Cloud deployment service
+├── src/              # Primary source code
+│   ├── augment/      # Data augmentation
+│   ├── data/         # Data loading and preparation
+│   ├── features/     # Feature engineering
+│   ├── models/       # Machine learning models
+│   ├── monitor/      # Experiment and prediction monitoring
+│   ├── scripts/      # Utility scripts
+│   ├── utils/        # Utility functions
+│   └── visualizations/ # Data visualization scripts
+└── tests/            # Unit and integration tests
 ```
 
-## Model Details
+## Project Workflow
 
-### Hurdle Model
-- LightGBM classifier
-- Predicts probability of reaching minimum rating threshold
-- Features: game attributes, categories, mechanics
-- Evaluation: ROC AUC
-
-### Complexity Model
-- LightGBM regressor
-- Predicts game weight/complexity (1-5 scale)
-- Used for imputing missing complexity values
-- Evaluation: RMSE, R²
-
-### Rating Model
-- Elastic Net regressor
-- Predicts average user rating
-- Includes predicted complexity as feature
-- Evaluation: RMSE, R²
-
-### Users Rated Model
-- Elastic Net regressor
-- Predicts number of user ratings
-- Log-transformed target
-- Evaluation: RMSE, R² (original and log scale)
-
-### Bayesaverage Calculation
-Implements BGG's weighted rating system:
-```python
-bayesavg = (rating * n_ratings + prior_rating * prior_weight) / (n_ratings + prior_weight)
+```mermaid
+flowchart TD
+    A[Data Collection] --> B[Data Preprocessing]
+    B --> C[Feature Engineering]
+    C --> D[Model Training]
+    D --> E[Model Evaluation]
+    E --> F[Performance Threshold?]
+    F -->|No| B
+    F -->|Yes| G[Model Deployment]
+    G --> H[Monitoring & Prediction]
+    H --> I[Continuous Improvement]
+    I --> A
 ```
-Where:
-- `rating`: Predicted average rating
-- `n_ratings`: Predicted number of ratings
-- `prior_rating`: Default 5.5
-- `prior_weight`: Default 100
 
-## Development
+## Current State vs Roadmap
 
-### Running Tests
+### Current State
+- [x] BGG ETL pipeline
+- [x] Materialized `game_features` views in BigQuery
+- [x] Experiment tracking and model versioning
+- [x] Scikit-learn compatible BGG preprocessor
+- [x] Hurdle classification model
+- [x] Complexity estimation model
+- [x] Basic monitoring dashboards
+
+### Roadmap
+- [ ] Cloud deployment service
+- [ ] Average rating model
+- [ ] Users rated model
+- [ ] Geek rating estimation
+- [ ] Ensemble model development
+
+## Key Components
+
+### Data Preparation
+
+- **Data Loading**: `src/data/get_raw_data.py`
+- **Materialized Views**: `src/data/create_view.py`
+- **Feature Preprocessing**: `src/features/preprocessor.py`
+
+### Machine Learning Models
+- **Hurdle Classificatione**: `src/models/hurdle.py`
+- **Complexity Estimation**: `src/models/complexity.py`
+- **Rating Prediction**: `src/models/rating.py`
+- **Users Rated Prediction**: `src/models/users_rated.py`
+
+### Monitoring and Visualization
+
+- **Experiment Dashboard**: `src/monitor/experiment_dashboard.py`
+- **Predictions Dashboard**: `src/monitor/predictions_dashboard.py`
+- **Visualization Scripts**: `src/visualizations/`
+
+## Creating Materialized Views
+
+### Games Features Materialized View
+
+To create the games features materialized view, use `uv run`:
+
 ```bash
-# Run all tests
-pytest
+# Ensure you have set the BGG_DATASET environment variable if not using the default
+export BGG_DATASET=your_dataset_name
 
-# Run with coverage
-pytest --cov=src/
-
-# Run specific test file
-pytest tests/test_models.py
+# Run the script using uv
+uv run src/data/create_view.py
 ```
 
-### Code Quality
-```bash
-# Format code
-black src/ tests/
+#### Environment Variables
 
-# Run linter
-ruff check src/ tests/
+- `BGG_DATASET`: The BigQuery dataset where the materialized view will be created
+  - Default: `bgg_data_dev`
+  - Set this to match your project's dataset configuration
 
-# Type checking
-mypy src/
-```
+#### Prerequisites
 
-## Contributing
+- Google Cloud credentials configured
+- BigQuery access
+- Python dependencies installed via `uv`
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and linting
-5. Submit a pull request
+## Development Workflow
 
-## License
+1. **Setup**: 
+   ```bash
+   # Install UV (if not already installed)
+   curl -LsSf https://astral.sh/uv/install.sh | sh
 
-MIT License - see LICENSE file for details
+   # Create virtual environment
+   uv venv
+
+   # Install dependencies
+   uv sync
+   ```
+
+2. **Running Scripts**:
+   ```bash
+   # Train model experiment (hurdle: classification)
+   uv run -m src.models.hurdle  --experiment my_experiment_name
+
+   # Finalize model (hurdle)
+   uv run -m src.models.finalize_model --model-type hurdle --experiment my_experiment_name
+
+   # Score using the trained model
+   uv run -m src.models.score --model-type complexity --experiment my_experiment_name
+   ```
+
+3. **Testing**:
+   ```bash
+   # Run tests
+   uv run pytest
+   ```
+
+## Deployment
+
+The project includes a scoring service for cloud deployment, configured with:
+- `scoring_service/Dockerfile`
+- `scoring_service/cloudbuild.yaml`
+- `scoring_service/main.py`

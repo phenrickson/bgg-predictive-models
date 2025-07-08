@@ -62,3 +62,17 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# ignore local data
+/data/
+!src/models
+
+# ignore finalized models anywhere in director
+/finalized/
+
+# ignore pickle files
+*.pkl
+*.pickle
+
+# ignore catboost output
+/catboost_info/

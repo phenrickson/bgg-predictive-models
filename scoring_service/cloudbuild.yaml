@@ -1,0 +1,50 @@
+steps:
+# Build the container image using UV
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA', '.']
+
+# Push the container image to Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA']
+
+# Deploy container image to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args:
+  - 'run'
+  - 'deploy'
+  - 'bgg-model-scoring'
+  - '--image'
+  - 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA'
+  - '--platform'
+  - 'managed'
+  - '--region'
+  - 'us-central1'
+  - '--allow-unauthenticated'
+  - '--max-instances'
+  - '10'
+  - '--memory'
+  - '8Gi'
+  - '--cpu'
+  - '4'
+  # Optional: Add service account for accessing other GCP resources
+  # - '--service-account'
+  # - 'your-service-account@project-id.iam.gserviceaccount.com'
+
+# Optional: Run post-deployment tests
+# - name: 'gcr.io/cloud-builders/gcloud'
+#   entrypoint: 'bash'
+#   args:
+#   - '-c'
+#   - 'curl https://bgg-model-scoring-url/health || exit 1'
+
+images:
+- 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA'
+
+# Optional: Artifacts for storing build outputs
+artifacts:
+  objects:
+    location: 'gs://$PROJECT_ID-build-artifacts/bgg-model-scoring/'
+    paths:
+    - 'scoring_service/pyproject.toml'
+    - 'scoring_service/Dockerfile'
