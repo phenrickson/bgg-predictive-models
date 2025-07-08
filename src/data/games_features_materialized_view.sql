@@ -1,128 +1,242 @@
--- Materialized View Creation and Update Strategies for Games Features
+-- Materialized view of game features for predictive models
+-- Significantly improves performance by pre-computing and storing results
 
--- Option 1: Materialized View with Incremental Updates
-CREATE OR REPLACE MATERIALIZED VIEW `bgg_data_dev.games_features_materialized`
-PARTITION BY DATE(last_updated)
-CLUSTER BY game_id
-AS
-WITH games_features AS (
+CREATE OR REPLACE TABLE `{dataset}.games_features_materialized`
+OPTIONS(
+  description="Materialized view of game features for predictive models",
+  expiration_timestamp=NULL
+) AS
+WITH 
+-- Pre-aggregate categories to avoid multiple joins
+categories_agg AS (
     SELECT
-        g.game_id,
-        g.year_published,
-        g.average_rating,
-        g.average_weight,
-        g.users_rated,
-        g.min_players,
-        g.max_players,
-        g.min_playtime,
-        g.max_playtime,
-        g.min_age,
-        g.image,
-        g.thumbnail,
-        g.description,
-        -- Categories with names
-        ARRAY_AGG(DISTINCT cat.name) as categories,
-        -- Mechanics with names
-        ARRAY_AGG(DISTINCT mech.name) as mechanics,
-        -- Publishers with names
-        ARRAY_AGG(DISTINCT pub.name) as publishers,
-        -- Designers with names
-        ARRAY_AGG(DISTINCT des.name) as designers,
-        -- Artists with names
-        ARRAY_AGG(DISTINCT art.name) as artists,
-        -- Families with names
-        ARRAY_AGG(DISTINCT fam.name) as families,
-        -- Counts for additional feature engineering
-        ARRAY_LENGTH(ARRAY_AGG(DISTINCT pub.name)) as publisher_count,
-        ARRAY_LENGTH(ARRAY_AGG(DISTINCT des.name)) as designer_count,
-        -- Tracking last update
-        CURRENT_TIMESTAMP() as last_updated
-    FROM `bgg_data_dev.games_active` g
-    LEFT JOIN `bgg_data_dev.game_categories` gc
-        ON g.game_id = gc.game_id
-    LEFT JOIN `bgg_data_dev.categories` cat
+        gc.game_id,
+        ARRAY_AGG(cat.name IGNORE NULLS) AS categories
+    FROM `{dataset}.game_categories` gc
+    LEFT JOIN `{dataset}.categories` cat
         ON gc.category_id = cat.category_id
-    LEFT JOIN `bgg_data_dev.game_mechanics` gm
-        ON g.game_id = gm.game_id
-    LEFT JOIN `bgg_data_dev.mechanics` mech
+    GROUP BY gc.game_id
+),
+
+-- Pre-aggregate mechanics to avoid multiple joins
+mechanics_agg AS (
+    SELECT
+        gm.game_id,
+        ARRAY_AGG(mech.name IGNORE NULLS) AS mechanics
+    FROM `{dataset}.game_mechanics` gm
+    LEFT JOIN `{dataset}.mechanics` mech
         ON gm.mechanic_id = mech.mechanic_id
-    LEFT JOIN `bgg_data_dev.game_publishers` gp
-        ON g.game_id = gp.game_id
-    LEFT JOIN `bgg_data_dev.publishers` pub
+    GROUP BY gm.game_id
+),
+
+-- Pre-aggregate publishers to avoid multiple joins
+publishers_agg AS (
+    SELECT
+        gp.game_id,
+        ARRAY_AGG(pub.name IGNORE NULLS) AS publishers
+    FROM `{dataset}.game_publishers` gp
+    LEFT JOIN `{dataset}.publishers` pub
         ON gp.publisher_id = pub.publisher_id
-    LEFT JOIN `bgg_data_dev.game_designers` gd
-        ON g.game_id = gd.game_id
-    LEFT JOIN `bgg_data_dev.designers` des
+    GROUP BY gp.game_id
+),
+
+-- Pre-aggregate designers to avoid multiple joins
+designers_agg AS (
+    SELECT
+        gd.game_id,
+        ARRAY_AGG(des.name IGNORE NULLS) AS designers
+    FROM `{dataset}.game_designers` gd
+    LEFT JOIN `{dataset}.designers` des
         ON gd.designer_id = des.designer_id
-    LEFT JOIN `bgg_data_dev.game_artists` ga
-        ON g.game_id = ga.game_id
-    LEFT JOIN `bgg_data_dev.artists` art
+    GROUP BY gd.game_id
+),
+
+-- Pre-aggregate artists to avoid multiple joins
+artists_agg AS (
+    SELECT
+        ga.game_id,
+        ARRAY_AGG(art.name IGNORE NULLS) AS artists
+    FROM `{dataset}.game_artists` ga
+    LEFT JOIN `{dataset}.artists` art
         ON ga.artist_id = art.artist_id
-    LEFT JOIN `bgg_data_dev.game_families` gf
-        ON g.game_id = gf.game_id
-    LEFT JOIN `bgg_data_dev.families` fam
+    GROUP BY ga.game_id
+),
+
+-- Pre-aggregate families to avoid multiple joins
+families_agg AS (
+    SELECT
+        gf.game_id,
+        ARRAY_AGG(fam.name IGNORE NULLS) AS families
+    FROM `{dataset}.game_families` gf
+    LEFT JOIN `{dataset}.families` fam
         ON gf.family_id = fam.family_id
-    GROUP BY 
-        g.game_id,
-        g.year_published,
-        g.average_rating,
-        g.average_weight,
-        g.users_rated,
-        g.min_players,
-        g.max_players,
-        g.min_playtime,
-        g.max_playtime,
-        g.min_age,
-        g.image,
-        g.description,
-        g.thumbnail
+    GROUP BY gf.game_id
 )
-SELECT * FROM games_features;
 
--- Optional: Create a stored procedure for manual refresh
-CREATE OR REPLACE PROCEDURE `bgg_data_dev.refresh_games_features_materialized`()
+-- Main query with efficient joins to pre-aggregated data
+SELECT
+    g.game_id,
+    g.name,
+    g.year_published,
+    g.average_rating,
+    g.average_weight,
+    g.users_rated,
+    g.num_weights,
+    g.min_players,
+    g.max_players,
+    g.min_playtime,
+    g.max_playtime,
+    g.min_age,
+    g.image,
+    g.thumbnail,
+    g.description,
+    -- Use IFNULL to handle missing arrays
+    IFNULL(c.categories, []) AS categories,
+    IFNULL(m.mechanics, []) AS mechanics,
+    IFNULL(p.publishers, []) AS publishers,
+    IFNULL(d.designers, []) AS designers,
+    IFNULL(a.artists, []) AS artists,
+    IFNULL(f.families, []) AS families,
+    -- Add timestamp for tracking freshness
+    CURRENT_TIMESTAMP() AS last_updated
+FROM `{dataset}.games_active` g
+LEFT JOIN categories_agg c ON g.game_id = c.game_id
+LEFT JOIN mechanics_agg m ON g.game_id = m.game_id
+LEFT JOIN publishers_agg p ON g.game_id = p.game_id
+LEFT JOIN designers_agg d ON g.game_id = d.game_id
+LEFT JOIN artists_agg a ON g.game_id = a.game_id
+LEFT JOIN families_agg f ON g.game_id = f.game_id;
+
+-- Create a stored procedure to refresh the materialized view
+CREATE OR REPLACE PROCEDURE `{dataset}.refresh_games_features_materialized`()
 BEGIN
-    REFRESH MATERIALIZED VIEW `bgg_data_dev.games_features_materialized`;
+  -- Create a temporary table with the new data
+  CREATE OR REPLACE TEMP TABLE temp_games_features AS
+  WITH 
+  -- Pre-aggregate categories to avoid multiple joins
+  categories_agg AS (
+      SELECT
+          gc.game_id,
+          ARRAY_AGG(cat.name IGNORE NULLS) AS categories
+      FROM `{dataset}.game_categories` gc
+      LEFT JOIN `{dataset}.categories` cat
+          ON gc.category_id = cat.category_id
+      GROUP BY gc.game_id
+  ),
+
+  -- Pre-aggregate mechanics to avoid multiple joins
+  mechanics_agg AS (
+      SELECT
+          gm.game_id,
+          ARRAY_AGG(mech.name IGNORE NULLS) AS mechanics
+      FROM `{dataset}.game_mechanics` gm
+      LEFT JOIN `{dataset}.mechanics` mech
+          ON gm.mechanic_id = mech.mechanic_id
+      GROUP BY gm.game_id
+  ),
+
+  -- Pre-aggregate publishers to avoid multiple joins
+  publishers_agg AS (
+      SELECT
+          gp.game_id,
+          ARRAY_AGG(pub.name IGNORE NULLS) AS publishers
+      FROM `{dataset}.game_publishers` gp
+      LEFT JOIN `{dataset}.publishers` pub
+          ON gp.publisher_id = pub.publisher_id
+      GROUP BY gp.game_id
+  ),
+
+  -- Pre-aggregate designers to avoid multiple joins
+  designers_agg AS (
+      SELECT
+          gd.game_id,
+          ARRAY_AGG(des.name IGNORE NULLS) AS designers
+      FROM `{dataset}.game_designers` gd
+      LEFT JOIN `{dataset}.designers` des
+          ON gd.designer_id = des.designer_id
+      GROUP BY gd.game_id
+  ),
+
+  -- Pre-aggregate artists to avoid multiple joins
+  artists_agg AS (
+      SELECT
+          ga.game_id,
+          ARRAY_AGG(art.name IGNORE NULLS) AS artists
+      FROM `{dataset}.game_artists` ga
+      LEFT JOIN `{dataset}.artists` art
+          ON ga.artist_id = art.artist_id
+      GROUP BY ga.game_id
+  ),
+
+  -- Pre-aggregate families to avoid multiple joins
+  families_agg AS (
+      SELECT
+          gf.game_id,
+          ARRAY_AGG(fam.name IGNORE NULLS) AS families
+      FROM `{dataset}.game_families` gf
+      LEFT JOIN `{dataset}.families` fam
+          ON gf.family_id = fam.family_id
+      GROUP BY gf.game_id
+  )
+
+  -- Main query with efficient joins to pre-aggregated data
+  SELECT
+      g.game_id,
+      g.name,
+      g.year_published,
+      g.average_rating,
+      g.average_weight,
+      g.users_rated,
+      g.min_players,
+      g.max_players,
+      g.min_playtime,
+      g.max_playtime,
+      g.min_age,
+      g.image,
+      g.thumbnail,
+      g.description,
+      -- Use IFNULL to handle missing arrays
+      IFNULL(c.categories, []) AS categories,
+      IFNULL(m.mechanics, []) AS mechanics,
+      IFNULL(p.publishers, []) AS publishers,
+      IFNULL(d.designers, []) AS designers,
+      IFNULL(a.artists, []) AS artists,
+      IFNULL(f.families, []) AS families,
+      -- Add timestamp for tracking freshness
+      CURRENT_TIMESTAMP() AS last_updated
+  FROM `{dataset}.games_active` g
+  LEFT JOIN categories_agg c ON g.game_id = c.game_id
+  LEFT JOIN mechanics_agg m ON g.game_id = m.game_id
+  LEFT JOIN publishers_agg p ON g.game_id = p.game_id
+  LEFT JOIN designers_agg d ON g.game_id = d.game_id
+  LEFT JOIN artists_agg a ON g.game_id = a.game_id
+  LEFT JOIN families_agg f ON g.game_id = f.game_id;
+
+  -- Replace the materialized view with the new data
+  TRUNCATE TABLE `{dataset}.games_features_materialized`;
+  
+  INSERT INTO `{dataset}.games_features_materialized`
+  SELECT * FROM temp_games_features;
+  
+  -- Log the refresh
+  INSERT INTO `{dataset}.materialized_view_refresh_log` (view_name, refresh_timestamp, status)
+  VALUES ('games_features_materialized', CURRENT_TIMESTAMP(), 'SUCCESS');
+  
+  EXCEPTION WHEN ERROR THEN
+    -- Log the error
+    INSERT INTO `{dataset}.materialized_view_refresh_log` (view_name, refresh_timestamp, status, error_message)
+    VALUES ('games_features_materialized', CURRENT_TIMESTAMP(), 'FAILED', @@error.message);
+    RAISE;
 END;
 
--- Example Scheduled Query (to be configured in Cloud Console or via gcloud)
--- This is a placeholder and needs to be set up in the Google Cloud Console
--- Refresh the materialized view daily at midnight
--- bq mk --transfer_config \
---   --project_id=your-project \
---   --data_source=scheduled_query \
---   --display_name="Daily Games Features Refresh" \
---   --params='{"query":"CALL `bgg_data_dev.refresh_games_features_materialized`()"}' \
---   --schedule="every 24 hours"
+-- Create a view that points to the materialized table for compatibility
+CREATE OR REPLACE VIEW `{dataset}.games_features` AS
+SELECT * FROM `{dataset}.games_features_materialized`;
 
--- Monitoring and Logging
--- Create a table to track materialized view refresh history
-CREATE TABLE IF NOT EXISTS `bgg_data_dev.materialized_view_refresh_log` (
-    view_name STRING,
-    refresh_timestamp TIMESTAMP,
-    status STRING,
-    error_message STRING
+-- Create a log table for tracking refreshes if it doesn't exist
+CREATE TABLE IF NOT EXISTS `{dataset}.materialized_view_refresh_log` (
+  view_name STRING NOT NULL,
+  refresh_timestamp TIMESTAMP NOT NULL,
+  status STRING NOT NULL,
+  error_message STRING,
 );
-
--- Stored procedure with logging
-CREATE OR REPLACE PROCEDURE `bgg_data_dev.log_materialized_view_refresh`()
-BEGIN
-    BEGIN
-        REFRESH MATERIALIZED VIEW `bgg_data_dev.games_features_materialized`;
-        
-        INSERT INTO `bgg_data_dev.materialized_view_refresh_log` 
-        (view_name, refresh_timestamp, status)
-        VALUES ('games_features_materialized', CURRENT_TIMESTAMP(), 'SUCCESS');
-    EXCEPTION WHEN ERROR THEN
-        INSERT INTO `bgg_data_dev.materialized_view_refresh_log` 
-        (view_name, refresh_timestamp, status, error_message)
-        VALUES ('games_features_materialized', CURRENT_TIMESTAMP(), 'FAILED', @@error.message);
-        
-        -- Optionally re-raise the error
-        RAISE;
-    END;
-END;
-
--- Annotations and Documentation
-COMMENT ON MATERIALIZED VIEW `bgg_data_dev.games_features_materialized`
-IS 'Comprehensive materialized view of board game features with full names, updated periodically. Includes categories, mechanics, publishers, designers, artists, and families.';

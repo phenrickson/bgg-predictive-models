@@ -1,8 +1,10 @@
 """Configuration for data loading and database connections."""
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
@@ -41,31 +43,37 @@ class BigQueryConfig:
         return bigquery.Client(project=self.project_id)
 
 
-def get_config_from_env() -> BigQueryConfig:
-    """Get BigQuery config from environment variables.
+def load_config(config_path: Optional[str] = None) -> BigQueryConfig:
+    """Load BigQuery configuration from YAML file.
     
-    Required env vars:
-    - BGG_PROJECT_ID: GCP project ID
-    - BGG_DATASET: BigQuery dataset name
-    - BGG_CREDENTIALS_PATH: Path to service account key (optional)
+    Args:
+        config_path: Path to config YAML file. If not provided,
+            defaults to src/data/config.yaml
     
     Returns:
         BigQuery configuration
         
     Raises:
-        ValueError: If required env vars missing
+        ValueError: If required config values missing
     """
-    project_id = os.getenv("BGG_PROJECT_ID")
-    dataset = os.getenv("BGG_DATASET")
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
     
-    if not project_id or not dataset:
-        raise ValueError(
-            "Required environment variables not set. "
-            "Please set BGG_PROJECT_ID and BGG_DATASET."
-        )
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    
+    if "bigquery" not in config:
+        raise ValueError("Missing bigquery section in config")
+        
+    bq_config = config["bigquery"]
+    if "dataset" not in bq_config:
+        raise ValueError("Missing dataset in bigquery config")
+    
+    # Get project ID from environment or default
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "gcp-demos-411520")
     
     return BigQueryConfig(
         project_id=project_id,
-        dataset=dataset,
-        credentials_path=os.getenv("BGG_CREDENTIALS_PATH"),
+        dataset=bq_config["dataset"],
+        credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
     )

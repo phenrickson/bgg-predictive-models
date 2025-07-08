@@ -7,8 +7,9 @@ import joblib
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from ..data.config import get_config_from_env
+from ..data.config import load_config
 from ..data.loader import BGGDataLoader
+from ..features.preprocessor import BGGPreprocessor
 from ..models.pipeline import BGGPipeline
 
 
@@ -54,12 +55,37 @@ def train_pipeline(
     
     # Load data
     logger.info("Loading data from warehouse...")
-    config = get_config_from_env()
+    config = load_config()
     loader = BGGDataLoader(config)
-    features, targets = loader.load_training_data(
+    
+    # Create preprocessor
+    logger.info("Creating preprocessor...")
+    preprocessor = BGGPreprocessor(
+        # Basic preprocessing
+        handle_missing_values=True,
+        transform_year=True,
+        create_player_dummies=True,
+        
+        # Feature generation flags - adjust as needed
+        create_category_mechanic_features=True,
+        create_designer_artist_features=False,
+        create_publisher_features=False,
+        create_family_features=False,
+        
+        # Feature thresholds
+        category_min_freq=100,
+        mechanic_min_freq=100,
+    )
+    
+    # Load and preprocess data
+    result = loader.load_training_data(
         end_train_year=end_train_year,
         min_ratings=min_ratings,
+        preprocessor=preprocessor,
     )
+    
+    # Unpack the result - with preprocessor, it returns (features, targets)
+    features, targets = result
     
     # Split into train/validation
     logger.info("Splitting data...")
@@ -85,12 +111,18 @@ def train_pipeline(
         model_params=model_params,
     )
     
+    # Prepare sample weights for complexity model
+    complexity_sample_weights = None
+    # With the new loader implementation, we need to handle sample weights differently
+    # We'll use equal weights for now, but this could be enhanced if needed
+    
     pipeline.fit(
         X=X_train["hurdle"],  # Use same features for all models
         y_hurdle=y_train_dict["hurdle"],
         y_complexity=y_train_dict["complexity"],
         y_rating=y_train_dict["rating"],
         y_users_rated=y_train_dict["users_rated"],
+        complexity_sample_weights=complexity_sample_weights,
     )
     
     # Evaluate on validation set
