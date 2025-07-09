@@ -14,6 +14,7 @@ from .transformers import (
 )
 
 def create_bgg_preprocessor(
+    bgg_preprocessor = BaseBGGTransformer(),
     reference_year: int = 2000, 
     normalization_factor: int = 25,
     log_columns: list = ['min_age', 'min_playtime', 'max_playtime']
@@ -43,7 +44,7 @@ def create_bgg_preprocessor(
         A preprocessing pipeline for board game data.
     """
     pipeline = Pipeline([
-        ('bgg_preprocessor', BaseBGGTransformer()),
+        ('bgg_preprocessor', bgg_preprocessor),
         ('impute', SimpleImputer(strategy='median', add_indicator=True, keep_empty_features=False)),
         ('log', LogTransformer(columns=log_columns)),
         ('year', YearTransformer(

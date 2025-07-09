@@ -423,20 +423,64 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
     ):
-        """Initialize the preprocessor."""
+        """Initialize the preprocessor.
+        
+        Parameters
+        ----------
+        max_player_count : int, optional
+            Maximum number of player count dummy variables to create, by default 10
+        
+        verbose : bool, optional
+            Whether to print detailed logging information, by default False
+        
+        *_min_freq : int, optional
+            Minimum frequency for including array features (categories, mechanics, etc.)
+        
+        max_*_features : int, optional
+            Maximum number of features to create for each array type
+        
+        create_*_features : bool, optional
+            Flag to enable/disable generation of specific feature types
+            - create_player_dummies: Create dummy variables for player counts
+            - create_category_features: Create one-hot encoded category features
+            - create_mechanic_features: Create one-hot encoded mechanic features
+            - create_designer_features: Create one-hot encoded designer features
+            - create_artist_features: Create one-hot encoded artist features
+            - create_publisher_features: Create one-hot encoded publisher features
+            - create_family_features: Create one-hot encoded family features
+        
+        include_base_numeric : bool, optional
+            Include base numeric features like min_age, playtime, by default True
+        
+        include_average_weight : bool, optional
+            Include average game weight as a feature, by default False
+        
+        preserve_columns : list, optional
+            Additional columns to preserve in the transformed data, by default ['year_published']
+        """
+        # Feature generation parameters
         self.max_player_count = max_player_count
+        
+        # Logging parameters
+        self.verbose = verbose
+        
+        # Array feature frequency thresholds
         self.category_min_freq = category_min_freq
         self.mechanic_min_freq = mechanic_min_freq
         self.designer_min_freq = designer_min_freq
         self.artist_min_freq = artist_min_freq
         self.publisher_min_freq = publisher_min_freq
         self.family_min_freq = family_min_freq
+        
+        # Maximum feature limits
         self.max_category_features = max_category_features
         self.max_mechanic_features = max_mechanic_features
         self.max_designer_features = max_designer_features
         self.max_artist_features = max_artist_features
         self.max_publisher_features = max_publisher_features
         self.max_family_features = max_family_features
+        
+        # Feature generation flags
         self.handle_missing_values = handle_missing_values
         self.create_player_dummies = create_player_dummies
         self.create_category_features = create_category_features
@@ -445,14 +489,15 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         self.create_artist_features = create_artist_features
         self.create_publisher_features = create_publisher_features
         self.create_family_features = create_family_features
+        
+        # Feature selection parameters
         self.include_base_numeric = include_base_numeric
         self.include_average_weight = include_average_weight
-        self.verbose = verbose
         
         # Column preservation parameters
         self.preserve_columns = preserve_columns or ['year_published']
         
-        # Fitted attributes
+        # Fitted attributes (will be populated during fit)
         self.feature_names_ = None
         self.frequent_categories_ = None
         self.frequent_mechanics_ = None
@@ -725,6 +770,14 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             The fitted preprocessor.
         """
         X = X.copy()
+        
+        # Reset all frequent features to None
+        self.frequent_categories_ = None
+        self.frequent_mechanics_ = None
+        self.frequent_designers_ = None
+        self.frequent_artists_ = None
+        self.frequent_publishers_ = None
+        self.frequent_families_ = None
         
         # Fit array features
         if self.create_category_features:

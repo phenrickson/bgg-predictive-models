@@ -4,13 +4,10 @@ import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-
-# Project imports
-from src.models.experiments import ExperimentTracker
-
 import numpy as np
 import pandas as pd
 import polars as pl
+
 from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
@@ -32,13 +29,21 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
+# Project imports
+from src.models.experiments import ExperimentTracker
+from src.features.transformers import BaseBGGTransformer
+from src.data.config import load_config
+from src.data.loader import BGGDataLoader
+from src.features.preprocessor import create_bgg_preprocessor
+from src.models.splitting import time_based_split
+
 # CatBoost imports
 from catboost import CatBoostClassifier
 from typing import Type, Union, Tuple
 
 def extract_feature_importance(
     fitted_pipeline: Pipeline, 
-    classifier_type: Type[BaseEstimator]
+    model_type: Type[BaseEstimator]
 ) -> pd.DataFrame:
     """
     Extract feature importance for different classifier types.
@@ -47,7 +52,7 @@ def extract_feature_importance(
     ----------
     fitted_pipeline : Pipeline
         A fitted scikit-learn pipeline containing a preprocessor and classifier
-    classifier_type : Type[BaseEstimator]
+    model_type : Type[BaseEstimator]
         The type of classifier to extract feature importance for
         
     Returns
@@ -56,9 +61,9 @@ def extract_feature_importance(
         DataFrame containing feature names, importance values, 
         and absolute importance, sorted in descending order.
     """
-    # Get the preprocessor and classifier from pipeline
+    # Get the preprocessor and model from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
-    classifier = fitted_pipeline.named_steps['classifier']
+    model = fitted_pipeline.named_steps['model']
     
     # Find feature names
     steps = list(preprocessor.named_steps.items())
@@ -84,13 +89,13 @@ def extract_feature_importance(
     from sklearn.linear_model import LogisticRegression
     from catboost import CatBoostClassifier
     
-    if classifier_type == LogisticRegression:
+    if model_type == LogisticRegression:
         # Use existing extract_model_coefficients for LogisticRegression
         return extract_model_coefficients(fitted_pipeline)
     
-    elif classifier_type == CatBoostClassifier:
+    elif model_type == CatBoostClassifier:
         # For CatBoost, use feature importance from the model
-        importance = classifier.get_feature_importance()
+        importance = model.get_feature_importance()
         
         # Validate lengths match
         if len(feature_names) != len(importance):
@@ -116,13 +121,7 @@ def extract_feature_importance(
     
     else:
         # For other classifiers, raise an error or handle differently
-        raise ValueError(f"Feature importance extraction not implemented for {classifier_type.__name__}")
-
-# Project imports
-from src.data.config import load_config
-from src.data.loader import BGGDataLoader
-from src.features.preprocessor import create_bgg_preprocessor
-from src.models.splitting import time_based_split
+        raise ValueError(f"Feature importance extraction not implemented for {model_type.__name__}")
 
 def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     """Configure logging for the training process."""
@@ -161,9 +160,9 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
     ValueError
         If pipeline is not fitted or doesn't contain required components
     """
-    # Get the preprocessor and classifier from pipeline
+    # Get the preprocessor and model from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
-    classifier = fitted_pipeline.named_steps['classifier']
+    classifier = fitted_pipeline.named_steps['model']
     
     # Find the last preprocessing step that has get_feature_names_out method
     steps = list(preprocessor.named_steps.items())
@@ -220,7 +219,7 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
 
 def extract_feature_importance(
     fitted_pipeline: Pipeline, 
-    classifier_type: Type[BaseEstimator]
+    model_type: Type[BaseEstimator]
 ) -> pd.DataFrame:
     """
     Extract feature importance for different classifier types.
@@ -229,7 +228,7 @@ def extract_feature_importance(
     ----------
     fitted_pipeline : Pipeline
         A fitted scikit-learn pipeline containing a preprocessor and classifier
-    classifier_type : Type[BaseEstimator]
+    model_type : Type[BaseEstimator]
         The type of classifier to extract feature importance for
         
     Returns
@@ -240,7 +239,7 @@ def extract_feature_importance(
     """
     # Get the preprocessor and classifier from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
-    classifier = fitted_pipeline.named_steps['classifier']
+    model = fitted_pipeline.named_steps['model']
     
     # Find feature names
     steps = list(preprocessor.named_steps.items())
@@ -266,13 +265,13 @@ def extract_feature_importance(
     from sklearn.linear_model import LogisticRegression
     from catboost import CatBoostClassifier
     
-    if classifier_type == LogisticRegression:
+    if model_type == LogisticRegression:
         # Use existing extract_model_coefficients for LogisticRegression
         return extract_model_coefficients(fitted_pipeline)
     
-    elif classifier_type == CatBoostClassifier:
+    elif model_type == CatBoostClassifier:
         # For CatBoost, use feature importance from the model
-        importance = classifier.get_feature_importance()
+        importance = model.get_feature_importance()
         
         # Validate lengths match
         if len(feature_names) != len(importance):
@@ -298,7 +297,7 @@ def extract_feature_importance(
     
     else:
         # For other classifiers, raise an error or handle differently
-        raise ValueError(f"Feature importance extraction not implemented for {classifier_type.__name__}")
+        raise ValueError(f"Feature importance extraction not implemented for {model_type.__name__}")
 
 # function to select column and convert to pandas
 def select_X_y(df, y_column, to_pandas = True):
@@ -355,10 +354,10 @@ def create_preprocessing_pipeline() -> Pipeline:
     bgg_preprocessor.max_category_features = 500
     bgg_preprocessor.create_category_features = True
     bgg_preprocessor.create_mechanic_features = True
-    bgg_preprocessor.create_designer_features = True,
-    bgg_preprocessor.create_artist_features = True,
-    bgg_preprocessor.create_publisher_features = True,
-    bgg_preprocessor.create_family_features = True,
+    bgg_preprocessor.create_designer_features = False
+    bgg_preprocessor.create_artist_features = False
+    bgg_preprocessor.create_publisher_features = False
+    bgg_preprocessor.create_family_features = False
     bgg_preprocessor.create_player_dummies = True
     bgg_preprocessor.include_base_numeric = True
     
@@ -429,7 +428,7 @@ def tune_model(
         y_train: Training target
         X_tune: Tuning features
         y_tune: Tuning target
-        classifier_type: Type of classifier being used
+        model_type: Type of model being used
         param_grid: Grid of parameters to search
         metric: Metric to optimize ('log_loss', 'f1', 'auc')
         patience: Number of iterations without improvement before early stopping
@@ -444,7 +443,7 @@ def tune_model(
     logger = logging.getLogger(__name__)
     
     # Get current classifier instance from pipeline
-    current_classifier = pipeline.named_steps['classifier']
+    current_model = pipeline.named_steps['model']
     preprocessor = pipeline.named_steps['preprocessor']
     
     # Fit and transform the data once with the preprocessor
@@ -455,25 +454,25 @@ def tune_model(
     
     # Default parameter grid if not provided
     if param_grid is None:
-        if isinstance(current_classifier, LogisticRegression):
+        if isinstance(current_model, LogisticRegression):
             param_grid = {
-                'classifier__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
-                'classifier__penalty': ['l2'],  # Using only L2 with default solver
-                'classifier__max_iter': [4000]
+                'model__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
+                'model__penalty': ['l2'],  # Using only L2 with default solver
+                'model__max_iter': [4000]
             }
-        elif isinstance(current_classifier, RandomForestClassifier):
+        elif isinstance(current_model, RandomForestClassifier):
             param_grid = {
-                'classifier__n_estimators': [100, 200, 300],
-                'classifier__max_depth': [None, 10, 20],
-                'classifier__min_samples_split': [2, 5, 10]
+                'model__n_estimators': [100, 200, 300],
+                'model__max_depth': [None, 10, 20],
+                'model__min_samples_split': [2, 5, 10]
             }
         else:
             # Generic grid for other classifiers
             param_grid = {}
-            if hasattr(current_classifier, 'C'):
-                param_grid['classifier__C'] = [0.001, 0.01, 0.1, 1.0, 10.0]
+            if hasattr(current_model, 'C'):
+                param_grid['model__C'] = [0.001, 0.01, 0.1, 1.0, 10.0]
             if not param_grid:
-                raise ValueError(f"No default parameter grid available for classifier type: {current_classifier.__class__.__name__}")
+                raise ValueError(f"No default parameter grid available for model type: {current_model.__class__.__name__}")
     
     # Validate param_grid
     if not param_grid:
@@ -512,19 +511,19 @@ def tune_model(
             logger.info(f"Evaluating combination {i+1}/{n_combinations}: {params}")
             
             try:
-                # Create a fresh copy of the classifier
-                current_classifier = clone(pipeline.named_steps['classifier'])
-                current_classifier.set_params(**{k.replace('classifier__', ''): v for k, v in params.items()})
+                # Create a fresh copy of the model
+                current_model = clone(pipeline.named_steps['model'])
+                current_model.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
                 # Train classifier with these parameters on transformed data
-                current_classifier.fit(X_train_transformed, train_y)
+                current_model.fit(X_train_transformed, train_y)
                 
                 # Evaluate on tuning set
                 if metric == 'f1':
-                    y_tune_pred = current_classifier.predict(X_tune_transformed)
+                    y_tune_pred = current_model.predict(X_tune_transformed)
                     score = score_func(tune_y, y_tune_pred)
                 else:
-                    y_tune_pred_proba = current_classifier.predict_proba(X_tune_transformed)
+                    y_tune_pred_proba = current_model.predict_proba(X_tune_transformed)
                     score = score_func(tune_y, y_tune_pred_proba)
                 
                 # Store detailed results
@@ -541,7 +540,7 @@ def tune_model(
                 if score < best_score - min_delta:  # Improvement beyond threshold
                     best_score = score
                     best_params = params.copy()  # Make a copy to be safe
-                    best_model = clone(current_classifier)
+                    best_model = clone(current_model)
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -556,8 +555,8 @@ def tune_model(
                 continue
             finally:
                 # Clean up to prevent memory leaks
-                if 'current_classifier' in locals():
-                    del current_classifier
+                if 'current_model' in locals():
+                    del current_model
                     gc.collect()
     
     except Exception as e:
@@ -579,7 +578,7 @@ def tune_model(
     # Create new pipeline with fitted preprocessor and best model
     tuned_pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('classifier', best_model)
+        ('model', best_model)
     ])
     
     return tuned_pipeline, best_params
@@ -732,7 +731,7 @@ def parse_arguments() -> argparse.Namespace:
                        help="Description of the experiment")
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
-    parser.add_argument("--classifier", type=str, default="logistic",
+    parser.add_argument("--model", type=str, default="logistic",
                        choices=['logistic', 'rf', 'svc', 'catboost'],
                        help="Classifier type to use")
     parser.add_argument("--metric", type=str, default="log_loss",
@@ -832,26 +831,26 @@ def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]
     
     PARAM_GRIDS = {
         'logistic': {
-            'classifier__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
-            'classifier__penalty': ['l2'],
-            'classifier__max_iter': [4000]
+            'model__C': [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1],
+            'model__penalty': ['l2'],
+            'model__max_iter': [4000]
         },
         'rf': {
-            'classifier__n_estimators': [100, 200, 300],
-            'classifier__max_depth': [None, 10, 20, 30],
-            'classifier__min_samples_split': [2, 5, 10]
+            'model__n_estimators': [100, 200, 300],
+            'model__max_depth': [None, 10, 20, 30],
+            'model__min_samples_split': [2, 5, 10]
         },
         'svc': {
-            'classifier__C': [0.1, 1.0, 10.0],
-            'classifier__kernel': ['rbf', 'linear'],
-            'classifier__gamma': ['scale', 'auto', 0.1, 0.01]
+            'model__C': [0.1, 1.0, 10.0],
+            'model__kernel': ['rbf', 'linear'],
+            'model__gamma': ['scale', 'auto', 0.1, 0.01]
         },
         'catboost': {
-            'classifier__iterations': [100, 300, 500],
-            'classifier__learning_rate': [0.01, 0.1, 0.3],
-            'classifier__depth': [4, 6, 8],
-            'classifier__l2_leaf_reg': [1, 3, 5],
-            'classifier__random_strength': [0.5, 1.0, 1.5]
+            'model__iterations': [100, 300, 500],
+            'model__learning_rate': [0.01, 0.1, 0.3],
+            'model__depth': [4, 6, 8],
+            'model__l2_leaf_reg': [1, 3, 5],
+            'model__random_strength': [0.5, 1.0, 1.5]
         }
     }
     
@@ -961,16 +960,16 @@ def log_experiment(
         from sklearn.linear_model import LogisticRegression
         from catboost import CatBoostClassifier
         
-        # Determine the classifier type
-        classifier_type = type(pipeline.named_steps['classifier'])
+        # Determine the model type
+        model_type = type(pipeline.named_steps['model'])
         
         # Extract feature importance
-        importance_df = extract_feature_importance(pipeline, classifier_type)
+        importance_df = extract_feature_importance(pipeline, model_type)
         importance_pl = pl.from_pandas(importance_df)
         experiment.log_coefficients(importance_pl)
         
         # Log top features
-        if classifier_type == LogisticRegression:
+        if model_type == LogisticRegression:
             logger.info("Top 10 most important features (by absolute coefficient):")
             for _, row in importance_df.head(10).iterrows():
                 logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
@@ -992,7 +991,7 @@ def log_experiment(
         }
         
         # Add intercept only for Logistic Regression
-        if classifier_type == LogisticRegression:
+        if model_type == LogisticRegression:
             model_info['intercept'] = float(pipeline.named_steps['classifier'].intercept_[0])
         
         experiment.log_model_info(model_info)
@@ -1020,16 +1019,16 @@ def main():
     test_X, test_y = select_X_y(test_df, y_column='hurdle')
     
     # Setup model and pipeline
-    classifier, param_grid = configure_model(args.classifier)
+    model, param_grid = configure_model(args.model)
     preprocessor = create_preprocessing_pipeline()
     pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('classifier', classifier)
+        ('model', model)
     ])
     
     # Log experiment details
     logger.info(f"Training experiment: {args.experiment}")
-    logger.info(f"Classifier: {classifier.__class__.__name__}")
+    logger.info(f"Classifier: {model.__class__.__name__}")
     logger.info(f"Parameter Grid: {param_grid}")
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
