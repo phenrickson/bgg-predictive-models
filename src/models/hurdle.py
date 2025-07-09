@@ -162,7 +162,7 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
     """
     # Get the preprocessor and model from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
-    classifier = fitted_pipeline.named_steps['model']
+    model = fitted_pipeline.named_steps['model']
     
     # Find the last preprocessing step that has get_feature_names_out method
     steps = list(preprocessor.named_steps.items())
@@ -190,10 +190,10 @@ def extract_model_coefficients(fitted_pipeline) -> pd.DataFrame:
                 raise ValueError("Could not get feature names from any preprocessing step")
     
     # Get coefficients from classifier
-    if not hasattr(classifier, 'coef_'):
+    if not hasattr(model, 'coef_'):
         raise ValueError("Classifier does not have coefficients")
         
-    coefficients = classifier.coef_[0]  # For binary classification
+    coefficients = model.coef_[0]  # For binary classification
     
     # Validate lengths match
     if len(feature_names) != len(coefficients):
@@ -328,10 +328,11 @@ def select_X_y(df, y_column, to_pandas = True):
     else:
         return X, y
 
-def create_preprocessing_pipeline() -> Pipeline:
+def create_preprocessing_pipeline(bgg_preprocessor = BaseBGGTransformer()) -> Pipeline:
     """Create preprocessing pipeline with feature engineering, imputation, and scaling."""
     # Create preprocessing pipeline using the standard BGG preprocessor
     pipeline = create_bgg_preprocessor(
+        bgg_preprocessor = bgg_preprocessor,
         reference_year=2000,
         normalization_factor=25,
         log_columns=['min_age', 'min_playtime', 'max_playtime']

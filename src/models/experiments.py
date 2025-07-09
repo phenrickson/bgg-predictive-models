@@ -290,7 +290,8 @@ class Experiment:
         X: Any,
         y: Any,
         description: str = "Finalized model for production use",
-        final_end_year: Optional[int] = None
+        final_end_year: Optional[int] = None,
+        sample_weight: Optional[Any] = None
     ) -> Path:
         """Create production version by fitting pipeline on full dataset.
         
@@ -299,6 +300,7 @@ class Experiment:
             y: Target to fit on
             description: Description of finalized model
             final_end_year: Final year of data used in model training
+            sample_weight: Optional sample weights for fitting
             
         Returns:
             Path to finalized model directory
@@ -355,8 +357,15 @@ class Experiment:
         logger.info(f"  Target Mean: {y.mean()}")
         logger.info(f"  Target Std Dev: {y.std()}")
         
-        # Fit on full dataset
-        pipeline.fit(X, y)
+        # Fit on full dataset with optional sample weights
+        if sample_weight is not None:
+            logger.info("\nFitting with Sample Weights:")
+            logger.info(f"  Sample Weight Shape: {sample_weight.shape}")
+            logger.info(f"  Sample Weight Range: min={sample_weight.min()}, max={sample_weight.max()}")
+            logger.info(f"  Sample Weight Mean: {sample_weight.mean()}")
+            pipeline.fit(X, y, **{'sample_weight': sample_weight})
+        else:
+            pipeline.fit(X, y)
         
         # Diagnostic logging for fitted pipeline
         logger.info("\nFitted Pipeline Steps:")
