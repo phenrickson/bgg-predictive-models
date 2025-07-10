@@ -642,6 +642,11 @@ def evaluate_model(
     
     logger.info(f"{dataset_name.title()} Performance:")
     for metric, value in metrics.items():
-        logger.info(f"  {metric}: {value:.4f}")
+        if isinstance(value, (int, float)):
+            logger.info(f"  {metric}: {value:.4f}")
+        elif metric == 'confusion_matrix':
+            logger.info(f"  {metric}: {value}")
+        else:
+            logger.info(f"  {metric}: {value}")
     
     return metrics
