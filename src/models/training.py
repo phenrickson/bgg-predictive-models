@@ -366,31 +366,17 @@ def tune_model(
     if param_grid is None:
         param_grid = {}
     
-    # Scoring functions (to be extended based on specific model requirements)
-    def safe_log_loss(y_true, y_pred_proba):
-        # Validate target values are binary
-        if not np.all(np.isin(y_true, [0, 1])):
-            raise ValueError("Target values must be binary (0 or 1)")
-        
-        # Get positive class probabilities
-        y_pred = y_pred_proba[:, 1]
-        
-        # Check for invalid probability values
-        if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
-            raise ValueError("Model returned NaN or infinite probability values")
-        
-        # Clip only exact 0s and 1s for numerical stability
-        eps = 1e-15
-        y_pred = np.where(y_pred == 0, eps, y_pred)
-        y_pred = np.where(y_pred == 1, 1 - eps, y_pred)
-        
-        # Calculate log loss
-        return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+    # Scoring functions using sklearn metrics
+    from sklearn.metrics import (
+        mean_squared_error, 
+        log_loss, 
+        f1_score
+    )
     
     scoring_functions = {
-        'rmse': lambda y, y_pred: np.sqrt(np.mean((y - y_pred)**2)),
-        'log_loss': safe_log_loss,
-        'f1': lambda y, y_pred: 2 * np.sum(y * y_pred) / (np.sum(y) + np.sum(y_pred))
+        'rmse': lambda y, y_pred: np.sqrt(mean_squared_error(y, y_pred)),
+        'log_loss': log_loss,
+        'f1': f1_score
     }
     
     # Note: Metric validation already done above
@@ -613,19 +599,45 @@ def evaluate_model(
             logger.error(f"Error getting probabilities: {str(e)}")
             raise
         
-        # Classification metrics
-        metrics = {
-            'accuracy': np.mean(y == y_pred),
-            'log_loss': -np.mean(y * np.log(y_pred_prob) + (1 - y) * np.log(1 - y_pred_prob)),
-            'f1': 2 * np.sum(y * y_pred) / (np.sum(y) + np.sum(y_pred))
-        }
-    else:
-        # Regression metrics
+    # Classification metrics
+    from sklearn.metrics import (
+        accuracy_score, 
+        precision_score, 
+        recall_score, 
+        f1_score, 
+        roc_auc_score,
+        log_loss,
+        fbeta_score,
+        matthews_corrcoef,
+        confusion_matrix
+    )
+    
+    metrics = {
+        'accuracy': accuracy_score(y, y_pred),
+        'precision': precision_score(y, y_pred),
+        'recall': recall_score(y, y_pred),
+        'f1': f1_score(y, y_pred),
+        'f2': fbeta_score(y, y_pred, beta=2.0),
+        'auc': roc_auc_score(y, y_pred_prob),
+        'log_loss': log_loss(y, y_pred_prob),
+        'matthews_corr': matthews_corrcoef(y, y_pred),
+        'confusion_matrix': confusion_matrix(y, y_pred).tolist()
+    }
+    
+    # Regression metrics
+    from sklearn.metrics import (
+        mean_squared_error, 
+        mean_absolute_error, 
+        r2_score
+    )
+    
+    if not is_classifier:
         y_pred = model.predict(X)
         metrics = {
-            'rmse': np.sqrt(np.mean((y - y_pred)**2)),
-            'mae': np.mean(np.abs(y - y_pred)),
-            'r2': 1 - (np.sum((y - y_pred)**2) / np.sum((y - y.mean())**2))
+            'mse': mean_squared_error(y, y_pred),
+            'rmse': np.sqrt(mean_squared_error(y, y_pred)),
+            'mae': mean_absolute_error(y, y_pred),
+            'r2': r2_score(y, y_pred)
         }
     
     logger.info(f"{dataset_name.title()} Performance:")
