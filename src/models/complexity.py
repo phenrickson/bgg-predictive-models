@@ -8,7 +8,6 @@ from typing import Dict, Any, Optional, Tuple
 from src.models.experiments import (
     ExperimentTracker, 
     extract_model_coefficients, 
-    plot_learning_curve, 
     log_experiment,
     mean_absolute_percentage_error
 )
@@ -174,13 +173,13 @@ def parse_arguments() -> argparse.Namespace:
                        help="Start year for testing (inclusive)")
     parser.add_argument("--test-end-year", type=int, default=2025,
                        help="End year for testing (inclusive)")
-    parser.add_argument("--min-weights", type=int, default = 10)
+    parser.add_argument("--min-weights", type=int, default=10)
     parser.add_argument("--output-dir", type=str, default="./models/experiments")
     parser.add_argument("--experiment", type=str, 
                        default="complexity_regression")
-    parser.add_argument("--description", type=str,
+    parser.add_argument("--description", type=str, default=None,
                        help="Description of the experiment")
-    parser.add_argument("--local-data", type=str,
+    parser.add_argument("--local-data", type=str, default=None,
                        help="Path to local parquet file for training data")
     parser.add_argument("--model", type=str, default="ridge",
                        choices=['linear', 'ridge', 'lasso', 'lightgbm', 'quantile'],
@@ -192,7 +191,7 @@ def parse_arguments() -> argparse.Namespace:
                        help="Metric to optimize during hyperparameter tuning")
     parser.add_argument("--patience", type=int, default=5,
                        help="Number of iterations without improvement before early stopping")
-    parser.add_argument("--use-sample-weights", action="store_true",
+    parser.add_argument("--use-sample-weights", action="store_true", default=False,
                        help="Enable sample weights based on complexity values")
     
     args = parser.parse_args()
@@ -222,7 +221,14 @@ def main():
     
     # filtered for training/evaluation
     logger.info(f"Training on games with at least {args.min_weights} weights")    
-    train_df, tune_df, test_df = create_data_splits(df, args)
+    train_df, tune_df, test_df = create_data_splits(
+        df, 
+        train_end_year=args.train_end_year,
+        tune_start_year=args.tune_start_year,
+        tune_end_year=args.tune_end_year,
+        test_start_year=args.test_start_year,
+        test_end_year=args.test_end_year
+    )
     
     # Get X, y splits
     train_X, train_y = select_X_y(train_df, y_column='complexity')
@@ -262,7 +268,7 @@ def main():
         param_grid=param_grid,
         metric=args.metric,
         patience=args.patience,
-        use_sample_weights=args.use_sample_weights
+        sample_weights=train_sample_weights if args.use_sample_weights else None
     )
     
     # Fit on train data with optional sample weights
@@ -350,24 +356,8 @@ def main():
         }
     )
     
-    # Generate and save learning curve
-    logger.info("Generating learning curve...")
-    try:
-        fig, curve_data = plot_learning_curve(
-            pipeline=final_pipeline,
-            train_X=train_X,
-            train_y=train_y,
-            tune_X=tune_X,
-            tune_y=tune_y,
-            metric=args.metric,
-            model_type='regression'
-        )
-        learning_curve_path = Path(experiment.exp_dir) / "learning_curve.png"
-        fig.savefig(learning_curve_path, dpi=300)
-        plt.close()
-        logger.info(f"Learning curve saved to {learning_curve_path}")
-    except Exception as e:
-        logger.error(f"Error generating learning curve: {e}")
+    # Learning curve generation removed
+    logger.info("Skipping learning curve generation")
     
     log_experiment(
         experiment=experiment,

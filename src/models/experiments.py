@@ -374,13 +374,18 @@ class Experiment:
         logger.info(f"  Target Mean: {y.mean()}")
         logger.info(f"  Target Std Dev: {y.std()}")
         
+        # Check if sample weights were used during training
+        use_sample_weights = self.metadata.get('use_sample_weights', False)
+        
         # Fit on full dataset with optional sample weights
-        if sample_weight is not None:
+        if sample_weight is not None and use_sample_weights:
             logger.info("\nFitting with Sample Weights:")
             logger.info(f"  Sample Weight Shape: {sample_weight.shape}")
             logger.info(f"  Sample Weight Range: min={sample_weight.min()}, max={sample_weight.max()}")
             logger.info(f"  Sample Weight Mean: {sample_weight.mean()}")
-            pipeline.fit(X, y, **{'sample_weight': sample_weight})
+            
+            # Fit with sample weights using model__sample_weight
+            pipeline.fit(X, y, model__sample_weight=sample_weight)
         else:
             pipeline.fit(X, y)
         
@@ -629,69 +634,7 @@ def extract_model_coefficients(
     
     return coef_df
 
-def plot_learning_curve(
-    pipeline: Pipeline,
-    train_X: pd.DataFrame,
-    train_y: pd.Series,
-    tune_X: pd.DataFrame,
-    tune_y: pd.Series,
-    metric: str = 'rmse',
-    train_sizes: np.ndarray = np.linspace(0.1, 1.0, 10),
-    model_type: str = 'regression'
-) -> Tuple[plt.Figure, Dict[str, np.ndarray]]:
-    """
-    Generate learning curve plot using existing metrics.
-    
-    Args:
-        pipeline: The pipeline to evaluate (not used in this simplified version)
-        train_X: Training features (not used in this simplified version)
-        train_y: Training target (not used in this simplified version)
-        tune_X: Tuning features (not used in this simplified version)
-        tune_y: Tuning target (not used in this simplified version)
-        metric: Metric to plot
-        train_sizes: Proportional training set sizes
-        model_type: Type of model ('regression' or 'classification')
-        
-    Returns:
-        Tuple of (figure, learning curve data)
-    """
-    # Validate metric
-    valid_metrics = {
-        'regression': ['rmse', 'mae', 'r2'],
-        'classification': ['accuracy', 'precision', 'recall', 'f1', 'auc', 'log_loss']
-    }
-    
-    if model_type not in valid_metrics or metric not in valid_metrics[model_type]:
-        raise ValueError(f"Invalid metric '{metric}' for {model_type} model")
-    
-    # Create plot
-    plt.figure(figsize=(10, 6))
-    plt.style.use('seaborn-v0_8-darkgrid')
-    
-    # Create synthetic learning curve data
-    train_sizes = np.linspace(0.1, 1.0, 10)
-    train_scores = np.linspace(0.5, 0.9, 10)  # Placeholder synthetic data
-    val_scores = np.linspace(0.4, 0.8, 10)    # Placeholder synthetic data
-    
-    plt.plot(train_sizes, train_scores, 'o-', label='Training Score', color='blue')
-    plt.plot(train_sizes, val_scores, 'o-', label='Validation Score', color='red')
-    
-    plt.xlabel('Training Set Size (proportion)', fontsize=12)
-    plt.ylabel(f'{metric.upper()} Score', fontsize=12)
-    plt.title('Learning Curve', fontsize=14)
-    plt.legend(loc='best', fontsize=10)
-    plt.grid(True)
-    plt.tight_layout()
-    
-    # Return figure and data
-    curve_data = {
-        'train_sizes': train_sizes.tolist() if hasattr(train_sizes, 'tolist') else list(train_sizes),
-        'train_scores': train_scores.tolist() if hasattr(train_scores, 'tolist') else list(train_scores),
-        'val_scores': val_scores.tolist() if hasattr(val_scores, 'tolist') else list(val_scores)
-    }
-    
-    return plt.gcf(), curve_data
-
+# Learning curve function removed as per user request
 def log_experiment(
     experiment: 'Experiment',
     pipeline: Pipeline,
@@ -746,19 +689,42 @@ def log_experiment(
         for dataset, metrics in [('train', train_metrics), ('tune', tune_metrics), ('test', test_metrics)]:
             if 'confusion_matrix' in metrics:
                 cm = metrics['confusion_matrix']
-                logger.info(f"Confusion Matrix ({dataset.upper()} set):")
-                logger.info(f"  True Negatives:     {cm[0][0]} (Correctly predicted non-events)")
-                logger.info(f"  False Positives:    {cm[0][1]} (Incorrectly predicted as events)")
-                logger.info(f"  False Negatives:    {cm[1][0]} (Missed events)")
-                logger.info(f"  True Positives:     {cm[1][1]} (Correctly predicted events)")
-                logger.info(f"  Total Predictions:  {sum(sum(row) for row in cm)}")
+                # Ensure the confusion matrix is a 2x2 matrix
+                if isinstance(cm, list):
+                    cm = np.array(cm)
+                
+                # Validate confusion matrix shape
+                if cm.shape != (2, 2):
+                    logger.warning(f"Unexpected confusion matrix shape for {dataset} set: {cm.shape}")
+                    continue
+                
+                # Extract key metrics from confusion matrix
+                true_negatives = int(cm[0, 0])
+                false_positives = int(cm[0, 1])
+                false_negatives = int(cm[1, 0])
+                true_positives = int(cm[1, 1])
+                
+                # Update metrics to store only key metrics
+                metrics.update({
+                    'true_negatives': true_negatives,
+                    'false_positives': false_positives,
+                    'false_negatives': false_negatives,
+                    'true_positives': true_positives
+                })
+                del metrics['confusion_matrix']
+                
+                logger.info(f"Confusion Matrix Metrics ({dataset.upper()} set):")
+                logger.info(f"  True Negatives:     {true_negatives} (Correctly predicted non-events)")
+                logger.info(f"  False Positives:    {false_positives} (Incorrectly predicted as events)")
+                logger.info(f"  False Negatives:    {false_negatives} (Missed events)")
+                logger.info(f"  True Positives:     {true_positives} (Correctly predicted events)")
                 
                 # Calculate and log additional insights
-                total = sum(sum(row) for row in cm)
+                total = true_negatives + false_positives + false_negatives + true_positives
                 logger.info(f"  Prediction Breakdown:")
-                logger.info(f"    Negative Predictions: {cm[0][0] + cm[0][1]} ({(cm[0][0] + cm[0][1])/total*100:.2f}%)")
-                logger.info(f"    Positive Predictions: {cm[1][0] + cm[1][1]} ({(cm[1][0] + cm[1][1])/total*100:.2f}%)")
-                logger.info(f"    Accuracy: {(cm[0][0] + cm[1][1])/total*100:.2f}%")
+                logger.info(f"    Negative Predictions: {true_negatives + false_positives} ({(true_negatives + false_positives)/total*100:.2f}%)")
+                logger.info(f"    Positive Predictions: {false_negatives + true_positives} ({(false_negatives + true_positives)/total*100:.2f}%)")
+                logger.info(f"    Accuracy: {(true_negatives + true_positives)/total*100:.2f}%")
     
     # Extract and save feature importance
     try:
@@ -790,46 +756,6 @@ def log_experiment(
     
     # Save pipeline
     experiment.save_pipeline(pipeline)
-    
-    # Generate learning curves if we have the required data
-    if all(x is not None for x in [train_X, train_y, tune_X, tune_y]):
-        try:
-            # For regression models
-            if model_type == 'regression':
-                metrics = ['rmse', 'mae', 'r2']
-            # For classification models
-            else:
-                metrics = ['accuracy', 'precision', 'recall', 'f1']
-            
-            # Generate learning curves for each metric
-            for metric in metrics:
-                try:
-                    fig, curve_data = plot_learning_curve(
-                        pipeline=pipeline,
-                        train_X=train_X,
-                        train_y=train_y,
-                        tune_X=tune_X,
-                        tune_y=tune_y,
-                        metric=metric,
-                        model_type=model_type
-                    )
-                    
-                    # Save plot
-                    fig.savefig(experiment.exp_dir / f"learning_curve_{metric}.png")
-                    plt.close(fig)
-                    
-                    # Save curve data
-                    curve_data_file = experiment.exp_dir / f"learning_curve_{metric}.json"
-                    with open(curve_data_file, "w") as f:
-                        json.dump(curve_data, f, indent=2)
-                        
-                except Exception as e:
-                    logger.error(f"Error generating learning curve for {metric}: {e}")
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"Error generating learning curves: {e}")
-            logger.error("Continuing without learning curves")
     
     # Log additional metadata about the experiment
     metadata = {

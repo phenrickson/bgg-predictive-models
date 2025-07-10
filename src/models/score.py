@@ -35,7 +35,7 @@ def extract_threshold(
     experiment_name: str, 
     model_type: str
 ) -> Optional[float]:
-    """Extract threshold from the most recent version's model_info.json file.
+    """Extract threshold from the most recent version's metadata or model_info.json file.
     
     Args:
         experiment_name: Name of the experiment
@@ -72,7 +72,21 @@ def extract_threshold(
         latest_experiment['version']
     )
     
-    # Look for model_info.json in the experiment directory
+    # First, check metadata.json for optimal_threshold
+    metadata_path = experiment.exp_dir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                threshold = metadata.get('metadata', {}).get('optimal_threshold')
+                
+                if threshold is not None:
+                    print(f"Found threshold {threshold} in {metadata_path}")
+                    return threshold
+        except Exception as e:
+            print(f"Warning: Error reading {metadata_path}: {e}")
+    
+    # Then, look for model_info.json in the experiment directory
     model_info_path = experiment.exp_dir / "model_info.json"
     
     if model_info_path.exists():
@@ -88,7 +102,7 @@ def extract_threshold(
             print(f"Warning: Error reading {model_info_path}: {e}")
     
     # If no threshold found
-    print("No threshold found in model_info.json")
+    print("No threshold found in metadata.json or model_info.json")
     return None
 
 def load_model(experiment_name: str, model_type: Optional[str] = None):

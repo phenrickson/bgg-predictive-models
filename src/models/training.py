@@ -274,7 +274,8 @@ def tune_model(
     param_grid: Dict[str, Any],
     metric: str = 'rmse',
     patience: int = 5,
-    min_delta: float = 1e-4
+    min_delta: float = 1e-4,
+    sample_weights: Optional[np.ndarray] = None
 ) -> Tuple[Pipeline, Dict[str, Any]]:
     """
     Tune hyperparameters using a separate tuning set.
@@ -428,8 +429,11 @@ def tune_model(
                 if params:
                     model_candidate.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
-                # Fit the model
-                model_candidate.fit(X_train_transformed, train_y)
+                # Fit the model with optional sample weights
+                if sample_weights is not None:
+                    model_candidate.fit(X_train_transformed, train_y, sample_weight=sample_weights)
+                else:
+                    model_candidate.fit(X_train_transformed, train_y)
                 
                 # Predict on tuning set
                 try:
@@ -565,10 +569,29 @@ def evaluate_model(
     if not 0 <= threshold <= 1:
         raise ValueError("Threshold must be between 0 and 1")
     
+    # Get predictions for both regression and classification
+    y_pred = model.predict(X)
+    
     # Check if model supports predict_proba (for classification)
     is_classifier = hasattr(model, 'predict_proba')
     
-    # Get predictions
+    # Regression metrics
+    from sklearn.metrics import (
+        mean_squared_error, 
+        mean_absolute_error, 
+        r2_score,
+        mean_absolute_percentage_error
+    )
+    
+    metrics = {
+        'mse': mean_squared_error(y, y_pred),
+        'rmse': np.sqrt(mean_squared_error(y, y_pred)),
+        'mae': mean_absolute_error(y, y_pred),
+        'r2': r2_score(y, y_pred),
+        'mape': mean_absolute_percentage_error(y, y_pred)
+    }
+    
+    # If it's a classifier, add classification metrics
     if is_classifier:
         try:
             y_pred_proba = model.predict_proba(X)
@@ -584,61 +607,39 @@ def evaluate_model(
             # Get positive class probabilities
             y_pred_prob = y_pred_proba[:, 1]
             
-            # Check for invalid probability values
-            if np.any(np.isnan(y_pred_prob)) or np.any(np.isinf(y_pred_prob)):
-                raise ValueError("Model returned NaN or infinite probability values")
-            
             # Clip only exact 0s and 1s for numerical stability
             eps = 1e-15
             y_pred_prob = np.where(y_pred_prob == 0, eps, y_pred_prob)
             y_pred_prob = np.where(y_pred_prob == 1, 1 - eps, y_pred_prob)
             
             # Apply threshold for predictions
-            y_pred = (y_pred_prob >= threshold).astype(int)
+            y_pred_class = (y_pred_prob >= threshold).astype(int)
+            
+            from sklearn.metrics import (
+                accuracy_score, 
+                precision_score, 
+                recall_score, 
+                f1_score, 
+                roc_auc_score,
+                log_loss,
+                fbeta_score,
+                matthews_corrcoef,
+                confusion_matrix
+            )
+            
+            metrics.update({
+                'accuracy': accuracy_score(y, y_pred_class),
+                'precision': precision_score(y, y_pred_class),
+                'recall': recall_score(y, y_pred_class),
+                'f1': f1_score(y, y_pred_class),
+                'f2': fbeta_score(y, y_pred_class, beta=2.0),
+                'auc': roc_auc_score(y, y_pred_prob),
+                'log_loss': log_loss(y, y_pred_prob),
+                'matthews_corr': matthews_corrcoef(y, y_pred_class),
+                'confusion_matrix': confusion_matrix(y, y_pred_class).tolist()
+            })
         except Exception as e:
-            logger.error(f"Error getting probabilities: {str(e)}")
-            raise
-        
-    # Classification metrics
-    from sklearn.metrics import (
-        accuracy_score, 
-        precision_score, 
-        recall_score, 
-        f1_score, 
-        roc_auc_score,
-        log_loss,
-        fbeta_score,
-        matthews_corrcoef,
-        confusion_matrix
-    )
-    
-    metrics = {
-        'accuracy': accuracy_score(y, y_pred),
-        'precision': precision_score(y, y_pred),
-        'recall': recall_score(y, y_pred),
-        'f1': f1_score(y, y_pred),
-        'f2': fbeta_score(y, y_pred, beta=2.0),
-        'auc': roc_auc_score(y, y_pred_prob),
-        'log_loss': log_loss(y, y_pred_prob),
-        'matthews_corr': matthews_corrcoef(y, y_pred),
-        'confusion_matrix': confusion_matrix(y, y_pred).tolist()
-    }
-    
-    # Regression metrics
-    from sklearn.metrics import (
-        mean_squared_error, 
-        mean_absolute_error, 
-        r2_score
-    )
-    
-    if not is_classifier:
-        y_pred = model.predict(X)
-        metrics = {
-            'mse': mean_squared_error(y, y_pred),
-            'rmse': np.sqrt(mean_squared_error(y, y_pred)),
-            'mae': mean_absolute_error(y, y_pred),
-            'r2': r2_score(y, y_pred)
-        }
+            logger.warning(f"Could not compute classification metrics: {str(e)}")
     
     logger.info(f"{dataset_name.title()} Performance:")
     for metric, value in metrics.items():

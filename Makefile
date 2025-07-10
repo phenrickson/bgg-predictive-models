@@ -28,22 +28,50 @@ $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql 
 	uv run -m src.data.get_raw_data
 
 ## fetch raw data from BigQuery
+.PHONY: features_data
 features_data: $(RAW_DIR)/game_features.parquet
 
 ## train hurdle moodel
-HURDLE_CANDIDATE ?= linear-hurdle
+COMPLEXITY_CANDIDATE ?= test-hurdle
 
 train_hurdle:
-	uv run -m src.models.hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.hurdle --experiment $(COMPLEXITY_CANDIDATE)
 
 finalize_hurdle: 
-	uv run -m src.models.finalize_model --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.finalize_model --model-type hurdle --experiment $(COMPLEXITY_CANDIDATE)
 
 score_hurdle: 
-	uv run -m src.models.score --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.score --model-type hurdle --experiment $(COMPLEXITY_CANDIDATE)
 
 hurdle: train_hurdle finalize_hurdle score_hurdle
+
+
+## complexity model
+COMPLEXITY_CANDIDATE ?= test-complexity
+train_complexity:
+	uv run -m src.models.complexity --experiment $(COMPLEXITY_CANDIDATE)
+
+finalize_complexity: 
+	uv run -m src.models.finalize_model --model-type complexity --experiment $(COMPLEXITY_CANDIDATE)
+
+score_complexity: 
+	uv run -m src.models.score --model-type complexity --experiment $(COMPLEXITY_CANDIDATE)
+
+complexity: train_complexity finalize_complexity score_complexity
+
 
 ## view experiments
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
+
+# remove trained experiments
+.PHONY: clean_experiments
+clean_experiments:
+	@echo "This will delete all subfolders in models/experiments/"
+	@read -p "Are you sure? (y/n) " confirm; \
+	if [ "$$confirm" = "y" ]; then \
+		rm -rf models/experiments/*/; \
+		echo "Subfolders deleted."; \
+	else \
+		echo "Aborted."; \
+	fi
