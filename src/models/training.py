@@ -298,8 +298,62 @@ def tune_model(
     
     logger = logging.getLogger(__name__)
     
-    # Get current model instance from pipeline
-    current_model = pipeline.named_steps['model']
+    # Validate inputs
+    if train_X is None or train_y is None or tune_X is None or tune_y is None:
+        raise ValueError("All input arrays must not be None")
+    
+    if not isinstance(train_X, pd.DataFrame) or not isinstance(tune_X, pd.DataFrame):
+        raise ValueError("train_X and tune_X must be pandas DataFrames")
+    
+    if not isinstance(train_y, (pd.Series, np.ndarray)) or not isinstance(tune_y, (pd.Series, np.ndarray)):
+        raise ValueError("train_y and tune_y must be pandas Series or numpy arrays")
+    
+    if len(train_X) != len(train_y):
+        raise ValueError(f"train_X and train_y must have same length, got {len(train_X)} and {len(train_y)}")
+    
+    if len(tune_X) != len(tune_y):
+        raise ValueError(f"tune_X and tune_y must have same length, got {len(tune_X)} and {len(tune_y)}")
+    
+    if len(train_X) == 0 or len(tune_X) == 0:
+        raise ValueError("Training and tuning sets cannot be empty")
+    
+    # Validate hyperparameter tuning parameters
+    if not isinstance(patience, int):
+        raise ValueError("Patience must be an integer")
+    if patience < 1:
+        raise ValueError("Patience must be at least 1")
+    
+    if not isinstance(min_delta, (int, float)):
+        raise ValueError("min_delta must be a number")
+    if min_delta < 0:
+        raise ValueError("min_delta must be non-negative")
+    
+    # Validate metric
+    if not isinstance(metric, str):
+        raise ValueError("Metric must be a string")
+    
+    valid_metrics = ['rmse', 'log_loss', 'f1']
+    if metric not in valid_metrics:
+        raise ValueError(f"Unsupported metric: {metric}. Choose from {valid_metrics}")
+    
+    # Validate target values for log_loss metric
+    if metric == 'log_loss':
+        if not np.all(np.isin(train_y, [0, 1])):
+            raise ValueError("Training target values must be binary (0 or 1) for log_loss metric")
+        if not np.all(np.isin(tune_y, [0, 1])):
+            raise ValueError("Tuning target values must be binary (0 or 1) for log_loss metric")
+    
+    # Validate pipeline
+    if pipeline is None:
+        raise ValueError("Pipeline cannot be None")
+    
+    if not isinstance(pipeline, Pipeline):
+        raise ValueError("Pipeline must be a scikit-learn Pipeline object")
+    
+    if 'preprocessor' not in pipeline.named_steps or 'model' not in pipeline.named_steps:
+        raise ValueError("Pipeline must have 'preprocessor' and 'model' steps")
+    
+    # Get preprocessor from pipeline
     preprocessor = pipeline.named_steps['preprocessor']
     
     # Fit and transform the data once with the preprocessor
@@ -313,14 +367,33 @@ def tune_model(
         param_grid = {}
     
     # Scoring functions (to be extended based on specific model requirements)
+    def safe_log_loss(y_true, y_pred_proba):
+        # Validate target values are binary
+        if not np.all(np.isin(y_true, [0, 1])):
+            raise ValueError("Target values must be binary (0 or 1)")
+        
+        # Get positive class probabilities
+        y_pred = y_pred_proba[:, 1]
+        
+        # Check for invalid probability values
+        if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
+            raise ValueError("Model returned NaN or infinite probability values")
+        
+        # Clip only exact 0s and 1s for numerical stability
+        eps = 1e-15
+        y_pred = np.where(y_pred == 0, eps, y_pred)
+        y_pred = np.where(y_pred == 1, 1 - eps, y_pred)
+        
+        # Calculate log loss
+        return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+    
     scoring_functions = {
         'rmse': lambda y, y_pred: np.sqrt(np.mean((y - y_pred)**2)),
-        'log_loss': lambda y, y_pred_proba: -np.mean(y * np.log(y_pred_proba) + (1 - y) * np.log(1 - y_pred_proba)),
+        'log_loss': safe_log_loss,
         'f1': lambda y, y_pred: 2 * np.sum(y * y_pred) / (np.sum(y) + np.sum(y_pred))
     }
     
-    if metric not in scoring_functions:
-        raise ValueError(f"Unsupported metric: {metric}. Choose from {list(scoring_functions.keys())}")
+    # Note: Metric validation already done above
     
     score_func = scoring_functions[metric]
     
@@ -329,6 +402,27 @@ def tune_model(
     best_model = None
     tuning_results = []
     patience_counter = 0
+    
+    # Initialize models
+    base_model = clone(pipeline.named_steps['model'])
+    current_best_model = None
+    
+    # Fit base model as fallback
+    try:
+        base_model.fit(X_train_transformed, train_y)
+        
+        # Verify base model works with metric
+        if metric == 'log_loss':
+            if not hasattr(base_model, 'predict_proba'):
+                raise AttributeError(f"Base model {base_model.__class__.__name__} does not support predict_proba")
+            test_pred = base_model.predict_proba(X_train_transformed[:1])
+            if test_pred.shape[1] != 2:
+                raise ValueError(f"Base model returned invalid probability shape: {test_pred.shape}")
+        
+        current_best_model = base_model  # Use base model as initial best
+    except Exception as e:
+        logger.error(f"Failed to initialize base model: {str(e)}")
+        raise RuntimeError("Could not initialize base model with required capabilities") from e
     
     try:
         # Get total number of parameter combinations for logging
@@ -341,21 +435,37 @@ def tune_model(
             logger.info(f"Evaluating combination {i+1}/{n_combinations}: {params}")
             
             try:
-                # Create a fresh copy of the model
-                current_model = clone(pipeline.named_steps['model'])
+                # Create and configure model for this iteration
+                model_candidate = clone(pipeline.named_steps['model'])
                 
                 # Set parameters if any
                 if params:
-                    current_model.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
+                    model_candidate.set_params(**{k.replace('model__', ''): v for k, v in params.items()})
                 
                 # Fit the model
-                current_model.fit(X_train_transformed, train_y)
+                model_candidate.fit(X_train_transformed, train_y)
                 
                 # Predict on tuning set
-                y_tune_pred = current_model.predict(X_tune_transformed)
-                
-                # Calculate score
-                score = score_func(tune_y, y_tune_pred)
+                try:
+                    if metric == 'log_loss':
+                        if not hasattr(model_candidate, 'predict_proba'):
+                            raise AttributeError(f"Model {model_candidate.__class__.__name__} does not support predict_proba")
+                        y_tune_pred = model_candidate.predict_proba(X_tune_transformed)
+                        if y_tune_pred.shape[1] != 2:
+                            raise ValueError(f"Expected binary classification probabilities, got shape {y_tune_pred.shape}")
+                    else:
+                        y_tune_pred = model_candidate.predict(X_tune_transformed)
+                    
+                    # Calculate score
+                    score = score_func(tune_y, y_tune_pred)
+                    
+                    # Validate score is finite
+                    if not np.isfinite(score):
+                        raise ValueError(f"Invalid score value: {score}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error during prediction/scoring: {str(e)}")
+                    continue
                 
                 # Store detailed results
                 result = {
@@ -371,7 +481,8 @@ def tune_model(
                 if score < best_score - min_delta:  # Improvement beyond threshold
                     best_score = score
                     best_params = params.copy()  # Make a copy to be safe
-                    best_model = clone(current_model)
+                    best_model = clone(model_candidate)
+                    current_best_model = best_model
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -385,10 +496,8 @@ def tune_model(
                 logger.warning(f"Failed to train with params {params}: {str(e)}")
                 continue
             finally:
-                # Clean up to prevent memory leaks
-                if 'current_model' in locals():
-                    del current_model
-                    gc.collect()
+                # Clean up temporary objects to prevent memory leaks
+                gc.collect()
     
     except Exception as e:
         logger.error(f"Error during hyperparameter tuning: {str(e)}")
@@ -407,9 +516,10 @@ def tune_model(
         best_params = {}
     
     # Create new pipeline with fitted preprocessor and best model
+    final_model = current_best_model if current_best_model is not None else base_model
     tuned_pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('model', best_model or current_model)
+        ('model', final_model)
     ])
     
     return tuned_pipeline, best_params
@@ -418,7 +528,8 @@ def evaluate_model(
     model, 
     X: pd.DataFrame, 
     y: pd.Series,
-    dataset_name: str = "test"
+    dataset_name: str = "test",
+    threshold: float = 0.5
 ) -> Dict[str, float]:
     """
     Evaluate model performance with standard metrics.
@@ -428,21 +539,94 @@ def evaluate_model(
         X: Features
         y: True target values
         dataset_name: Name of the dataset for logging
+        threshold: Classification threshold for binary predictions
     
     Returns:
         Dictionary of performance metrics
     """
     logger = logging.getLogger(__name__)
     
-    # Predict
-    y_pred = model.predict(X)
+    # Validate inputs
+    if X is None or y is None:
+        raise ValueError("X and y cannot be None")
     
-    # Compute metrics (to be extended based on specific model requirements)
-    metrics = {
-        'rmse': np.sqrt(np.mean((y - y_pred)**2)),
-        'mae': np.mean(np.abs(y - y_pred)),
-        'r2': 1 - (np.sum((y - y_pred)**2) / np.sum((y - y.mean())**2))
-    }
+    if not isinstance(X, pd.DataFrame):
+        raise ValueError("X must be a pandas DataFrame")
+    
+    if not isinstance(y, (pd.Series, np.ndarray)):
+        raise ValueError("y must be a pandas Series or numpy array")
+    
+    if len(X) != len(y):
+        raise ValueError(f"X and y must have same length, got {len(X)} and {len(y)}")
+    
+    if len(X) == 0:
+        raise ValueError("X and y cannot be empty")
+    
+    # Validate model
+    if model is None:
+        raise ValueError("Model cannot be None")
+    
+    if not hasattr(model, 'predict'):
+        raise ValueError("Model must implement predict method")
+    
+    if not hasattr(model, 'fit'):
+        raise ValueError("Model must be a fitted estimator with fit method")
+    
+    # Validate threshold
+    if not isinstance(threshold, (int, float)):
+        raise ValueError("Threshold must be a number")
+    
+    if not 0 <= threshold <= 1:
+        raise ValueError("Threshold must be between 0 and 1")
+    
+    # Check if model supports predict_proba (for classification)
+    is_classifier = hasattr(model, 'predict_proba')
+    
+    # Get predictions
+    if is_classifier:
+        try:
+            y_pred_proba = model.predict_proba(X)
+            
+            # Ensure we have binary classification probabilities
+            if y_pred_proba.shape[1] != 2:
+                raise ValueError(f"Expected binary classification probabilities, got shape {y_pred_proba.shape}")
+            
+            # Validate target values are binary
+            if not np.all(np.isin(y, [0, 1])):
+                raise ValueError("Target values must be binary (0 or 1)")
+            
+            # Get positive class probabilities
+            y_pred_prob = y_pred_proba[:, 1]
+            
+            # Check for invalid probability values
+            if np.any(np.isnan(y_pred_prob)) or np.any(np.isinf(y_pred_prob)):
+                raise ValueError("Model returned NaN or infinite probability values")
+            
+            # Clip only exact 0s and 1s for numerical stability
+            eps = 1e-15
+            y_pred_prob = np.where(y_pred_prob == 0, eps, y_pred_prob)
+            y_pred_prob = np.where(y_pred_prob == 1, 1 - eps, y_pred_prob)
+            
+            # Apply threshold for predictions
+            y_pred = (y_pred_prob >= threshold).astype(int)
+        except Exception as e:
+            logger.error(f"Error getting probabilities: {str(e)}")
+            raise
+        
+        # Classification metrics
+        metrics = {
+            'accuracy': np.mean(y == y_pred),
+            'log_loss': -np.mean(y * np.log(y_pred_prob) + (1 - y) * np.log(1 - y_pred_prob)),
+            'f1': 2 * np.sum(y * y_pred) / (np.sum(y) + np.sum(y_pred))
+        }
+    else:
+        # Regression metrics
+        y_pred = model.predict(X)
+        metrics = {
+            'rmse': np.sqrt(np.mean((y - y_pred)**2)),
+            'mae': np.mean(np.abs(y - y_pred)),
+            'r2': 1 - (np.sum((y - y_pred)**2) / np.sum((y - y.mean())**2))
+        }
     
     logger.info(f"{dataset_name.title()} Performance:")
     for metric, value in metrics.items():

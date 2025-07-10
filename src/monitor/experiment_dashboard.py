@@ -28,14 +28,21 @@ def load_all_experiment_details(model_type: str):
     # Path to the specific model type experiments
     model_experiments_path = Path("models/experiments") / model_type
     
+    # Validate model type directory
+    if not model_experiments_path.exists():
+        st.error(f"Model type directory does not exist: {model_experiments_path}")
+        return []
+    
     # Iterate through experiment variants
     for experiment_variant in model_experiments_path.iterdir():
         if not experiment_variant.is_dir():
+            st.warning(f"Skipping non-directory: {experiment_variant}")
             continue
         
         # Iterate through versions
         for version_dir in sorted(experiment_variant.iterdir(), key=lambda x: x.name):
             if not version_dir.is_dir():
+                st.warning(f"Skipping non-directory version: {version_dir}")
                 continue
             
             try:
@@ -49,40 +56,67 @@ def load_all_experiment_details(model_type: str):
                     'metadata': {}
                 }
                 
-                # Load metadata
-                metadata_path = version_dir / "metadata.json"
-                if metadata_path.exists():
-                    with open(metadata_path, "r") as f:
-                        details['metadata'] = json.load(f)
+                # Comprehensive file loading with detailed logging
+                files_to_load = [
+                    ('metadata', "metadata.json"),
+                    ('parameters', "parameters.json"),
+                    ('model_info', "model_info.json")
+                ]
                 
-                # Load parameters
-                params_path = version_dir / "parameters.json"
-                if params_path.exists():
-                    with open(params_path, "r") as f:
-                        details['parameters'] = json.load(f)
-                
-                # Load model info (if exists)
-                model_info_path = version_dir / "model_info.json"
-                if model_info_path.exists():
-                    with open(model_info_path, "r") as f:
-                        details['model_info'] = json.load(f)
+                for key, filename in files_to_load:
+                    file_path = version_dir / filename
+                    if file_path.exists():
+                        try:
+                            with open(file_path, "r") as f:
+                                details[key] = json.load(f)
+                        except json.JSONDecodeError as e:
+                            st.warning(f"JSON decoding error in {filename} for {details['name']}: {e}")
+                    else:
+                        st.warning(f"No {key} found for {details['name']}")
                 
                 # Load metrics for different datasets
                 for dataset in ['train', 'tune', 'test']:
                     metrics_path = version_dir / f"{dataset}_metrics.json"
                     if metrics_path.exists():
-                        with open(metrics_path, "r") as f:
-                            details['metrics'][dataset] = json.load(f)
+                        try:
+                            with open(metrics_path, "r") as f:
+                                details['metrics'][dataset] = json.load(f)
+                        except json.JSONDecodeError as e:
+                            st.warning(f"JSON decoding error in {dataset}_metrics.json for {details['name']}: {e}")
+                    else:
+                        st.warning(f"No {dataset} metrics found for {details['name']}")
                 
                 # Load coefficients if available
                 coef_path = version_dir / "coefficients.csv"
                 if coef_path.exists():
-                    details['coefficients'] = pl.read_csv(coef_path)
+                    try:
+                        details['coefficients'] = pl.read_csv(coef_path)
+                    except Exception as e:
+                        st.warning(f"Error reading coefficients for {details['name']}: {e}")
+                else:
+                    st.warning(f"No coefficients found for {details['name']}")
+                
+                # Validate experiment details
+                if not details['metrics'] and not details['parameters'] and not details['model_info']:
+                    st.warning(f"Skipping experiment {details['name']} due to lack of data")
+                    continue
                 
                 all_experiments.append(details)
             
             except Exception as e:
                 st.warning(f"Could not load experiment {experiment_variant.name} (v{version_dir.name}): {e}")
+    
+    # Add comprehensive logging
+    if not all_experiments:
+        st.error(f"No experiments found for model type: {model_type}")
+        st.info(f"Checked directory: {model_experiments_path}")
+        st.info(f"Directory contents: {list(model_experiments_path.iterdir())}")
+        st.info(f"Experiment variant contents: {[d.name for d in model_experiments_path.iterdir() if d.is_dir()]}")
+    else:
+        st.info(f"Loaded {len(all_experiments)} experiments")
+        for exp in all_experiments:
+            st.info(f"Experiment: {exp['name']}")
+            st.info(f"Experiment details: {list(exp.keys())}")
     
     return all_experiments
 
@@ -111,38 +145,65 @@ def create_metrics_overview(experiments, selected_dataset):
 
 def create_parameters_overview(experiments):
     """Create a comprehensive parameters overview."""
-    # Collect all unique parameters
-    all_params = set()
+    # Validate input
+    if not hasattr(experiments, '__iter__'):
+        st.error(f"Invalid experiments input: expected iterable, got {type(experiments)}")
+        return pl.DataFrame()
+    
+    # Convert to list if needed
+    if not isinstance(experiments, list):
+        experiments = list(experiments)
     
     # Prepare parameters DataFrame
     params_data = []
     for exp in experiments:
-        # Robust handling of experiment parameters
         try:
-            # Ensure parameters is a dictionary
-            params = exp.get('parameters', {})
-            if not isinstance(params, dict):
-                params = {}
+            # Validate experiment is a dictionary
+            if not isinstance(exp, dict):
+                st.warning(f"Skipping non-dictionary experiment: {type(exp)}")
+                continue
             
-            # Create base row with experiment info
+            # Get experiment name and version
+            exp_name = str(exp.get('name', 'Unknown Experiment'))
+            exp_version = str(exp.get('version', 'Unknown Version'))
+            
+            # Create base row
             row = {
-                'Experiment': str(exp.get('name', 'Unknown Experiment')),
-                'Version': str(exp.get('version', 'Unknown Version'))
+                'Experiment': exp_name,
+                'Version': exp_version
             }
             
-            # Collect unique parameters
-            all_params.update(params.keys())
+            # Process parameters
+            params = exp.get('parameters', {})
+            if isinstance(params, dict):
+                # Add direct parameters
+                for key, value in params.items():
+                    row[str(key)] = str(value)
             
-            # Add parameters to row
-            for param in all_params:
-                row[param] = str(params.get(param, 'N/A'))
+            # Process model info
+            model_info = exp.get('model_info', {})
+            if isinstance(model_info, dict):
+                # Add best parameters if available
+                best_params = model_info.get('best_params', {})
+                if isinstance(best_params, dict):
+                    for key, value in best_params.items():
+                        row[f"best_{key}"] = str(value)
+                
+                # Add other model info
+                for key in ['threshold', 'threshold_f1_score', 'n_features', 'intercept']:
+                    if key in model_info:
+                        row[key] = str(model_info[key])
             
             params_data.append(row)
-        
+            
         except Exception as e:
-            # Log error and skip problematic experiment
             st.warning(f"Could not process experiment parameters: {e}")
             continue
+    
+    # Validate output
+    if not params_data:
+        st.warning("No valid experiment parameters found")
+        return pl.DataFrame()
     
     return pl.DataFrame(params_data)
 
@@ -177,54 +238,155 @@ def compare_experiments(experiments):
     }
 
 def create_feature_importance_plot(experiments):
-    """Create feature importance visualization."""
+    """
+    Create feature importance visualization with robust error handling and flexible extraction.
+    
+    Args:
+        experiments (List[Dict]): List of experiment details.
+    
+    Returns:
+        plotly.graph_objs._figure.Figure or None: Feature importance plot or None if no data.
+    """
+    # Validate input
+    if not hasattr(experiments, '__iter__'):
+        st.error(f"Invalid experiments input: expected iterable, got {type(experiments)}")
+        return None
+    
+    # Convert to list if needed
+    if not isinstance(experiments, list):
+        experiments = list(experiments)
+    
+    # Detailed logging of input
+    st.info(f"Total experiments: {len(experiments)}")
+    for i, exp in enumerate(experiments):
+        st.info(f"Experiment {i}: {type(exp)}")
+        if isinstance(exp, dict):
+            st.info(f"Experiment keys: {list(exp.keys())}")
+    
     feature_data = []
+    
+    # Comprehensive column detection strategy
+    def detect_columns(df):
+        """Detect feature and coefficient columns with advanced heuristics."""
+        # Comprehensive column name mappings
+        feature_mappings = {
+            'feature', 'features', 'name', 'names', 
+            'variable', 'var', 'predictor', 'predictors'
+        }
+        coef_mappings = {
+            'coefficient', 'coefficients', 'coef', 'coefs', 
+            'weight', 'weights', 'importance', 'value', 'values'
+        }
+        
+        # Case-insensitive column detection
+        columns = {col.lower(): col for col in df.columns}
+        
+        feature_col = next((columns[col] for col in columns if col in feature_mappings), None)
+        coef_col = next((columns[col] for col in columns if col in coef_mappings), None)
+        
+        return feature_col, coef_col
+    
+    # Logging for debugging
+    missing_coef_experiments = []
+    
     for exp in experiments:
-        # Check if coefficients exist and is a valid Polars DataFrame
-        if 'coefficients' in exp and exp['coefficients'] is not None and not exp['coefficients'].is_empty():
+        # Validate experiment is a dictionary
+        if not isinstance(exp, dict):
+            st.warning(f"Skipping non-dictionary experiment: {type(exp)}")
+            continue
+        
+        try:
+            # Robust coefficient extraction
+            if 'coefficients' not in exp or exp['coefficients'] is None:
+                missing_coef_experiments.append(str(exp.get('name', 'Unknown')))
+                continue
+            
             coef_df = exp['coefficients']
             
-            # Flexible column name handling
-            feature_col = None
-            coef_col = None
+            # Skip empty DataFrames
+            if coef_df.is_empty():
+                missing_coef_experiments.append(str(exp.get('name', 'Unknown')))
+                continue
             
-            # Try common column names
-            possible_feature_cols = ['feature', 'Feature', 'features', 'Features', 'name', 'Name']
-            possible_coef_cols = ['coefficient', 'Coefficient', 'coef', 'Coef', 'value', 'Value']
+            # Use standard column names
+            feature_col = 'feature'
+            coef_col = 'coefficient'
             
-            for col in coef_df.columns:
-                if col in possible_feature_cols:
-                    feature_col = col
-                elif col in possible_coef_cols:
-                    coef_col = col
+            # Validate columns exist
+            if feature_col not in coef_df.columns or coef_col not in coef_df.columns:
+                st.warning(f"Missing required columns in coefficients for {exp.get('name', 'Unknown')}")
+                missing_coef_experiments.append(str(exp.get('name', 'Unknown')))
+                continue
             
-            # If we found both columns, process the data
-            if feature_col and coef_col:
-                for row in coef_df.iter_rows(named=True):
+            # Extract data with type conversion and error handling
+            for row in coef_df.iter_rows(named=True):
+                try:
+                    feature = str(row[feature_col])
+                    coefficient = float(row[coef_col])
+                    
                     feature_data.append({
-                        'Experiment': exp['name'],
-                        'Feature': row[feature_col],
-                        'Coefficient': row[coef_col]
+                        'Experiment': str(exp.get('name', 'Unknown')),
+                        'Feature': feature,
+                        'Coefficient': coefficient
                     })
+                except (ValueError, TypeError) as e:
+                    st.warning(f"Data conversion error in {exp.get('name', 'Unknown')}: {e}")
+        
+        except Exception as e:
+            st.warning(f"Error processing experiment {exp.get('name', 'Unknown')}: {e}")
     
+    # Log experiments without coefficients
+    if missing_coef_experiments:
+        st.info(f"Experiments without coefficient data: {', '.join(missing_coef_experiments)}")
+    
+    # Create visualization if data exists
     if feature_data:
-        df = pl.DataFrame(feature_data)
-        fig = px.bar(
-            df.to_pandas(), 
-            x='Feature', 
-            y='Coefficient', 
-            color='Experiment', 
-            barmode='group',
-            title='Feature Importance Across Experiments'
-        )
+        try:
+            df = pl.DataFrame(feature_data)
+            
+            # Aggregate coefficients by feature and experiment
+            df_agg = (
+                df.group_by(['Experiment', 'Feature'])
+                .agg(pl.col('Coefficient').mean())
+                .sort('Coefficient', descending=True)
+            )
+            
+            # Convert to pandas for Plotly
+            df_pandas = df_agg.to_pandas()
+            
+            # Create interactive bar plot
+            fig = px.bar(
+                df_pandas, 
+                x='Feature', 
+                y='Coefficient', 
+                color='Experiment', 
+                barmode='group',
+                title='Feature Importance Across Experiments',
+                labels={'Coefficient': 'Mean Coefficient'}
+            )
+            
+            # Enhanced layout
+            fig.update_layout(
+                height=600,  # Increased height
+                width=1000,  # Added width
+                xaxis_tickangle=-45,  # Rotate labels for readability
+                xaxis_tickfont=dict(size=8),  # Smaller font
+                legend_title_text='Experiment',
+                title_x=0.5,  # Center title
+                hovermode='closest'
+            )
+            
+            # Add hover data
+            fig.update_traces(
+                hovertemplate='<b>%{x}</b><br>Coefficient: %{y:.4f}<br>Experiment: %{fullData.name}<extra></extra>'
+            )
+            
+            return fig
         
-        # Customize layout
-        fig.update_layout(
-            height=600,  # Increase height
-            xaxis_tickfont=dict(size=8)  # Reduce x-axis text size
-        )
-        
-        return fig
+        except Exception as e:
+            st.error(f"Visualization creation failed: {e}")
+    
+    st.warning("No feature importance data could be extracted.")
     return None
 
 def main():

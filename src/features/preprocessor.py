@@ -14,10 +14,10 @@ from .transformers import (
 )
 
 def create_bgg_preprocessor(
-    bgg_preprocessor = BaseBGGTransformer(),
     reference_year: int = 2000, 
     normalization_factor: int = 25,
-    log_columns: list = ['min_age', 'min_playtime', 'max_playtime']
+    log_columns: list = ['min_age', 'min_playtime', 'max_playtime'],
+    **kwargs
 ) -> Pipeline:
     """
     Create a standard preprocessing pipeline for board game data.
@@ -43,6 +43,9 @@ def create_bgg_preprocessor(
     sklearn.pipeline.Pipeline
         A preprocessing pipeline for board game data.
     """
+    # Create BGG preprocessor with kwargs
+    bgg_preprocessor = BaseBGGTransformer(**kwargs)
+    
     pipeline = Pipeline([
         ('bgg_preprocessor', bgg_preprocessor),
         ('impute', SimpleImputer(strategy='median', add_indicator=True, keep_empty_features=False)),

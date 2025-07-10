@@ -5,10 +5,27 @@ import hashlib
 import pickle
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Union, Tuple
+from typing import Dict, Any, Optional, List, Union, Tuple, Type
+
+import numpy as np
+import pandas as pd
 import polars as pl
+import matplotlib.pyplot as plt
+
 from sklearn.base import BaseEstimator, clone
 from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    mean_squared_error, 
+    mean_absolute_error, 
+    r2_score,
+    accuracy_score, 
+    precision_score, 
+    recall_score, 
+    f1_score, 
+    roc_auc_score,
+    log_loss,
+    matthews_corrcoef
+)
 
 def compute_hash(data: Dict[str, Any]) -> str:
     """Compute a hash of the experiment configuration and data.
@@ -508,3 +525,370 @@ class Experiment:
             raise ValueError("No coefficients found")
         
         return pl.read_csv(coef_file)
+
+def mean_absolute_percentage_error(y_true, y_pred):
+    """
+    Calculate Mean Absolute Percentage Error (MAPE).
+    
+    Args:
+        y_true: True target values
+        y_pred: Predicted target values
+    
+    Returns:
+        MAPE value
+    """
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+def extract_model_coefficients(
+    fitted_pipeline: Pipeline, 
+    model_type: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Extract coefficients and feature names from a fitted pipeline.
+    
+    Parameters
+    ----------
+    fitted_pipeline : Pipeline
+        A fitted scikit-learn pipeline containing a preprocessor and model
+    model_type : Optional[str]
+        Type of model to handle specific coefficient extraction
+        
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing feature names, coefficients, and absolute coefficients,
+        sorted by absolute coefficient value in descending order.
+    """
+    # Get the preprocessor and model from pipeline
+    preprocessor = fitted_pipeline.named_steps['preprocessor']
+    model = fitted_pipeline.named_steps['model']
+    
+    # Find feature names
+    steps = list(preprocessor.named_steps.items())
+    feature_names = None
+    
+    # Iterate through steps in reverse order
+    for name, step in reversed(steps):
+        try:
+            # Try to get feature names from the step
+            feature_names = step.get_feature_names_out()
+            break
+        except (AttributeError, TypeError):
+            continue
+    
+    # If no step with feature names found, try fallback methods
+    if feature_names is None:
+        try:
+            # Try getting from the entire preprocessor
+            feature_names = preprocessor.get_feature_names_out()
+        except:
+            # Last resort: check for feature_names_ attribute
+            if hasattr(preprocessor, 'feature_names_'):
+                feature_names = preprocessor.feature_names_
+            else:
+                raise ValueError("Could not get feature names from any preprocessing step")
+    
+    # Handle different model types for coefficient extraction
+    from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
+    from sklearn.base import ClassifierMixin, RegressorMixin
+    
+    # Determine coefficient extraction method based on model type
+    if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso)):
+        # For linear models, use coef_ attribute
+        if not hasattr(model, 'coef_'):
+            raise ValueError("Model does not have coefficients")
+        
+        # Handle binary classification (logistic regression)
+        coefficients = model.coef_[0] if isinstance(model, LogisticRegression) else model.coef_
+    else:
+        # For non-linear models, use feature importances if available
+        if hasattr(model, 'feature_importances_'):
+            coefficients = model.feature_importances_
+        else:
+            raise ValueError(f"Cannot extract coefficients for model type: {type(model)}")
+    
+    # Validate lengths match
+    if len(feature_names) != len(coefficients):
+        raise ValueError(
+            f"Mismatch between number of features ({len(feature_names)}) "
+            f"and coefficients ({len(coefficients)})"
+        )
+    
+    # Create DataFrame with coefficients
+    coef_df = pd.DataFrame({
+        'feature': feature_names,
+        'coefficient': coefficients,
+        'abs_coefficient': np.abs(coefficients)
+    })
+    
+    # Sort by absolute coefficient value
+    coef_df = coef_df.sort_values('abs_coefficient', ascending=False)
+    
+    # Add rank
+    coef_df['rank'] = range(1, len(coef_df) + 1)
+    
+    return coef_df
+
+def plot_learning_curve(
+    pipeline: Pipeline,
+    train_X: pd.DataFrame,
+    train_y: pd.Series,
+    tune_X: pd.DataFrame,
+    tune_y: pd.Series,
+    metric: str = 'rmse',
+    train_sizes: np.ndarray = np.linspace(0.1, 1.0, 10),
+    model_type: str = 'regression'
+) -> Tuple[plt.Figure, Dict[str, np.ndarray]]:
+    """
+    Generate learning curve plot showing model performance vs training set size.
+    
+    Args:
+        pipeline: The pipeline to evaluate
+        train_X: Training features
+        train_y: Training target
+        tune_X: Tuning features
+        tune_y: Tuning target
+        metric: Metric to evaluate
+        train_sizes: Array of training set size proportions
+        model_type: Type of model ('regression' or 'classification')
+        
+    Returns:
+        Tuple of (figure, learning curve data)
+    """
+    # Setup scoring function based on model type
+    scoring_functions = {
+        # Regression metrics
+        'rmse': lambda y, y_pred: np.sqrt(mean_squared_error(y, y_pred)),
+        'mae': mean_absolute_error,
+        'r2': r2_score,
+        'mape': mean_absolute_percentage_error,
+        
+        # Classification metrics
+        'accuracy': accuracy_score,
+        'precision': precision_score,
+        'recall': recall_score,
+        'f1': f1_score,
+        'auc': lambda y, y_pred_proba: roc_auc_score(y, y_pred_proba[:, 1]) if y_pred_proba.ndim > 1 else roc_auc_score(y, y_pred_proba),
+        'log_loss': log_loss
+    }
+    
+    if metric not in scoring_functions:
+        raise ValueError(f"Unsupported metric: {metric}")
+    
+    score_func = scoring_functions[metric]
+    
+    # Calculate absolute sizes
+    n_samples = len(train_X)
+    train_sizes_abs = np.round(train_sizes * n_samples).astype(int)
+    
+    # Initialize arrays to store scores
+    train_scores = np.zeros(len(train_sizes))
+    val_scores = np.zeros(len(train_sizes))
+    
+    # For each training size
+    for idx, n_train in enumerate(train_sizes_abs):
+        # Get subset of training data
+        train_subset_X = train_X.iloc[:n_train]
+        train_subset_y = train_y.iloc[:n_train]
+        
+        # Fit model
+        current_pipeline = clone(pipeline)
+        current_pipeline.fit(train_subset_X, train_subset_y)
+        
+        # Prediction and scoring logic depends on model type
+        if model_type == 'regression':
+            # For regression, use predict method
+            train_pred = current_pipeline.predict(train_subset_X)
+            val_pred = current_pipeline.predict(tune_X)
+            
+            # Optional prediction constraint for specific regression models
+            if hasattr(current_pipeline, 'constrain_predictions'):
+                train_pred = current_pipeline.constrain_predictions(train_pred)
+                val_pred = current_pipeline.constrain_predictions(val_pred)
+        else:
+            # For classification, handle prediction differently
+            if hasattr(current_pipeline.named_steps['model'], 'predict_proba'):
+                # Use probability predictions for metrics like log_loss and AUC
+                train_pred_proba = current_pipeline.predict_proba(train_subset_X)
+                val_pred_proba = current_pipeline.predict_proba(tune_X)
+                
+                # For binary classification metrics
+                if metric in ['auc', 'log_loss']:
+                    train_pred = train_pred_proba
+                    val_pred = val_pred_proba
+                else:
+                    # For other metrics, use standard predictions
+                    train_pred = current_pipeline.predict(train_subset_X)
+                    val_pred = current_pipeline.predict(tune_X)
+            else:
+                # Fallback to standard predictions
+                train_pred = current_pipeline.predict(train_subset_X)
+                val_pred = current_pipeline.predict(tune_X)
+        
+        # Calculate scores
+        train_scores[idx] = score_func(train_subset_y, train_pred)
+        val_scores[idx] = score_func(tune_y, val_pred)
+    
+    # Create plot
+    plt.figure(figsize=(10, 6))
+    plt.style.use('seaborn-v0_8-darkgrid')
+    
+    plt.plot(train_sizes, train_scores, 'o-', label='Training Score', color='blue')
+    plt.plot(train_sizes, val_scores, 'o-', label='Validation Score', color='red')
+    
+    plt.xlabel('Training Set Size (proportion)', fontsize=12)
+    plt.ylabel(f'{metric.upper()} Score', fontsize=12)
+    plt.title('Learning Curve', fontsize=14)
+    plt.legend(loc='best', fontsize=10)
+    plt.grid(True)
+    plt.tight_layout()
+    
+    # Return figure and data
+    curve_data = {
+        'train_sizes': train_sizes,
+        'train_scores': train_scores,
+        'val_scores': val_scores
+    }
+    
+    return plt.gcf(), curve_data
+
+def log_experiment(
+    experiment: 'Experiment',
+    pipeline: Pipeline,
+    train_metrics: Dict[str, float],
+    tune_metrics: Dict[str, float],
+    test_metrics: Dict[str, float],
+    best_params: Dict[str, Any],
+    args: Any,
+    train_df: Optional[pl.DataFrame] = None,
+    tune_df: Optional[pl.DataFrame] = None,
+    test_df: Optional[pl.DataFrame] = None,
+    train_X: Optional[pd.DataFrame] = None,
+    tune_X: Optional[pd.DataFrame] = None,
+    test_X: Optional[pd.DataFrame] = None,
+    train_y: Optional[pd.Series] = None,
+    tune_y: Optional[pd.Series] = None,
+    test_y: Optional[pd.Series] = None,
+    model_type: str = 'regression'
+) -> None:
+    """
+    Log all experiment results and artifacts with flexibility for different model types.
+    
+    Args:
+        experiment: Experiment tracking object
+        pipeline: Fitted model pipeline
+        train_metrics: Metrics for training set
+        tune_metrics: Metrics for tuning set
+        test_metrics: Metrics for test set
+        best_params: Best hyperparameters
+        args: Argument namespace
+        train_df: Optional training dataframe
+        tune_df: Optional tuning dataframe
+        test_df: Optional test dataframe
+        train_X: Optional training features
+        tune_X: Optional tuning features
+        test_X: Optional test features
+        train_y: Optional training target
+        tune_y: Optional tuning target
+        test_y: Optional test target
+        model_type: Type of model ('regression' or 'classification')
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Log metrics
+    experiment.log_metrics(train_metrics, "train")
+    experiment.log_metrics(tune_metrics, "tune")
+    experiment.log_metrics(test_metrics, "test")
+    experiment.log_parameters(best_params)
+    
+    # Extract and save feature importance
+    try:
+        # Extract feature importance
+        importance_df = extract_model_coefficients(pipeline, model_type=model_type)
+        importance_pl = pl.from_pandas(importance_df)
+        experiment.log_coefficients(importance_pl)
+        
+        # Log top features
+        logger.info("Top 10 most important features (by absolute coefficient):")
+        for _, row in importance_df.head(10).iterrows():
+            logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
+        
+        # Save model info
+        model_info = {
+            'n_features': len(importance_df),
+            'best_params': best_params
+        }
+        
+        # Add model-specific details
+        if hasattr(pipeline.named_steps['model'], 'intercept_'):
+            model_info['intercept'] = float(pipeline.named_steps['model'].intercept_)
+        
+        experiment.log_model_info(model_info)
+        
+    except Exception as e:
+        logger.error(f"Error extracting feature importance: {e}")
+        logger.error("Continuing without saving feature importance")
+    
+    # Save pipeline
+    experiment.save_pipeline(pipeline)
+    
+    # Generate learning curves if we have the required data
+    if all(x is not None for x in [train_X, train_y, tune_X, tune_y]):
+        try:
+            # For regression models
+            if model_type == 'regression':
+                metrics = ['rmse', 'mae', 'r2']
+            # For classification models
+            else:
+                metrics = ['accuracy', 'precision', 'recall', 'f1']
+            
+            # Generate learning curves for each metric
+            for metric in metrics:
+                try:
+                    fig, curve_data = plot_learning_curve(
+                        pipeline=pipeline,
+                        train_X=train_X,
+                        train_y=train_y,
+                        tune_X=tune_X,
+                        tune_y=tune_y,
+                        metric=metric,
+                        model_type=model_type
+                    )
+                    
+                    # Save plot
+                    fig.savefig(experiment.exp_dir / f"learning_curve_{metric}.png")
+                    plt.close(fig)
+                    
+                    # Save curve data
+                    curve_data_file = experiment.exp_dir / f"learning_curve_{metric}.json"
+                    with open(curve_data_file, "w") as f:
+                        json.dump({
+                            k: v.tolist() for k, v in curve_data.items()
+                        }, f, indent=2)
+                        
+                except Exception as e:
+                    logger.error(f"Error generating learning curve for {metric}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error generating learning curves: {e}")
+            logger.error("Continuing without learning curves")
+    
+    # Log additional metadata about the experiment
+    metadata = {
+        "timestamp": datetime.now().isoformat(),
+        "data_sizes": {
+            "train": len(train_y) if train_y is not None else None,
+            "tune": len(tune_y) if tune_y is not None else None,
+            "test": len(test_y) if test_y is not None else None
+        },
+        "model_type": model_type,
+        "pipeline_steps": list(pipeline.named_steps.keys()),
+        "feature_count": train_X.shape[1] if train_X is not None else None
+    }
+    
+    # Add to existing metadata
+    experiment.metadata.update(metadata)
+    experiment._save_metadata()
+    
+    logger.info("Experiment logging complete")

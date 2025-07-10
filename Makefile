@@ -1,8 +1,7 @@
 # Makefile for BGG predictive models
 
-# Default variables
-OUTPUT_DIR := data/raw
-MIN_RATINGS := 25
+# Default settings
+RAW_DIR := data/raw
 
 .PHONY: help clean all
 
@@ -19,14 +18,32 @@ help:  ## Show this help message
 	@echo 'Example:'
 	@echo '  make all OUTPUT_DIR=custom/path MIN_RATINGS=50'
 
+# requirements
+.PHONY: requirements
+requirements: 
+	uv sync
+
 # Target for features file - this is what keeps track of freshness
-$(OUTPUT_DIR)/features.parquet: src/data/get_data.py src/data/config.yaml src/data/config.py
-	uv run -m src.data.get_data \
-		--output-dir $(OUTPUT_DIR) \
-		--min-ratings $(MIN_RATINGS)
+$(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql src/data/get_raw_data.py src/data/loader.py
+	uv run -m src.data.get_raw_data
 
-# Main target that depends on features file
-raw_data: $(OUTPUT_DIR)/features.parquet  ## Fetch all data from BigQuery
+## fetch raw data from BigQuery
+features_data: $(RAW_DIR)/game_features.parquet
 
-clean:  ## Remove generated data files
-	rm -rf $(OUTPUT_DIR)/*.parquet
+## train hurdle moodel
+HURDLE_CANDIDATE ?= linear-hurdle
+
+train_hurdle:
+	uv run -m src.models.hurdle --experiment $(HURDLE_CANDIDATE)
+
+finalize_hurdle: 
+	uv run -m src.models.finalize_model --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+
+score_hurdle: 
+	uv run -m src.models.score --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+
+hurdle: train_hurdle finalize_hurdle score_hurdle
+
+## view experiments
+experiment_dashboard:
+	uv run streamlit run src/monitor/experiment_dashboard.py
