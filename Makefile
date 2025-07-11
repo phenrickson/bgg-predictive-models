@@ -32,7 +32,7 @@ $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql 
 features_data: $(RAW_DIR)/game_features.parquet
 
 ## train hurdle moodel
-COMPLEXITY_CANDIDATE ?= test-hurdle
+COMPLEXITY_CANDIDATE ?= test-complexity
 
 train_hurdle:
 	uv run -m src.models.hurdle --experiment $(COMPLEXITY_CANDIDATE)
