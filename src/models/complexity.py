@@ -189,7 +189,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--metric", type=str, default="rmse",
                        choices=["rmse", "mae", "r2", "mape"],
                        help="Metric to optimize during hyperparameter tuning")
-    parser.add_argument("--patience", type=int, default=5,
+    parser.add_argument("--patience", type=int, default=15,
                        help="Number of iterations without improvement before early stopping")
     parser.add_argument("--use-sample-weights", action="store_true", default=False,
                        help="Enable sample weights based on complexity values")

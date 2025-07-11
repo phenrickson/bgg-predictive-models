@@ -219,7 +219,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--metric", type=str, default="log_loss",
                        choices=["log_loss", "f1", "auc"],
                        help="Metric to optimize during hyperparameter tuning")
-    parser.add_argument("--patience", type=int, default=5,
+    parser.add_argument("--patience", type=int, default=15,
                        help="Number of iterations without improvement before early stopping")
     
     args = parser.parse_args()
