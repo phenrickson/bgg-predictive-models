@@ -476,6 +476,50 @@ class Experiment:
         """
         coef_file = self.exp_dir / "coefficients.csv"
         coefficients_df.write_csv(coef_file)
+        
+    def log_predictions(
+        self,
+        predictions: np.ndarray,
+        actuals: np.ndarray,
+        df: pl.DataFrame,
+        dataset: str
+    ):
+        """Log model predictions along with actual values and identifying information.
+        
+        Args:
+            predictions: Array of model predictions
+            actuals: Array of actual values
+            df: DataFrame containing identifying information (e.g., game IDs, names)
+            dataset: Dataset name (e.g., 'train', 'tune', 'test')
+        """
+        # Create predictions DataFrame
+        predictions_df = df.clone()
+        predictions_df = predictions_df.with_columns([
+            pl.Series("prediction", predictions),
+            pl.Series("actual", actuals)
+        ])
+        
+        # Save as parquet for efficient storage and reading
+        predictions_file = self.exp_dir / f"{dataset}_predictions.parquet"
+        predictions_df.write_parquet(predictions_file)
+    
+    def get_predictions(self, dataset: str) -> pl.DataFrame:
+        """Get model predictions, actual values, and identifying information.
+        
+        Args:
+            dataset: Dataset name (e.g., 'train', 'tune', 'test')
+            
+        Returns:
+            DataFrame containing predictions, actual values, and identifying information
+            
+        Raises:
+            ValueError: If no predictions found for the dataset
+        """
+        predictions_file = self.exp_dir / f"{dataset}_predictions.parquet"
+        if not predictions_file.exists():
+            raise ValueError(f"No predictions found for dataset '{dataset}'")
+        
+        return pl.read_parquet(predictions_file)
     
     def get_metrics(self, dataset: str) -> Dict[str, float]:
         """Get metrics for a specific dataset.
@@ -781,6 +825,25 @@ def log_experiment(
     except Exception as e:
         logger.error(f"Error extracting feature importance: {e}")
         logger.error("Continuing without saving feature importance")
+    
+    # Get and log predictions for validation and test sets
+    if tune_X is not None and tune_y is not None and tune_df is not None:
+        tune_predictions = pipeline.predict(tune_X)
+        experiment.log_predictions(
+            predictions=tune_predictions,
+            actuals=tune_y.values,
+            df=tune_df,
+            dataset="tune"
+        )
+        
+    if test_X is not None and test_y is not None and test_df is not None:
+        test_predictions = pipeline.predict(test_X)
+        experiment.log_predictions(
+            predictions=test_predictions,
+            actuals=test_y.values,
+            df=test_df,
+            dataset="test"
+        )
     
     # Save pipeline
     experiment.save_pipeline(pipeline)
