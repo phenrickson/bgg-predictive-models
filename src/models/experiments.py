@@ -748,6 +748,34 @@ def log_experiment(
         if hasattr(pipeline.named_steps['model'], 'intercept_'):
             model_info['intercept'] = float(pipeline.named_steps['model'].intercept_)
         
+        # Extract preprocessor parameters
+        try:
+            preprocessor = pipeline.named_steps['preprocessor']
+            
+            # Look for the BGG preprocessor step
+            bgg_preprocessor = None
+            if hasattr(preprocessor, 'named_steps'):
+                for step_name, step in preprocessor.named_steps.items():
+                    if step_name == 'bgg_preprocessor' or 'bgg_preprocessor' in step_name:
+                        bgg_preprocessor = step
+                        break
+            
+            # If BGG preprocessor found, extract its parameters
+            if bgg_preprocessor is not None:
+                # Try to get the original configuration parameters
+                if hasattr(bgg_preprocessor, 'config'):
+                    model_info['preprocessor_params'] = bgg_preprocessor.config
+                elif hasattr(bgg_preprocessor, '_config'):
+                    model_info['preprocessor_params'] = bgg_preprocessor._config
+                elif hasattr(bgg_preprocessor, 'get_params'):
+                    # Fallback to get_params method
+                    model_info['preprocessor_params'] = {
+                        k: v for k, v in bgg_preprocessor.get_params().items() 
+                        if not k.startswith('__') and not callable(v)
+                    }
+        except Exception as e:
+            logger.warning(f"Could not extract preprocessor parameters: {e}")
+        
         experiment.log_model_info(model_info)
         
     except Exception as e:
