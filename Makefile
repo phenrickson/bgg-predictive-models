@@ -91,6 +91,27 @@ score_rating:
 
 rating: train_rating finalize_rating score_rating
 
+## users rated model
+USERS_RATED_CANDIDATE ?= test-rating
+train_users_rated:
+	uv run -m src.models.users_rated \
+	--complexity-experiment test-complexity \
+	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
+	--experiment $(USERS_RATED_CANDIDATE)
+
+finalize_users_rated: 
+	uv run -m src.models.finalize_model \
+	--model-type users_rated \
+	--experiment $(USERS_RATED_CANDIDATE)
+
+score_users_rated:
+	uv run -m src.models.score \
+	--model-type users_rated \
+	--experiment $(USERS_RATED_CANDIDATE) \
+	--complexity-predictions data/estimates/test-complexity_complexity_predictions.parquet \
+
+users_rated: train_users_rated finalize_users_rated score_users_rated
+
 ## view experiments
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
@@ -115,6 +136,18 @@ clean_ratings:
 	if [ "$$confirm" = "y" ]; then \
 		rm -rf models/experiments/rating/*/; \
 		echo "Rating experiment subfolders deleted."; \
+	else \
+		echo "Aborted."; \
+	fi
+
+# remove users rated experiments
+.PHONY: clean_users_rated
+clean_users_rated:
+	@echo "This will delete users rated experiment subfolders in models/experiments/"
+	@read -p "Are you sure? (y/n) " confirm; \
+	if [ "$$confirm" = "y" ]; then \
+		rm -rf models/experiments/users_rated/*/; \
+		echo "Users rated experiment subfolders deleted."; \
 	else \
 		echo "Aborted."; \
 	fi
