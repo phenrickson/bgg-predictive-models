@@ -381,9 +381,15 @@ def predict_data(
         print(f"Raw predictions: {predictions}")
         print(f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}")
         
-        # Constrain predictions to appropriate range
-        predicted_values = np.clip(predictions, 1, 10 if model_type == "rating" else None)
-        print(f"Constrained predictions: {predicted_values}")
+        # Inverse transform log predictions for users_rated
+        if model_type == "users_rated":
+            # First apply expm1, then round to nearest 50, with a minimum of 25
+            predicted_values = np.maximum(np.round(np.expm1(predictions) / 50) * 50, 25)
+        else:
+            # Constrain rating predictions to appropriate range
+            predicted_values = np.clip(predictions, 1, 10)
+        
+        print(f"Transformed predictions: {predicted_values}")
         
         predicted_class = None  # No predicted_class for regression
         threshold = None  # No threshold for regression

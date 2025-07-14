@@ -132,7 +132,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--model", type=str, default="ridge",
                        choices=['linear', 'ridge', 'lasso', 'lightgbm'],
                        help="Regression model type to use")
-    parser.add_argument("--metric", type=str, default="mse",
+    parser.add_argument("--metric", type=str, default="rmse",
                        choices=["rmse", "mae", "r2", "mape", "poisson_deviance"],
                        help="Metric to optimize during hyperparameter tuning")
     parser.add_argument("--patience", type=int, default=15,
@@ -220,30 +220,30 @@ def main():
     )
     
     # Get X, y splits using original target
-    train_X, train_y = select_X_y(train_df, y_column='users_rated')
-    tune_X, tune_y = select_X_y(tune_df, y_column='users_rated')
-    test_X, test_y = select_X_y(test_df, y_column='users_rated')
+    train_X, train_y = select_X_y(train_df, y_column='log_users_rated')
+    tune_X, tune_y = select_X_y(tune_df, y_column='log_users_rated')
+    test_X, test_y = select_X_y(test_df, y_column='log_users_rated')
     
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
     preprocessor = create_preprocessing_pipeline()
     
-    # Wrap the model with TransformedTargetRegressor
-    transformed_model = TransformedTargetRegressor(
-        regressor=model,
-        func=np.log1p,  # log(1 + y)
-        inverse_func=np.expm1,  # exp(y) - 1
-        check_inverse=True
-    )
+    # # Wrap the model with TransformedTargetRegressor
+    # transformed_model = TransformedTargetRegressor(
+    #     regressor=model,
+    #     func=np.log1p,  # log(1 + y)
+    #     inverse_func=np.expm1,  # exp(y) - 1
+    #     check_inverse=True
+    # )
     
     pipeline = Pipeline([
         ('preprocessor', preprocessor),
-        ('model', transformed_model)
+        ('model', model)
     ])
     
-    # Adjust parameter grid for TransformedTargetRegressor
+    # Adjust parameter grid for Pipeline
     param_grid = {
-        'model__regressor__' + k: v for k, v in param_grid.items()
+        'model__' + k: v for k, v in param_grid.items()
     }
     
     # Log experiment details
@@ -308,7 +308,7 @@ def main():
             'test_start_year': args.test_start_year,
             'test_end_year': args.test_end_year,
             'model_type': 'users_rated_regression',
-            'target': 'users_rated',
+            'target': 'log_users_rated',
             'min_ratings': args.min_ratings,
         },
         config={
@@ -342,7 +342,7 @@ def main():
                 'test_start_year': args.test_start_year,
                 'test_end_year': args.test_end_year
             },
-            'target': 'users_rated',
+            'target': 'log_users_rated',
             'target_type': 'regression'
         }
     )
