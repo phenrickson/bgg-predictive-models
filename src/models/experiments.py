@@ -11,6 +11,10 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Import visualization modules
+from src.visualizations import regression_diagnostics, classification_diagnostics
 
 from sklearn.base import BaseEstimator, clone
 from sklearn.pipeline import Pipeline
@@ -703,6 +707,54 @@ def extract_model_coefficients(
     return coef_df
 
 # Learning curve function removed as per user request
+def create_diagnostic_plots(
+    experiment: 'Experiment', 
+    predictions_df: pl.DataFrame, 
+    model_type: str = 'regression'
+) -> None:
+    """
+    Create and save diagnostic plots for model predictions.
+    
+    Args:
+        experiment: Experiment tracking object
+        predictions_df: DataFrame containing predictions and actual values
+        model_type: Type of model ('regression' or 'classification')
+    """
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Create plots directory if it doesn't exist
+        plots_dir = experiment.exp_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create plots based on model type
+        if model_type == 'regression':
+            # Use regression_diagnostics module
+            fig, _ = regression_diagnostics.plot_regression_diagnostics(predictions_df)
+            plot_path = plots_dir / "regression_diagnostics.png"
+            fig.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            logger.info(f"Saved regression diagnostic plots to {plot_path}")
+        
+        elif model_type == 'classification':
+            # Use classification_diagnostics module
+            # First, check if the required columns exist
+            required_columns = ['actual', 'prediction', 'predicted_proba_class_1']
+            if all(col in predictions_df.columns for col in required_columns):
+                fig, _ = classification_diagnostics.plot_classification_diagnostics(predictions_df)
+                plot_path = plots_dir / "classification_diagnostics.png"
+                fig.savefig(plot_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"Saved classification diagnostic plots to {plot_path}")
+            else:
+                logger.warning("Missing required columns for classification diagnostic plots")
+        
+        else:
+            logger.warning(f"Unsupported model type for diagnostic plots: {model_type}")
+    
+    except Exception as e:
+        logger.error(f"Error creating diagnostic plots: {e}")
+
 def log_experiment(
     experiment: 'Experiment',
     pipeline: Pipeline,
@@ -938,6 +990,45 @@ def log_experiment(
     
     # Save pipeline
     experiment.save_pipeline(pipeline)
+    
+    # Create diagnostic plots
+    try:
+        # Determine which dataset to use for plots (prefer test, then tune)
+        if test_df is not None and test_X is not None and test_y is not None:
+            plot_df = test_df.clone()
+            plot_df = plot_df.with_columns([
+                pl.Series("prediction", test_predictions),
+                pl.Series("actual", test_y.values)
+            ])
+            
+            # Add predicted probabilities for classification models
+            if is_classifier and hasattr(pipeline, 'predict_proba'):
+                test_predicted_proba = pipeline.predict_proba(test_X)
+                if test_predicted_proba.ndim == 2:
+                    plot_df = plot_df.with_columns(
+                        pl.Series("predicted_proba_class_1", test_predicted_proba[:, 1])
+                    )
+            
+            create_diagnostic_plots(experiment, plot_df, model_type)
+        
+        elif tune_df is not None and tune_X is not None and tune_y is not None:
+            plot_df = tune_df.clone()
+            plot_df = plot_df.with_columns([
+                pl.Series("prediction", tune_predictions),
+                pl.Series("actual", tune_y.values)
+            ])
+            
+            # Add predicted probabilities for classification models
+            if is_classifier and hasattr(pipeline, 'predict_proba'):
+                tune_predicted_proba = pipeline.predict_proba(tune_X)
+                if tune_predicted_proba.ndim == 2:
+                    plot_df = plot_df.with_columns(
+                        pl.Series("predicted_proba_class_1", tune_predicted_proba[:, 1])
+                    )
+            
+            create_diagnostic_plots(experiment, plot_df, model_type)
+    except Exception as e:
+        logger.error(f"Error creating diagnostic plots: {e}")
     
     # Log additional metadata about the experiment
     metadata = {
