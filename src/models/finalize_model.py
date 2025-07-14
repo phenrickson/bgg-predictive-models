@@ -102,10 +102,12 @@ def load_data(
     config: dict, 
     loader: BGGDataLoader, 
     logger: logging.Logger,
+    model_type: str = 'hurdle',
     end_year: Optional[int] = None, 
     min_ratings: Optional[float] = None,
     min_weights: Optional[float] = None,
-    recent_year_threshold: int = 2
+    recent_year_threshold: int = 2,
+    complexity_experiment: Optional[str] = None
 ) -> tuple:
     """
     Load training data with specified parameters.
@@ -113,10 +115,12 @@ def load_data(
     Args:
         config: Configuration dictionary
         loader: BGGDataLoader instance
+        model_type: Type of model being trained
         end_year: Year to filter data up to
         min_weights: Minimum weights filter
         recent_year_threshold: Number of years to consider "recent" for filtering
         logger: Logging instance
+        complexity_experiment: Optional name of complexity experiment for rating models
     
     Returns:
         Tuple of (dataframe, final_end_year)
@@ -303,15 +307,34 @@ def finalize_model(
     # Extract min_weights if available
     min_weights = extract_min_weights(experiment)
     
+    # For rating models, extract complexity experiment name from metadata
+    complexity_experiment = None
+    if model_type == 'rating':
+        # Try to extract complexity experiment from metadata
+        complexity_experiment = (
+            experiment.metadata.get('complexity_experiment') or 
+            experiment.metadata.get('config', {}).get('complexity_experiment')
+        )
+        
+        if not complexity_experiment:
+            raise ValueError(
+                "No complexity experiment found in metadata for rating model. "
+                "Ensure the rating model was trained with a --complexity-experiment argument."
+            )
+        
+        logger.info(f"Using complexity experiment: {complexity_experiment}")
+    
     # Load data
     df, final_end_year = load_data(
         config=config, 
         loader=loader, 
         logger=logger,
+        model_type=model_type,
         end_year=end_year, 
         min_ratings=0,
         min_weights=min_weights,
-        recent_year_threshold=recent_year_threshold
+        recent_year_threshold=recent_year_threshold,
+        complexity_experiment=complexity_experiment
     )
     
     # Prepare data with model-specific target column
