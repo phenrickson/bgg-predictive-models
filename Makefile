@@ -10,6 +10,8 @@ help:  ## Show this help message
 	@echo '  make help         Show this help message'
 	@echo '  make all          Fetch all data from BigQuery'
 	@echo '  make clean        Remove generated data files'
+	@echo '  make clean_experiments  Remove all experiment subfolders'
+	@echo '  make clean_ratings      Remove rating experiment subfolders'
 	@echo
 	@echo 'Optional arguments:'
 	@echo '  OUTPUT_DIR       Directory to save data files (default: data/raw)'
@@ -35,30 +37,59 @@ features_data: $(RAW_DIR)/game_features.parquet
 HURDLE_CANDIDATE ?= test-hurdle
 
 train_hurdle:
-	uv run -m src.models.hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.hurdle \
+	--experiment $(HURDLE_CANDIDATE)
 
 finalize_hurdle: 
-	uv run -m src.models.finalize_model --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.finalize_model \
+	--model-type hurdle --experiment $(HURDLE_CANDIDATE)
 
 score_hurdle: 
-	uv run -m src.models.score --model-type hurdle --experiment $(HURDLE_CANDIDATE)
+	uv run -m src.models.score \
+	--model-type hurdle \
+	--experiment $(HURDLE_CANDIDATE)
 
 hurdle: train_hurdle finalize_hurdle score_hurdle
-
 
 ## complexity model
 COMPLEXITY_CANDIDATE ?= test-complexity
 train_complexity:
-	uv run -m src.models.complexity --experiment $(COMPLEXITY_CANDIDATE)
+	uv run -m src.models.complexity \
+	--experiment $(COMPLEXITY_CANDIDATE)
 
 finalize_complexity: 
-	uv run -m src.models.finalize_model --model-type complexity --experiment $(COMPLEXITY_CANDIDATE)
+	uv run -m src.models.finalize_model \
+	--model-type complexity \
+	--experiment $(COMPLEXITY_CANDIDATE)
 
 score_complexity: 
-	uv run -m src.models.score --model-type complexity --experiment $(COMPLEXITY_CANDIDATE)
+	uv run -m src.models.score \
+	--model-type complexity \
+	--experiment $(COMPLEXITY_CANDIDATE)
 
 complexity: train_complexity finalize_complexity score_complexity
 
+## rating model
+RATING_CANDIDATE ?= test-rating
+train_rating:
+	uv run -m src.models.rating \
+	--complexity-experiment test-complexity \
+	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
+	--experiment $(RATING_CANDIDATE)
+
+finalize_rating: 
+	uv run -m src.models.finalize_model \
+	--model-type rating \
+	--experiment $(RATING_CANDIDATE)
+
+score_rating:
+	uv run -m src.models.score \
+	--model-type rating \
+	--experiment $(RATING_CANDIDATE) \
+	--complexity-predictions data/estimates/test-complexity_complexity_predictions.parquet \
+
+
+rating: train_rating finalize_rating score_rating
 
 ## view experiments
 experiment_dashboard:
@@ -72,6 +103,18 @@ clean_experiments:
 	if [ "$$confirm" = "y" ]; then \
 		rm -rf models/experiments/*/; \
 		echo "Subfolders deleted."; \
+	else \
+		echo "Aborted."; \
+	fi
+
+# remove rating experiments
+.PHONY: clean_ratings
+clean_ratings:
+	@echo "This will delete rating experiment subfolders in models/experiments/"
+	@read -p "Are you sure? (y/n) " confirm; \
+	if [ "$$confirm" = "y" ]; then \
+		rm -rf models/experiments/rating/*/; \
+		echo "Rating experiment subfolders deleted."; \
 	else \
 		echo "Aborted."; \
 	fi

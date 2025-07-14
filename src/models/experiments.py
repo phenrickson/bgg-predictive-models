@@ -798,6 +798,17 @@ def log_experiment(
     """
     logger = logging.getLogger(__name__)
     
+    # For rating models, add complexity experiment to metadata
+    if model_type in ['rating', 'regression']:
+        # Check if complexity experiment is provided in args
+        complexity_experiment = getattr(args, 'complexity_experiment', None)
+        
+        if complexity_experiment:
+            # Add complexity experiment to experiment metadata
+            experiment.metadata['complexity_experiment'] = complexity_experiment
+            experiment._save_metadata()
+            logger.info(f"Added complexity experiment '{complexity_experiment}' to metadata")
+    
     # Determine if the model is a classifier
     is_classifier = model_type == 'classification'
     
