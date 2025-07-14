@@ -101,10 +101,11 @@ def generate_model_description(
 def load_data(
     config: dict, 
     loader: BGGDataLoader, 
-    end_year: Optional[int], 
-    min_ratings: Optional[float],
-    min_weights: Optional[float],
-    logger: logging.Logger
+    logger: logging.Logger,
+    end_year: Optional[int] = None, 
+    min_ratings: Optional[float] = None,
+    min_weights: Optional[float] = None,
+    recent_year_threshold: int = 2
 ) -> tuple:
     """
     Load training data with specified parameters.
@@ -114,6 +115,7 @@ def load_data(
         loader: BGGDataLoader instance
         end_year: Year to filter data up to
         min_weights: Minimum weights filter
+        recent_year_threshold: Number of years to consider "recent" for filtering
         logger: Logging instance
     
     Returns:
@@ -121,20 +123,27 @@ def load_data(
     """
     current_year = datetime.now().year
     
-    # Dynamically calculate end year, excluding last two years
+    # Dynamically calculate end year, excluding recent years
     if end_year is None:
-        end_year = current_year - 2
+        end_year = current_year - recent_year_threshold
     
+    # Check if end_year is very recent
+    years_from_current = current_year - end_year
+    if years_from_current <= recent_year_threshold:
+        logger.info(f"End year {end_year} is within {recent_year_threshold} years of current year")
+        logger.info(f"Will filter out the most recent {recent_year_threshold} years of data")
+        end_year = current_year - recent_year_threshold
+        
     logger.info(f"Loading data through {end_year}")
     
     # Diagnostic logging for data loading parameters
     logger.info("Data Loading Parameters:")
-    logger.info(f"  End Train Year: {end_year + 1}")
+    logger.info(f"  End Train Year: {end_year}")
     logger.info(f"  Minimum Ratings: {min_ratings}")
     logger.info(f"  Minimum Weights: {min_weights}")
     
     df = loader.load_training_data(
-        end_train_year=end_year + 1, 
+        end_train_year=end_year, 
         min_ratings=min_ratings,
         min_weights=min_weights
     )
@@ -261,7 +270,8 @@ def finalize_model(
     version: Optional[int] = None,
     end_year: Optional[int] = None,
     description: Optional[str] = None,
-    sample_weight_base: Optional[float] = 10.0  # Optional base for complexity weight calculation
+    sample_weight_base: Optional[float] = 10.0,  # Optional base for complexity weight calculation
+    recent_year_threshold: int = 2  # New parameter for filtering recent years
 ):
     """Finalize a model by fitting its pipeline on full dataset.
     
@@ -297,10 +307,11 @@ def finalize_model(
     df, final_end_year = load_data(
         config=config, 
         loader=loader, 
+        logger=logger,
         end_year=end_year, 
-        min_ratings = 0,
+        min_ratings=0,
         min_weights=min_weights,
-        logger=logger
+        recent_year_threshold=recent_year_threshold
     )
     
     # Prepare data with model-specific target column
@@ -357,6 +368,8 @@ def main():
                        help="Optional end year for training data")
     parser.add_argument("--description", type=str,
                        help="Optional description of finalized model")
+    parser.add_argument("--recent-year-threshold", type=int, default=2,
+                       help="Number of years to consider 'recent' for filtering")
     
     args = parser.parse_args()
     finalize_model(
@@ -364,7 +377,8 @@ def main():
         experiment_name=args.experiment,
         version=args.version,
         end_year=args.end_year,
-        description=args.description
+        description=args.description,
+        recent_year_threshold=args.recent_year_threshold
     )
 
 if __name__ == "__main__":

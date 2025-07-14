@@ -583,13 +583,17 @@ def evaluate_model(
         mean_absolute_percentage_error
     )
     
-    metrics = {
-        'mse': mean_squared_error(y, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y, y_pred)),
-        'mae': mean_absolute_error(y, y_pred),
-        'r2': r2_score(y, y_pred),
-        'mape': mean_absolute_percentage_error(y, y_pred)
-    }
+    metrics = {}
+    
+    # Only compute regression metrics if it's not a classifier
+    if not is_classifier:
+        metrics = {
+            'mse': mean_squared_error(y, y_pred),
+            'rmse': np.sqrt(mean_squared_error(y, y_pred)),
+            'mae': mean_absolute_error(y, y_pred),
+            'r2': r2_score(y, y_pred),
+            'mape': mean_absolute_percentage_error(y, y_pred)
+        }
     
     # If it's a classifier, add classification metrics
     if is_classifier:

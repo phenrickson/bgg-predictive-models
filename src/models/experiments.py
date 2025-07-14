@@ -482,7 +482,9 @@ class Experiment:
         predictions: np.ndarray,
         actuals: np.ndarray,
         df: pl.DataFrame,
-        dataset: str
+        dataset: str,
+        predicted_proba: Optional[np.ndarray] = None,
+        threshold: Optional[float] = None
     ):
         """Log model predictions along with actual values and identifying information.
         
@@ -491,6 +493,8 @@ class Experiment:
             actuals: Array of actual values
             df: DataFrame containing identifying information (e.g., game IDs, names)
             dataset: Dataset name (e.g., 'train', 'tune', 'test')
+            predicted_proba: Optional array of predicted probabilities for classification models
+            threshold: Optional threshold used for generating predictions
         """
         # Create predictions DataFrame
         predictions_df = df.clone()
@@ -498,6 +502,26 @@ class Experiment:
             pl.Series("prediction", predictions),
             pl.Series("actual", actuals)
         ])
+        
+        # Add threshold column if provided
+        if threshold is not None:
+            predictions_df = predictions_df.with_columns(
+                pl.Series("threshold", [threshold] * len(predictions_df))
+            )
+        
+        # Add predicted probabilities if provided
+        if predicted_proba is not None:
+            # For binary classification, add probability of positive class
+            if predicted_proba.ndim == 1:
+                predictions_df = predictions_df.with_columns(
+                    pl.Series("predicted_proba", predicted_proba)
+                )
+            # For multiclass, add columns for each class probability
+            elif predicted_proba.ndim == 2:
+                for i in range(predicted_proba.shape[1]):
+                    predictions_df = predictions_df.with_columns(
+                        pl.Series(f"predicted_proba_class_{i}", predicted_proba[:, i])
+                    )
         
         # Save as parquet for efficient storage and reading
         predictions_file = self.exp_dir / f"{dataset}_predictions.parquet"
@@ -722,10 +746,26 @@ def log_experiment(
     """
     logger = logging.getLogger(__name__)
     
-    # Log metrics
-    experiment.log_metrics(train_metrics, "train")
-    experiment.log_metrics(tune_metrics, "tune")
-    experiment.log_metrics(test_metrics, "test")
+    # Determine if the model is a classifier
+    is_classifier = model_type == 'classification'
+    
+    # Filter metrics based on model type
+    def filter_metrics(metrics):
+        if is_classifier:
+            # Keep only classification metrics
+            return {k: v for k, v in metrics.items() 
+                    if k in ['accuracy', 'precision', 'recall', 'f1', 'f2', 'auc', 
+                             'log_loss', 'matthews_corr', 'confusion_matrix', 
+                             'true_negatives', 'false_positives', 'false_negatives', 'true_positives']}
+        else:
+            # Keep only regression metrics
+            return {k: v for k, v in metrics.items() 
+                    if k in ['mse', 'rmse', 'mae', 'r2', 'mape']}
+    
+    # Log filtered metrics
+    experiment.log_metrics(filter_metrics(train_metrics), "train")
+    experiment.log_metrics(filter_metrics(tune_metrics), "tune")
+    experiment.log_metrics(filter_metrics(test_metrics), "test")
     experiment.log_parameters(best_params)
     
     # For classification models, provide a more descriptive confusion matrix log
@@ -827,23 +867,74 @@ def log_experiment(
         logger.error("Continuing without saving feature importance")
     
     # Get and log predictions for validation and test sets
+    # Retrieve optimal threshold from experiment metadata
+    optimal_threshold = experiment.metadata.get('optimal_threshold', 0.5)
+    
     if tune_X is not None and tune_y is not None and tune_df is not None:
-        tune_predictions = pipeline.predict(tune_X)
-        experiment.log_predictions(
-            predictions=tune_predictions,
-            actuals=tune_y.values,
-            df=tune_df,
-            dataset="tune"
-        )
+        # For classification models, add predicted probabilities
+        if is_classifier:
+            try:
+                tune_predicted_proba = pipeline.predict_proba(tune_X)
+                # Use optimal threshold to generate predictions
+                tune_predictions = (tune_predicted_proba[:, 1] >= optimal_threshold).astype(int)
+                
+                experiment.log_predictions(
+                    predictions=tune_predictions,
+                    actuals=tune_y.values,
+                    df=tune_df,
+                    dataset="tune",
+                    predicted_proba=tune_predicted_proba
+                )
+            except AttributeError:
+                # Fallback if predict_proba is not available
+                tune_predictions = pipeline.predict(tune_X)
+                experiment.log_predictions(
+                    predictions=tune_predictions,
+                    actuals=tune_y.values,
+                    df=tune_df,
+                    dataset="tune"
+                )
+        else:
+            tune_predictions = pipeline.predict(tune_X)
+            experiment.log_predictions(
+                predictions=tune_predictions,
+                actuals=tune_y.values,
+                df=tune_df,
+                dataset="tune"
+            )
         
     if test_X is not None and test_y is not None and test_df is not None:
-        test_predictions = pipeline.predict(test_X)
-        experiment.log_predictions(
-            predictions=test_predictions,
-            actuals=test_y.values,
-            df=test_df,
-            dataset="test"
-        )
+        # For classification models, add predicted probabilities
+        if is_classifier:
+            try:
+                test_predicted_proba = pipeline.predict_proba(test_X)
+                # Use optimal threshold to generate predictions
+                test_predictions = (test_predicted_proba[:, 1] >= optimal_threshold).astype(int)
+                
+                experiment.log_predictions(
+                    predictions=test_predictions,
+                    actuals=test_y.values,
+                    df=test_df,
+                    dataset="test",
+                    predicted_proba=test_predicted_proba
+                )
+            except AttributeError:
+                # Fallback if predict_proba is not available
+                test_predictions = pipeline.predict(test_X)
+                experiment.log_predictions(
+                    predictions=test_predictions,
+                    actuals=test_y.values,
+                    df=test_df,
+                    dataset="test"
+                )
+        else:
+            test_predictions = pipeline.predict(test_X)
+            experiment.log_predictions(
+                predictions=test_predictions,
+                actuals=test_y.values,
+                df=test_df,
+                dataset="test"
+            )
     
     # Save pipeline
     experiment.save_pipeline(pipeline)
