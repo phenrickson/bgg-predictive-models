@@ -640,6 +640,76 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         df["mechanics_count"] = df["mechanics"].apply(count_mechanics)
         
         return df
+
+    def _create_categories_count(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add a feature counting the number of categories a game has."""
+        if "categories" not in df.columns:
+            return df
+        
+        df = df.copy()
+        
+        def count_categories(categories):
+            # Handle different possible input types
+            if categories is None:
+                return 0
+            elif isinstance(categories, list):
+                return len(categories)
+            elif hasattr(categories, '__array__'):  # Handle numpy arrays
+                return len(categories.tolist())
+            elif isinstance(categories, str):
+                # In case categories is a string representation of a list
+                try:
+                    return len(eval(categories))
+                except:
+                    return 0
+            else:
+                # Log unexpected type for debugging
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Unexpected categories type: {type(categories)}, value: {categories}")
+                return 0
+        
+        df["categories_count"] = df["categories"].apply(count_categories)
+        
+        return df
+
+    def _create_time_per_player(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create time per player feature by dividing max_playtime by max_players."""
+        df = df.copy()
+        
+        # Safely compute time per player, handling potential division by zero or NaN
+        def compute_time_per_player(max_playtime, max_players):
+            # Return NaN if either max_playtime or max_players is 0 or NaN
+            if pd.isna(max_playtime) or pd.isna(max_players) or max_playtime == 0 or max_players == 0:
+                return np.nan
+            return max_playtime / max_players
+        
+        df["time_per_player"] = df.apply(
+            lambda row: compute_time_per_player(row["max_playtime"], row["max_players"]), 
+            axis=1
+        )
+        
+        return df
+
+    def _create_description_word_count(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create a word count feature based on the description field."""
+        df = df.copy()
+        
+        def count_words(description):
+            # Handle None or NaN values
+            if pd.isna(description):
+                return 0
+            
+            # Convert to string to handle potential non-string types
+            description_str = str(description)
+            
+            # Split on whitespace and count non-empty words
+            words = description_str.split()
+            return len(words)
+        
+        df["description_word_count"] = df["description"].apply(count_words)
+        
+        return df
     
     def _create_player_dummies(self, df: pd.DataFrame) -> pd.DataFrame:
         """Create dummy variables for player counts."""
@@ -829,6 +899,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         if self.include_base_numeric:
             feature_names.extend([
                 "mechanics_count",
+                "categories_count",
+                "time_per_player",
+                "description_word_count",
                 "min_age",
                 "min_playtime",
                 "max_playtime"
@@ -928,6 +1001,69 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             
             mechanics_df["mechanics_count"] = X_base["mechanics"].apply(count_mechanics)
             feature_dfs.append(mechanics_df)
+        
+        # Create categories count if categories column exists
+        if "categories" in X_base.columns:
+            categories_df = pd.DataFrame(index=X_base.index)
+            
+            def count_categories(categories):
+                # Handle different possible input types
+                if categories is None:
+                    return 0
+                elif isinstance(categories, list):
+                    return len(categories)
+                elif hasattr(categories, '__array__'):  # Handle numpy arrays
+                    return len(categories.tolist())
+                elif isinstance(categories, str):
+                    # In case categories is a string representation of a list
+                    try:
+                        return len(eval(categories))
+                    except:
+                        return 0
+                else:
+                    # Log unexpected type for debugging
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Unexpected categories type: {type(categories)}, value: {categories}")
+                    return 0
+            
+            categories_df["categories_count"] = X_base["categories"].apply(count_categories)
+            feature_dfs.append(categories_df)
+        
+        # Create time per player feature
+        if "max_playtime" in X_base.columns and "max_players" in X_base.columns:
+            time_per_player_df = pd.DataFrame(index=X_base.index)
+            
+            def compute_time_per_player(max_playtime, max_players):
+                # Check for NaN or zero max_players to avoid division by zero
+                if pd.isna(max_playtime) or pd.isna(max_players) or max_players == 0:
+                    return np.nan
+                return max_playtime / max_players
+            
+            time_per_player_df["time_per_player"] = X_base.apply(
+                lambda row: compute_time_per_player(row["max_playtime"], row["max_players"]), 
+                axis=1
+            )
+            feature_dfs.append(time_per_player_df)
+        
+        # Create description word count feature
+        if "description" in X_base.columns:
+            description_word_count_df = pd.DataFrame(index=X_base.index)
+            
+            def count_words(description):
+                # Handle None or NaN values
+                if pd.isna(description):
+                    return 0
+                
+                # Convert to string to handle potential non-string types
+                description_str = str(description)
+                
+                # Split on whitespace and count non-empty words
+                words = description_str.split()
+                return len(words)
+            
+            description_word_count_df["description_word_count"] = X_base["description"].apply(count_words)
+            feature_dfs.append(description_word_count_df)
         
         # Create player dummies if enabled
         if self.create_player_dummies:
