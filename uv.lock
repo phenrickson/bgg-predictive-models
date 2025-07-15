@@ -115,6 +115,9 @@ requires-dist = [
     { name = "streamlit-aggrid", specifier = ">=1.1.6" },
 ]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "blinker"
 version = "1.9.0"
