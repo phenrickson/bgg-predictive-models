@@ -343,16 +343,21 @@ def tune_model(
     if not isinstance(metric, str):
         raise ValueError("Metric must be a string")
     
-    valid_metrics = ['rmse', 'log_loss', 'f1']
+    # Expanded list of valid metrics
+    valid_metrics = [
+        'rmse',  # Regression
+        'log_loss', 'f1', 'accuracy', 'precision', 'recall', 'auc',  # Classification
+        'mse', 'mae', 'r2', 'mape'  # Additional regression metrics
+    ]
     if metric not in valid_metrics:
         raise ValueError(f"Unsupported metric: {metric}. Choose from {valid_metrics}")
     
-    # Validate target values for log_loss metric
-    if metric == 'log_loss':
+    # Validate target values for specific metrics
+    if metric in ['log_loss', 'f1', 'accuracy', 'precision', 'recall', 'auc']:
         if not np.all(np.isin(train_y, [0, 1])):
-            raise ValueError("Training target values must be binary (0 or 1) for log_loss metric")
+            raise ValueError(f"Training target values must be binary (0 or 1) for {metric} metric")
         if not np.all(np.isin(tune_y, [0, 1])):
-            raise ValueError("Tuning target values must be binary (0 or 1) for log_loss metric")
+            raise ValueError(f"Tuning target values must be binary (0 or 1) for {metric} metric")
     
     # Validate pipeline
     if pipeline is None:
@@ -380,14 +385,32 @@ def tune_model(
     # Scoring functions using sklearn metrics
     from sklearn.metrics import (
         mean_squared_error, 
+        mean_absolute_error,
+        r2_score,
+        mean_absolute_percentage_error,
         log_loss, 
-        f1_score
+        f1_score,
+        accuracy_score,
+        precision_score,
+        recall_score,
+        roc_auc_score
     )
     
     scoring_functions = {
+        # Regression metrics
         'rmse': lambda y, y_pred: np.sqrt(mean_squared_error(y, y_pred)),
+        'mse': mean_squared_error,
+        'mae': mean_absolute_error,
+        'r2': r2_score,
+        'mape': mean_absolute_percentage_error,
+        
+        # Classification metrics
         'log_loss': log_loss,
-        'f1': f1_score
+        'f1': f1_score,
+        'accuracy': accuracy_score,
+        'precision': precision_score,
+        'recall': recall_score,
+        'auc': roc_auc_score
     }
     
     # Note: Metric validation already done above

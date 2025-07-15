@@ -7,7 +7,6 @@ from typing import Dict, Any, Optional, Tuple
 # Project imports
 from src.models.experiments import (
     ExperimentTracker, 
-    extract_model_coefficients, 
     log_experiment,
     mean_absolute_percentage_error
 )

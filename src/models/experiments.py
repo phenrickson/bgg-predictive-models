@@ -473,13 +473,20 @@ class Experiment:
             return pickle.load(f)
     
     def log_coefficients(self, coefficients_df: pl.DataFrame):
-        """Log model coefficients.
+        """Log model coefficients or feature importance.
         
         Args:
-            coefficients_df: DataFrame containing coefficient information
+            coefficients_df: DataFrame containing coefficient or feature importance information
         """
-        coef_file = self.exp_dir / "coefficients.csv"
-        coefficients_df.write_csv(coef_file)
+        # Determine the file type based on column names
+        if 'coefficient' in coefficients_df.columns:
+            coef_file = self.exp_dir / "coefficients.csv"
+            coefficients_df.write_csv(coef_file)
+        elif 'feature_importance' in coefficients_df.columns:
+            coef_file = self.exp_dir / "feature_importance.csv"
+            coefficients_df.write_csv(coef_file)
+        else:
+            raise ValueError("DataFrame must contain either 'coefficient' or 'feature_importance' column")
         
     def log_predictions(
         self,
@@ -592,16 +599,20 @@ class Experiment:
             return json.load(f)
     
     def get_coefficients(self) -> pl.DataFrame:
-        """Get model coefficients.
+        """Get model coefficients or feature importance.
         
         Returns:
-            DataFrame containing coefficient information
+            DataFrame containing coefficient or feature importance information
         """
         coef_file = self.exp_dir / "coefficients.csv"
-        if not coef_file.exists():
-            raise ValueError("No coefficients found")
+        importance_file = self.exp_dir / "feature_importance.csv"
         
-        return pl.read_csv(coef_file)
+        if coef_file.exists():
+            return pl.read_csv(coef_file)
+        elif importance_file.exists():
+            return pl.read_csv(importance_file)
+        else:
+            raise ValueError("No coefficients or feature importance found")
 
 def mean_absolute_percentage_error(y_true, y_pred):
     """
@@ -616,25 +627,25 @@ def mean_absolute_percentage_error(y_true, y_pred):
     """
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
-def extract_model_coefficients(
+def extract_feature_importance(
     fitted_pipeline: Pipeline, 
     model_type: Optional[str] = None
 ) -> pd.DataFrame:
     """
-    Extract coefficients and feature names from a fitted pipeline.
+    Extract feature importance or coefficients from a fitted pipeline.
     
     Parameters
     ----------
     fitted_pipeline : Pipeline
         A fitted scikit-learn pipeline containing a preprocessor and model
     model_type : Optional[str]
-        Type of model to handle specific coefficient extraction
+        Type of model to handle specific feature importance extraction
         
     Returns
     -------
     pd.DataFrame
-        DataFrame containing feature names, coefficients, and absolute coefficients,
-        sorted by absolute coefficient value in descending order.
+        DataFrame containing feature names, importance values, and absolute importance,
+        sorted by absolute importance value in descending order.
     """
     # Get the preprocessor and model from pipeline
     preprocessor = fitted_pipeline.named_steps['preprocessor']
@@ -665,46 +676,48 @@ def extract_model_coefficients(
             else:
                 raise ValueError("Could not get feature names from any preprocessing step")
     
-    # Handle different model types for coefficient extraction
+    # Handle different model types for feature importance extraction
     from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
     from sklearn.base import ClassifierMixin, RegressorMixin
     
-    # Determine coefficient extraction method based on model type
+    # Determine feature importance extraction method based on model type
     if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso)):
         # For linear models, use coef_ attribute
         if not hasattr(model, 'coef_'):
             raise ValueError("Model does not have coefficients")
         
         # Handle binary classification (logistic regression)
-        coefficients = model.coef_[0] if isinstance(model, LogisticRegression) else model.coef_
+        importance_values = model.coef_[0] if isinstance(model, LogisticRegression) else model.coef_
+        importance_type = 'coefficient'
     else:
         # For non-linear models, use feature importances if available
         if hasattr(model, 'feature_importances_'):
-            coefficients = model.feature_importances_
+            importance_values = model.feature_importances_
+            importance_type = 'feature_importance'
         else:
-            raise ValueError(f"Cannot extract coefficients for model type: {type(model)}")
+            raise ValueError(f"Cannot extract feature importance for model type: {type(model)}")
     
     # Validate lengths match
-    if len(feature_names) != len(coefficients):
+    if len(feature_names) != len(importance_values):
         raise ValueError(
             f"Mismatch between number of features ({len(feature_names)}) "
-            f"and coefficients ({len(coefficients)})"
+            f"and {importance_type} values ({len(importance_values)})"
         )
     
-    # Create DataFrame with coefficients
-    coef_df = pd.DataFrame({
+    # Create DataFrame with importance values
+    importance_df = pd.DataFrame({
         'feature': feature_names,
-        'coefficient': coefficients,
-        'abs_coefficient': np.abs(coefficients)
+        f'{importance_type}': importance_values,
+        f'abs_{importance_type}': np.abs(importance_values)
     })
     
-    # Sort by absolute coefficient value
-    coef_df = coef_df.sort_values('abs_coefficient', ascending=False)
+    # Sort by absolute importance value
+    importance_df = importance_df.sort_values(f'abs_{importance_type}', ascending=False)
     
     # Add rank
-    coef_df['rank'] = range(1, len(coef_df) + 1)
+    importance_df['rank'] = range(1, len(importance_df) + 1)
     
-    return coef_df
+    return importance_df
 
 # Learning curve function removed as per user request
 def create_diagnostic_plots(
@@ -876,14 +889,17 @@ def log_experiment(
     # Extract and save feature importance
     try:
         # Extract feature importance
-        importance_df = extract_model_coefficients(pipeline, model_type=model_type)
+        importance_df = extract_feature_importance(pipeline, model_type=model_type)
         importance_pl = pl.from_pandas(importance_df)
         experiment.log_coefficients(importance_pl)
         
         # Log top features
-        logger.info("Top 10 most important features (by absolute coefficient):")
+        importance_column = 'coefficient' if 'coefficient' in importance_df.columns else 'feature_importance'
+        abs_importance_column = f'abs_{importance_column}'
+        
+        logger.info(f"Top 10 most important features (by absolute {importance_column}):")
         for _, row in importance_df.head(10).iterrows():
-            logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row['coefficient']:8.4f}")
+            logger.info(f"  {row['rank']:2d}. {row['feature']:30s} = {row[importance_column]:8.4f}")
         
         # Save model info
         model_info = {

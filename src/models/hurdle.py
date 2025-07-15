@@ -32,7 +32,6 @@ from sklearn.metrics import (
 # Project imports
 from src.models.experiments import (
     ExperimentTracker, 
-    extract_model_coefficients,
     log_experiment
 )
 
@@ -53,6 +52,8 @@ from src.models.training import (
 
 # CatBoost imports
 from catboost import CatBoostClassifier
+# LightGBM imports
+import lightgbm as lgb
 from typing import Type, Union, Tuple
 
 def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
@@ -159,8 +160,12 @@ def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]
     CLASSIFIER_MAPPING = {
         'logistic': LogisticRegression,
         'rf': RandomForestClassifier,
+        'oblique_rf': ObliqueRandomForestClassifier,
         'svc': SVC,
-        'catboost': CatBoostClassifier
+        'catboost': CatBoostClassifier,
+        'lightgbm': lambda: lgb.LGBMClassifier(
+            objective='binary'
+        )
     }
     
     PARAM_GRIDS = {
@@ -185,6 +190,14 @@ def configure_model(classifier_name: str) -> Tuple[BaseEstimator, Dict[str, Any]
             'model__depth': [4, 6, 8],
             'model__l2_leaf_reg': [1, 3, 5],
             'model__random_strength': [0.5, 1.0, 1.5]
+        },
+        'lightgbm': {
+            'model__n_estimators': [500],
+            'model__learning_rate': [0.01, 0.05],
+            'model__max_depth': [3, 7],
+            'model__num_leaves': [10, 20, 50],
+            'model__min_child_samples': [20],
+            'model__scale_pos_weight': [1, 2, 5, 7]
         }
     }
     
@@ -214,7 +227,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--local-data", type=str,
                        help="Path to local parquet file for training data")
     parser.add_argument("--model", type=str, default="logistic",
-                       choices=['logistic', 'rf', 'svc', 'catboost'],
+                       choices=['logistic', 'rf', 'oblique_rf', 'svc', 'catboost', 'lightgbm'],
                        help="Classifier type to use")
     parser.add_argument("--metric", type=str, default="log_loss",
                        choices=["log_loss", "f1", "auc"],
