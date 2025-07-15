@@ -161,19 +161,29 @@ def select_X_y(
         return X, y
 
 def create_preprocessing_pipeline(
+    model_type: str = 'linear',
     **kwargs
 ) -> Pipeline:
     """
     Create a flexible preprocessing pipeline with configurable parameters.
     
     Args:
+        model_type : str, optional (default='linear')
+            Type of preprocessor to create. 
+            Options:
+            - 'linear': Full preprocessing with scaling and transformations
+            - 'tree': Minimal preprocessing suitable for tree-based models
         **kwargs: Keyword arguments to customize preprocessing
     
     Returns:
         Scikit-learn Pipeline with preprocessing steps
+    
+    Raises:
+        ValueError: If an unsupported model_type is provided
     """
     # Default preprocessing configuration
     default_config = {
+        'model_type': model_type,  # Add model_type to default config
         'reference_year': 2000,
         'normalization_factor': 25,
         'log_columns': ['min_age', 'min_playtime', 'max_playtime'],

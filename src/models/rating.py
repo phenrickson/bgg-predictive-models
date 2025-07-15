@@ -146,6 +146,9 @@ def parse_arguments() -> argparse.Namespace:
                        help="Number of iterations without improvement before early stopping")
     parser.add_argument("--use-sample-weights", action="store_true", default=False,
                        help="Enable sample weights based on number of ratings")
+    parser.add_argument("--preprocessor-type", type=str, default="linear",
+                       choices=['linear', 'tree'],
+                       help="Type of preprocessor to use")
     
     args = parser.parse_args()
     
@@ -237,7 +240,7 @@ def main():
     
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
-    preprocessor = create_preprocessing_pipeline()
+    preprocessor = create_preprocessing_pipeline(model_type=args.preprocessor_type)
     pipeline = Pipeline([
         ('preprocessor', preprocessor),
         ('model', model)
@@ -246,6 +249,7 @@ def main():
     # Log experiment details
     logger.info(f"Training experiment: {args.experiment}")
     logger.info(f"model: {model.__class__.__name__}")
+    logger.info(f"Preprocessor Type: {args.preprocessor_type}")
     logger.info(f"Parameter Grid: {param_grid}")
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")

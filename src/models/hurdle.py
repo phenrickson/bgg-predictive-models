@@ -221,6 +221,9 @@ def parse_arguments() -> argparse.Namespace:
                        help="Metric to optimize during hyperparameter tuning")
     parser.add_argument("--patience", type=int, default=15,
                        help="Number of iterations without improvement before early stopping")
+    parser.add_argument("--preprocessor-type", type=str, default="linear",
+                       choices=['linear', 'tree'],
+                       help="Type of preprocessor to use")
     
     args = parser.parse_args()
     
@@ -266,6 +269,7 @@ def main():
     # Log experiment details
     logger.info(f"Training experiment: {args.experiment}")
     logger.info(f"Classifier: {model.__class__.__name__}")
+    logger.info(f"Preprocessor Type: {args.preprocessor_type}")
     logger.info(f"Parameter Grid: {param_grid}")
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
