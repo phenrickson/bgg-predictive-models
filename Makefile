@@ -92,7 +92,7 @@ score_rating:
 rating: train_rating finalize_rating score_rating
 
 ## users rated model
-USERS_RATED_CANDIDATE ?= test-rating
+USERS_RATED_CANDIDATE ?= test-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--complexity-experiment test-complexity \
