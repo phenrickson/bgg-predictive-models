@@ -90,6 +90,9 @@ class BGGDataLoader:
         """
         where_clauses = [f"year_published <= {end_train_year}"]
         
+        # Add min_ratings filter
+        where_clauses.append(f"users_rated >= {min_ratings}")
+        
         if min_weights is not None:
             where_clauses.append(f"num_weights >= {min_weights}")
         

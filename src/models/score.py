@@ -35,7 +35,7 @@ def extract_threshold(
     experiment_name: str, 
     model_type: str
 ) -> Optional[float]:
-    """Extract threshold from the most recent version's model_info.json file.
+    """Extract threshold from the most recent version's metadata or model_info.json file.
     
     Args:
         experiment_name: Name of the experiment
@@ -72,7 +72,21 @@ def extract_threshold(
         latest_experiment['version']
     )
     
-    # Look for model_info.json in the experiment directory
+    # First, check metadata.json for optimal_threshold
+    metadata_path = experiment.exp_dir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                threshold = metadata.get('metadata', {}).get('optimal_threshold')
+                
+                if threshold is not None:
+                    print(f"Found threshold {threshold} in {metadata_path}")
+                    return threshold
+        except Exception as e:
+            print(f"Warning: Error reading {metadata_path}: {e}")
+    
+    # Then, look for model_info.json in the experiment directory
     model_info_path = experiment.exp_dir / "model_info.json"
     
     if model_info_path.exists():
@@ -88,7 +102,7 @@ def extract_threshold(
             print(f"Warning: Error reading {model_info_path}: {e}")
     
     # If no threshold found
-    print("No threshold found in model_info.json")
+    print("No threshold found in metadata.json or model_info.json")
     return None
 
 def load_model(experiment_name: str, model_type: Optional[str] = None):
@@ -201,7 +215,8 @@ def load_scoring_data(
     experiment_name: Optional[str] = None,
     model_type: str = "hurdle",
     start_year: Optional[int] = None,
-    end_year: Optional[int] = None
+    end_year: Optional[int] = None,
+    complexity_predictions: Optional[pl.DataFrame] = None
 ) -> pl.DataFrame:
     """
     Load data for scoring based on provided parameters.
@@ -212,6 +227,7 @@ def load_scoring_data(
         model_type: Type of model being used
         start_year: First year of data to include
         end_year: Last year of data to include
+        complexity_predictions: Optional DataFrame with pre-computed complexity predictions
     
     Returns:
         Polars DataFrame with data to be scored
@@ -274,17 +290,28 @@ def load_scoring_data(
     where_str = " AND ".join(where_clause)
     
     # Load data with optional filtering
-    return loader.load_data(
+    df = loader.load_data(
         where_clause=where_str,
         preprocessor=None
     )
+    
+    # If complexity predictions are provided and model requires them, join predictions
+    if complexity_predictions is not None and model_type == "rating":
+        print("Joining pre-computed complexity predictions")
+        df = df.join(complexity_predictions.select(['game_id', 'predicted_complexity']), on='game_id', how='inner')
+        
+        if len(df) == 0:
+            raise ValueError("No games remain after joining with complexity predictions")
+    
+    return df
 
 def predict_data(
     pipeline,
     df: pl.DataFrame,
     experiment_name: str,
-    model_type: str = "hurdle"
-) -> Tuple[np.ndarray, np.ndarray, Optional[float]]:
+    model_type: str = "hurdle",
+    complexity_predictions: Optional[pl.DataFrame] = None
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[float]]:
     """
     Predict data using the given pipeline and model type.
     
@@ -295,7 +322,7 @@ def predict_data(
         model_type: Type of model being used
     
     Returns:
-        Tuple of (predicted_prob, predicted_class, threshold)
+        Tuple of (predicted_values, None, threshold)
     """
     import numpy as np
     from src.models.experiments import ExperimentTracker
@@ -313,7 +340,7 @@ def predict_data(
         print(f"Using classification threshold: {threshold}")
         
         predicted_class = predictions >= threshold
-        predicted_prob = predictions
+        predicted_values = predictions
     elif model_type == "complexity":
         # Diagnostic logging for complexity model
         print("Complexity Model Prediction Diagnostics:")
@@ -334,26 +361,60 @@ def predict_data(
         print(f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}")
         
         # Constrain predictions to 1-5 range
-        predicted_class = np.clip(predictions, 1, 5)
-        print(f"Constrained predictions: {predicted_class}")
+        predicted_values = np.clip(predictions, 1, 5)
+        print(f"Constrained predictions: {predicted_values}")
         
-        predicted_prob = predicted_class  # For complexity, prob is the same as prediction
+        predicted_class = None  # No predicted_class for regression
         threshold = None  # No threshold for complexity
-    elif model_type == "users_rated":
-        # Regression outcome for users_rated
-        predictions = pipeline.predict(df.to_pandas())
-        predicted_class = predictions
-        predicted_prob = predictions
+    elif model_type in ["users_rated", "rating"]:
+        # Regression outcome for rating and users_rated models
+        print(f"{model_type.capitalize()} Model Prediction Diagnostics:")
+
+        # Convert to pandas for prediction
+        df_pandas = df.to_pandas()
+        
+        print(f"Input DataFrame shape: {df.shape}")
+        print(f"Input columns: {df.columns}")
+        
+        # Predict and log details
+        predictions = pipeline.predict(df_pandas)
+        print(f"Raw predictions: {predictions}")
+        print(f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}")
+        
+        # Inverse transform log predictions for users_rated
+        if model_type == "users_rated":
+            # First apply expm1, then round to nearest 50, with a minimum of 25
+            predicted_values = np.maximum(np.round(np.expm1(predictions) / 50) * 50, 25)
+        else:
+            # Constrain rating predictions to appropriate range
+            predicted_values = np.clip(predictions, 1, 10)
+        
+        print(f"Transformed predictions: {predicted_values}")
+        
+        predicted_class = None  # No predicted_class for regression
         threshold = None  # No threshold for regression
+    elif model_type == "hurdle":
+        # Use predict_proba for hurdle model
+        predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
+        
+        # Try to extract threshold from the experiment
+        threshold = extract_threshold(experiment_name, model_type)
+        
+        # Use default threshold of 0.5 if none found
+        threshold = threshold if threshold is not None else 0.5
+        print(f"Using classification threshold: {threshold}")
+        
+        predicted_class = predictions >= threshold
+        predicted_values = predictions
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
     
-    return predicted_prob, predicted_class, threshold
+    return predicted_values, predicted_class, threshold
 
 def prepare_results(
     df: pl.DataFrame, 
-    predicted_prob: np.ndarray, 
-    predicted_class: np.ndarray, 
+    predicted_values: np.ndarray, 
+    predicted_class: Optional[np.ndarray], 
     model_type: str,
     threshold: Optional[float] = None
 ) -> pl.DataFrame:
@@ -362,8 +423,8 @@ def prepare_results(
     
     Args:
         df: Original input DataFrame
-        predicted_prob: Predicted probabilities
-        predicted_class: Predicted classes
+        predicted_values: Predicted values
+        predicted_class: Predicted classes (for classification models)
         model_type: Type of model being used
         threshold: Optional threshold used for classification
     
@@ -377,21 +438,41 @@ def prepare_results(
             "name", 
             "year_published"
         ]).with_columns([
-            pl.Series("predicted_complexity", predicted_class),
+            pl.Series("predicted_complexity", predicted_values),
             pl.Series("complexity", df.select("complexity").to_pandas().squeeze())
         ])
-    else:
-        # Existing logic for other model types
+    elif model_type == "rating":
         results = df.select([
             "game_id", 
             "name", 
             "year_published"
         ]).with_columns([
-            pl.Series("predicted_prob", predicted_prob),
+            pl.Series("predicted_rating", predicted_values),
+            pl.Series("rating", df.select("rating").to_pandas().squeeze())
+        ])
+    elif model_type == "users_rated":
+        results = df.select([
+            "game_id", 
+            "name", 
+            "year_published"
+        ]).with_columns([
+            pl.Series("predicted_users_rated", predicted_values),
+            pl.Series("users_rated", df.select("users_rated").to_pandas().squeeze())
+        ])
+    elif model_type == "hurdle":
+        # Existing logic for hurdle model
+        results = df.select([
+            "game_id", 
+            "name", 
+            "year_published"
+        ]).with_columns([
+            pl.Series("predicted_prob", predicted_values),
             pl.Series("predicted_class", predicted_class),
             pl.Series("hurdle", df.select("hurdle").to_pandas().squeeze()),
             pl.Series("threshold", [threshold] * len(df) if threshold is not None else [None] * len(df))  # Add threshold used
         ])
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
     
     return results
 
@@ -452,6 +533,11 @@ def save_and_display_results(
             "game_id", "name", "year_published", 
             "predicted_complexity", "complexity"
         ]
+    elif model_type == "rating":
+        sample_columns = [
+            "game_id", "name", "year_published", 
+            "predicted_rating", "rating"
+        ]
     elif model_type == "hurdle":
         sample_columns = [
             "game_id", "name", "year_published", 
@@ -461,13 +547,13 @@ def save_and_display_results(
     elif model_type == "users_rated":
         sample_columns = [
             "game_id", "name", "year_published", 
-            "predicted_class"  # For regression, predicted_class is the prediction
+            "predicted_users_rated", "users_rated"
         ]
     else:
         # Fallback to default columns
         sample_columns = [
             "game_id", "name", "year_published", 
-            "predicted_prob", "predicted_class"
+            "predicted", "predicted_class"
         ]
     
     print(results.select(sample_columns).head())
@@ -481,7 +567,8 @@ def score_data(
     end_year: int = None, 
     min_ratings: int = 0, 
     output_path: str = None,
-    model_type: str = "hurdle"
+    model_type: str = "hurdle",
+    complexity_predictions: Optional[pl.DataFrame] = None
 ):
     """Score data using the finalized model.
     
@@ -521,7 +608,8 @@ def score_data(
         experiment_name=experiment_name,
         model_type=model_type,
         start_year=start_year,
-        end_year=end_year
+        end_year=end_year,
+        complexity_predictions=complexity_predictions
     )
     
     # Predict data
@@ -529,7 +617,8 @@ def score_data(
         pipeline, 
         df, 
         experiment_name,
-        model_type=model_type
+        model_type=model_type,
+        complexity_predictions=complexity_predictions
     )
     
     # Prepare results
@@ -567,6 +656,8 @@ def main():
                        help="Minimum number of ratings to filter games")
     parser.add_argument("--output", 
                        help="Path to save predictions")
+    parser.add_argument("--complexity-predictions", 
+                       help="Path to parquet file with pre-computed complexity predictions")
     
     args = parser.parse_args()
     
@@ -577,6 +668,11 @@ def main():
         model_type = args.model_type
         experiment_name = args.experiment
     
+    # Load complexity predictions if provided
+    complexity_predictions = None
+    if args.complexity_predictions:
+        complexity_predictions = pl.read_parquet(args.complexity_predictions)
+    
     score_data(
         data_path=args.data,
         experiment_name=experiment_name,
@@ -584,7 +680,8 @@ def main():
         end_year=args.end_year,
         min_ratings=args.min_ratings,
         output_path=args.output,
-        model_type=model_type
+        model_type=model_type,
+        complexity_predictions=complexity_predictions
     )
 
 if __name__ == "__main__":
