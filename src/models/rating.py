@@ -235,6 +235,11 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
+def calculate_sample_weights(users_rated: pd.Series) -> np.ndarray:
+    """Calculate sample weights based on number of user ratings."""
+    return np.sqrt(users_rated) / np.sqrt(users_rated.max())
+
+
 def main():
     """Main script for training, tuning, and testing a rating regression model."""
     # Parse arguments and setup logging
@@ -329,6 +334,21 @@ def main():
     logger.info(f"Optimization metric: {args.metric}")
     logger.info(f"Feature dimensions: Train {train_X.shape}, Tune {tune_X.shape}")
 
+    # Calculate sample weights if enabled
+    train_sample_weights = None
+    tune_sample_weights = None
+    if args.use_sample_weights:
+        train_sample_weights = calculate_sample_weights(train_df["users_rated"])
+        tune_sample_weights = calculate_sample_weights(tune_df["users_rated"])
+
+        logger.info("Sample Weights Diagnostic:")
+        logger.info(
+            f"  Train weights - min: {train_sample_weights.min():.4f}, max: {train_sample_weights.max():.4f}, mean: {train_sample_weights.mean():.4f}"
+        )
+        logger.info(
+            f"  Tune weights - min: {tune_sample_weights.min():.4f}, max: {tune_sample_weights.max():.4f}, mean: {tune_sample_weights.mean():.4f}"
+        )
+
     # Tune model
     tuned_pipeline, best_params = tune_model(
         pipeline=pipeline,
@@ -339,6 +359,7 @@ def main():
         param_grid=param_grid,
         metric=args.metric,
         patience=args.patience,
+        sample_weights=train_sample_weights,
     )
 
     # Fit on train data
@@ -353,8 +374,21 @@ def main():
     X_combined = pd.concat([train_X, tune_X])
     y_combined = pd.concat([train_y, tune_y])
 
+    # Combine sample weights if used
+    combined_sample_weights = None
+    if args.use_sample_weights:
+        combined_sample_weights = np.concatenate(
+            [train_sample_weights, tune_sample_weights]
+        )
+        logger.info("Combined Sample Weights Diagnostic:")
+        logger.info(
+            f"  Combined weights - min: {combined_sample_weights.min():.4f}, max: {combined_sample_weights.max():.4f}, mean: {combined_sample_weights.mean():.4f}"
+        )
+
     # Fit final model
-    final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
+    final_pipeline = clone(tuned_pipeline).fit(
+        X_combined, y_combined, sample_weight=combined_sample_weights
+    )
 
     # Evaluate on test set (filtered)
     test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
@@ -363,19 +397,32 @@ def main():
     tracker = ExperimentTracker("rating", args.output_dir)
 
     # Create experiment
+    experiment_metadata = {
+        "train_end_year_exclusive": args.train_end_year,
+        "tune_start_year": args.tune_start_year,
+        "tune_end_year": args.tune_end_year,
+        "test_start_year": args.test_start_year,
+        "test_end_year": args.test_end_year,
+        "model_type": "rating_regression",
+        "target": "rating",
+        "min_ratings": args.min_ratings,
+    }
+
+    # Add sample weight metadata if used
+    if args.use_sample_weights:
+        experiment_metadata.update(
+            {
+                "sample_weights": {
+                    "method": "sqrt_users_rated",
+                    "description": "Sample weights calculated as sqrt(users_rated) / sqrt(max(users_rated))",
+                }
+            }
+        )
+
     experiment = tracker.create_experiment(
         name=args.experiment,
         description=args.description,
-        metadata={
-            "train_end_year_exclusive": args.train_end_year,
-            "tune_start_year": args.tune_start_year,
-            "tune_end_year": args.tune_end_year,
-            "test_start_year": args.test_start_year,
-            "test_end_year": args.test_end_year,
-            "model_type": "rating_regression",
-            "target": "rating",
-            "min_ratings": args.min_ratings,
-        },
+        metadata=experiment_metadata,
         config={
             "model_params": best_params,
             "preprocessing": {
