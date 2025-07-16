@@ -240,6 +240,66 @@ def calculate_sample_weights(users_rated: pd.Series) -> np.ndarray:
     return np.sqrt(users_rated) / np.sqrt(users_rated.max())
 
 
+def stratified_evaluation(
+    model,
+    X: pd.DataFrame,
+    y: pd.Series,
+    users_rated: pd.Series,
+    dataset_name: str = "test",
+) -> Dict[str, Dict[str, float]]:
+    """
+    Perform stratified evaluation of model performance across different rating count buckets.
+
+    Args:
+        model: Trained model
+        X: Features
+        y: True target values
+        users_rated: Number of users who rated each game
+        dataset_name: Name of the dataset for logging
+
+    Returns:
+        Dictionary of performance metrics for each rating count bucket
+    """
+    logger = logging.getLogger(__name__)
+
+    # Define rating count buckets
+    buckets = {
+        "high_confidence": users_rated >= 25,
+        "medium_confidence": (users_rated >= 15) & (users_rated < 25),
+        "low_confidence": (users_rated >= 10) & (users_rated < 15),
+    }
+
+    # Compute metrics for each bucket
+    stratified_metrics = {}
+    for bucket_name, mask in buckets.items():
+        # Convert mask to boolean index
+        mask_index = mask.to_numpy()
+
+        if mask_index.sum() == 0:
+            logger.info(f"No games in {bucket_name} bucket for {dataset_name}")
+            continue
+
+        X_bucket = X.loc[mask_index]
+        y_bucket = y.loc[mask_index]
+
+        # Compute metrics for this bucket
+        bucket_metrics = {
+            "mse": mean_squared_error(y_bucket, model.predict(X_bucket)),
+            "rmse": np.sqrt(mean_squared_error(y_bucket, model.predict(X_bucket))),
+            "mae": mean_absolute_error(y_bucket, model.predict(X_bucket)),
+            "r2": r2_score(y_bucket, model.predict(X_bucket)),
+            "n_samples": len(y_bucket),
+        }
+
+        logger.info(f"{dataset_name} - {bucket_name} Metrics:")
+        for metric, value in bucket_metrics.items():
+            logger.info(f"  {metric}: {value:.4f}")
+
+        stratified_metrics[bucket_name] = bucket_metrics
+
+    return stratified_metrics
+
+
 def main():
     """Main script for training, tuning, and testing a rating regression model."""
     # Parse arguments and setup logging
@@ -385,13 +445,24 @@ def main():
             f"  Combined weights - min: {combined_sample_weights.min():.4f}, max: {combined_sample_weights.max():.4f}, mean: {combined_sample_weights.mean():.4f}"
         )
 
-    # Fit final model
+    # Fit final model with step-specific sample weights
     final_pipeline = clone(tuned_pipeline).fit(
-        X_combined, y_combined, sample_weight=combined_sample_weights
+        X_combined,
+        y_combined,
+        model__sample_weight=(
+            np.asarray(combined_sample_weights)
+            if combined_sample_weights is not None
+            else None
+        ),
     )
 
     # Evaluate on test set (filtered)
     test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
+
+    # Perform stratified evaluation
+    stratified_test_metrics = stratified_evaluation(
+        final_pipeline, test_X, test_y, test_df["users_rated"], dataset_name="test"
+    )
 
     # Log experiment results
     tracker = ExperimentTracker("rating", args.output_dir)
@@ -480,6 +551,7 @@ def main():
         best_params=best_params,
         args=args,
         model_type="regression",
+        stratified_metrics=stratified_test_metrics,
     )
 
     logger.info("Training complete!")

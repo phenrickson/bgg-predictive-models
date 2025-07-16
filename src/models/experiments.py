@@ -407,7 +407,13 @@ class Experiment:
             logger.info(f"  Sample Weight Mean: {sample_weight.mean()}")
 
             # Fit with sample weights using model__sample_weight
-            pipeline.fit(X, y, model__sample_weight=sample_weight)
+            pipeline.fit(
+                X,
+                y,
+                model__sample_weight=(
+                    np.asarray(sample_weight) if sample_weight is not None else None
+                ),
+            )
         else:
             pipeline.fit(X, y)
 
@@ -826,6 +832,7 @@ def log_experiment(
     tune_y: Optional[pd.Series] = None,
     test_y: Optional[pd.Series] = None,
     model_type: str = "regression",
+    stratified_metrics: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> None:
     """
     Log all experiment results and artifacts with flexibility for different model types.
@@ -1170,8 +1177,25 @@ def log_experiment(
         "feature_count": train_X.shape[1] if train_X is not None else None,
     }
 
+    # Add stratified metrics to metadata if provided
+    if stratified_metrics is not None:
+        metadata["stratified_metrics"] = stratified_metrics
+
     # Add to existing metadata
     experiment.metadata.update(metadata)
     experiment._save_metadata()
+
+    # Log stratified metrics if available
+    if stratified_metrics is not None:
+        logger.info("Stratified Metrics:")
+        for bucket, metrics in stratified_metrics.items():
+            logger.info(f"  {bucket}:")
+            for metric, value in metrics.items():
+                # Round numeric metrics to 3 decimal places
+                if isinstance(value, (int, float)):
+                    logger.info(f"    {metric}: {value:.3f}")
+                else:
+                    # For non-numeric metrics, log as-is
+                    logger.info(f"    {metric}: {value}")
 
     logger.info("Experiment logging complete")

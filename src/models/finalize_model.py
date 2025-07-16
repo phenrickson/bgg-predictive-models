@@ -278,6 +278,13 @@ def extract_sample_weights(
 
             # If found and is a list or numpy array, convert to numpy array
             if current is not None:
+                # Handle dictionary case
+                if isinstance(current, dict):
+                    # If it's a dictionary with a 'weights' key, extract that
+                    if "weights" in current:
+                        current = current["weights"]
+
+                # Convert to numpy array
                 return np.array(current)
 
         # For rating model, check for sample weight method
@@ -336,8 +343,16 @@ def finalize_model(
     config = load_config()
     loader = BGGDataLoader(config)
 
-    # Extract min_weights if available
+    # Extract min_weights and min_ratings if available
     min_weights = extract_min_weights(experiment)
+
+    # Extract min_ratings from experiment metadata
+    min_ratings = experiment.metadata.get("min_ratings")
+    if min_ratings is None:
+        # Fallback to config or default
+        min_ratings = experiment.metadata.get("config", {}).get("min_ratings", 0)
+
+    logger.info(f"Using minimum ratings: {min_ratings}")
 
     # For rating models, extract complexity experiment name from metadata
     complexity_experiment = None
@@ -362,7 +377,7 @@ def finalize_model(
         logger=logger,
         model_type=model_type,
         end_year=end_year,
-        min_ratings=0,
+        min_ratings=min_ratings,
         min_weights=min_weights,
         recent_year_threshold=recent_year_threshold,
         complexity_experiment=complexity_experiment,
@@ -398,11 +413,21 @@ def finalize_model(
         logger.info(
             f"  Weight Source: {'Extracted from metadata' if extracted_sample_weights is not None else 'Generated'}"
         )
-        logger.info(
-            f"  Weight Range: min={extracted_sample_weights.min():.2f}, max={extracted_sample_weights.max():.2f}"
-        )
-        logger.info(f"  Weight Mean: {extracted_sample_weights.mean():.2f}")
-        logger.info(f"  Weight Std Dev: {extracted_sample_weights.std():.2f}")
+
+        # Safely log weight range, mean, and std dev
+        try:
+            logger.info(
+                f"  Weight Range: min={float(np.min(extracted_sample_weights)):.2f}, max={float(np.max(extracted_sample_weights)):.2f}"
+            )
+            logger.info(
+                f"  Weight Mean: {float(np.mean(extracted_sample_weights)):.2f}"
+            )
+            logger.info(
+                f"  Weight Std Dev: {float(np.std(extracted_sample_weights)):.2f}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not log sample weight statistics: {e}")
+            logger.info(f"  Raw sample weights: {extracted_sample_weights}")
 
     # Finalize model
     logger.info("Fitting pipeline on full dataset...")
@@ -411,7 +436,11 @@ def finalize_model(
         y=y,
         description=description,
         final_end_year=final_end_year,
-        sample_weight=extracted_sample_weights,  # Pass sample weights if available
+        sample_weight=(
+            np.asarray(extracted_sample_weights)
+            if extracted_sample_weights is not None
+            else None
+        ),  # Pass sample weights if available
     )
 
     logger.info(f"Model finalized and saved to {finalized_dir}")

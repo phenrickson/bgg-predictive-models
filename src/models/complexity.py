@@ -342,7 +342,13 @@ def main():
     # Fit on train data with optional sample weights
     if args.use_sample_weights:
         train_pipeline = clone(tuned_pipeline).fit(
-            train_X, train_y, model__sample_weight=train_sample_weights
+            train_X,
+            train_y,
+            model__sample_weight=(
+                np.asarray(train_sample_weights)
+                if train_sample_weights is not None
+                else None
+            ),
         )
     else:
         train_pipeline = clone(tuned_pipeline).fit(train_X, train_y)
@@ -369,7 +375,13 @@ def main():
     # Fit final model with optional sample weights
     if args.use_sample_weights:
         final_pipeline = clone(tuned_pipeline).fit(
-            X_combined, y_combined, model__sample_weight=combined_sample_weights
+            X_combined,
+            y_combined,
+            model__sample_weight=(
+                np.asarray(combined_sample_weights)
+                if combined_sample_weights is not None
+                else None
+            ),
         )
     else:
         final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
