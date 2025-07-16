@@ -116,6 +116,9 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
+geek_rating_dashboard:
+	uv run streamlit run src/monitor/geek_rating_dashboard.py
+	
 # remove trained experiments
 .PHONY: clean_experiments
 clean_experiments:

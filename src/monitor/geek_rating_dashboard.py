@@ -192,9 +192,9 @@ def main():
 
         # Columns to display
         display_columns = [
+            "year_published",
             "game_id",
             "name",
-            "year_published",
             "will_rate",
             "complexity",
             "rating",
@@ -221,6 +221,7 @@ def main():
             display_df[display_columns],
             use_container_width=True,
             hide_index=True,
+            height=800,  # Increase default height to show more rows
             column_config={
                 "bgg_link": st.column_config.LinkColumn(
                     "BoardGameGeek", display_text="BGG"

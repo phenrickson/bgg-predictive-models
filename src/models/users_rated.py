@@ -77,6 +77,7 @@ def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
         "ridge": Ridge,
         "lasso": Lasso,
         "lightgbm": lgb.LGBMRegressor,
+        "lightgbm_linear": lgb.LGBMRegressor,  # New model type
     }
 
     PARAM_GRIDS = {
@@ -97,6 +98,19 @@ def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
             "model__num_leaves": [50, 100],
             "model__min_child_samples": [10],
             "model__reg_alpha": [0.1],
+        },
+        "lightgbm_linear": {
+            "model__n_estimators": [500, 1000],
+            "model__learning_rate": [0.01, 0.05],
+            "model__max_depth": [
+                3,
+                5,
+                7,
+            ],  # Shallower trees work better with linear leaves
+            "model__num_leaves": [31, 50],  # Fewer leaves for linear trees
+            "model__min_child_samples": [10, 20],
+            "model__reg_alpha": [0.1, 1.0],
+            "model__linear_tree": [True],  # Key parameter for linear leaves
         },
     }
 
@@ -174,7 +188,7 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         default="ridge",
-        choices=["linear", "ridge", "lasso", "lightgbm"],
+        choices=["linear", "ridge", "lasso", "lightgbm", "lightgbm_linear"],
         help="Regression model type to use",
     )
     parser.add_argument(
