@@ -112,6 +112,22 @@ score_users_rated:
 
 users_rated: train_users_rated finalize_users_rated score_users_rated
 
+# evaluate
+time_evaluate:
+	uv run -m src.models.time_based_evaluation \
+    --model-args \
+        hurdle.preprocessor-type=tree \
+        hurdle.model=lightgbm \
+        complexity.preprocessor-type=tree \
+        complexity.model=lightgbm \
+        rating.preprocessor-type=tree \
+        rating.model=lightgbm \
+		rating.min-ratings=10 \
+		rating.use-sample-weights=True \
+		users_rated.preprocessor-type=tree \
+		users_rated.model=lightgbm_linear \
+		users_rated.min-ratings=0
+
 ## view experiments
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py

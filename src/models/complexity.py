@@ -465,6 +465,31 @@ def main():
         model_type="regression",
     )
 
+    # Save complexity predictions for the entire dataset
+    try:
+        # Ensure predictions directory exists
+        import os
+
+        predictions_dir = os.path.join(args.output_dir, "predictions")
+        os.makedirs(predictions_dir, exist_ok=True)
+
+        # Predict complexity for the entire dataset
+        df_pandas = df.to_pandas()
+        complexity_predictions = final_pipeline.predict(df_pandas)
+
+        # Create predictions DataFrame
+        predictions_df = pl.DataFrame(
+            {"game_id": df["game_id"], "predicted_complexity": complexity_predictions}
+        )
+
+        # Save predictions to parquet
+        predictions_path = os.path.join(predictions_dir, f"{args.experiment}.parquet")
+        predictions_df.write_parquet(predictions_path)
+        logger.info(f"Complexity predictions saved to {predictions_path}")
+
+    except Exception as e:
+        logger.error(f"Failed to save complexity predictions: {e}")
+
     logger.info("Training complete!")
 
 

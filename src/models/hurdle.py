@@ -273,6 +273,12 @@ def parse_arguments() -> argparse.Namespace:
         choices=["linear", "tree"],
         help="Type of preprocessor to use",
     )
+    parser.add_argument(
+        "--min-ratings",
+        type=int,
+        default=0,
+        help="Minimum number of ratings for a game to be included in the dataset",
+    )
 
     args = parser.parse_args()
 
@@ -302,7 +308,7 @@ def main():
     logger = setup_logging()
 
     # Load and split data
-    df = load_data(args.local_data, args.test_end_year)
+    df = load_data(args.local_data, args.test_end_year, min_ratings=args.min_ratings)
     train_df, tune_df, test_df = create_data_splits(
         df,
         train_end_year=args.train_end_year,
