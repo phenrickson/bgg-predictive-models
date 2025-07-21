@@ -95,7 +95,7 @@ def predict_game(
     results["name"] = features["name"]
     results["year_published"] = features["year_published"]
 
-    results["will_rate"] = will_rate_proba
+    results["predicted_hurdle_prob"] = will_rate_proba
 
     # Identify games likely to receive ratings
     likely_games_mask = will_rate_proba >= threshold
@@ -106,34 +106,37 @@ def predict_game(
         likely_features = features[likely_games_mask]
 
         # Predict complexity
-        results.loc[likely_games_mask, "complexity"] = models["complexity"].predict(
-            likely_features
-        )
+        results.loc[likely_games_mask, "predicted_complexity"] = models[
+            "complexity"
+        ].predict(likely_features)
 
         # Add predicted complexity as feature
         likely_features_with_complexity = likely_features.copy()
         likely_features_with_complexity["predicted_complexity"] = results.loc[
-            likely_games_mask, "complexity"
+            likely_games_mask, "predicted_complexity"
         ]
 
         # Predict rating and users
-        results.loc[likely_games_mask, "rating"] = models["rating"].predict(
+        results.loc[likely_games_mask, "predicted_rating"] = models["rating"].predict(
             likely_features_with_complexity
         )
-        results.loc[likely_games_mask, "users_rated"] = models["users_rated"].predict(
-            likely_features_with_complexity
-        )
+        results.loc[likely_games_mask, "predicted_users_rated"] = models[
+            "users_rated"
+        ].predict(likely_features_with_complexity)
 
         # Ensure users is at least minimum threshold
-        results.loc[likely_games_mask, "users_rated"] = np.maximum(
-            np.round(np.expm1(results.loc[likely_games_mask, "users_rated"]) / 50) * 50,
+        results.loc[likely_games_mask, "predicted_users_rated"] = np.maximum(
+            np.round(
+                np.expm1(results.loc[likely_games_mask, "predicted_users_rated"]) / 50
+            )
+            * 50,
             25,
         )
 
     # Fill in default values for unlikely games
-    results.loc[~likely_games_mask, "complexity"] = 1.0
-    results.loc[~likely_games_mask, "rating"] = 5.5
-    results.loc[~likely_games_mask, "users_rated"] = 25
+    results.loc[~likely_games_mask, "predicted_complexity"] = 1.0
+    results.loc[~likely_games_mask, "predicted_rating"] = 5.5
+    results.loc[~likely_games_mask, "predicted_users_rated"] = 25
 
     logger.info(
         f"Predictions: {len(likely_games_mask)} likely games out of {len(features)} total"
@@ -160,14 +163,13 @@ def calculate_geek_rating(
         Series of geek ratings if input is DataFrame,
         or single geek rating float if input is Dict
     """
+    # Try original column names first, then predicted column names
     try:
-        # DataFrame case - access columns
         rating = predictions["rating"]
         users = predictions["users_rated"]
-    except (TypeError, AttributeError):
-        # Dictionary case - access keys
-        rating = predictions["rating"]
-        users = predictions["users_rated"]
+    except (KeyError, TypeError):
+        rating = predictions["predicted_rating"]
+        users = predictions["predicted_users_rated"]
 
     return ((rating * users) + (prior_rating * prior_weight)) / (users + prior_weight)
 

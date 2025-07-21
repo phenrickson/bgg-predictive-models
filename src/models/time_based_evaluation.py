@@ -7,12 +7,14 @@ from typing import Dict, Optional, List, Any
 import polars as pl
 import numpy as np
 import pandas as pd
+import sklearn.metrics as metrics
 
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.experiments import ExperimentTracker
 from src.models.training import load_data, create_data_splits, select_X_y
-from src.models.geek_rating import predict_geek_rating
+from src.models.geek_rating import predict_geek_rating, calculate_geek_rating
+from src.models.finalize_model import finalize_model
 
 import subprocess
 import sys
@@ -74,18 +76,24 @@ def run_time_based_evaluation(
         model_args: Optional dictionary of additional arguments for each model
         additional_args: Optional list of additional CLI arguments to pass to all model scripts
     """
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
 
     # Setup logging
+    log_file_path = os.path.join(output_dir, "time_based_evaluation.log")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(f"{output_dir}/time_based_evaluation.log"),
+            logging.FileHandler(
+                log_file_path, mode="w"
+            ),  # 'w' mode to overwrite previous log
         ],
     )
+
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
 
     # Generate splits if not provided
     if splits is None:
@@ -190,6 +198,20 @@ def run_time_based_evaluation(
                         f"Complexity predictions saved to {complexity_local_path}"
                     )
 
+                # Finalize the trained model
+                try:
+                    finalize_model(
+                        model_type=model_name,
+                        experiment_name=f"{model_name}_{experiment_base}",
+                        end_year=split_config["train_end_year"],
+                    )
+                    logger.info(f"{model_name.capitalize()} Model Finalized")
+                except Exception as finalize_error:
+                    logger.error(
+                        f"Error finalizing {model_name} model: {finalize_error}"
+                    )
+                    raise
+
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error training {model_name} model: {e}")
                 logger.error(f"STDOUT: {e.stdout}")
@@ -200,7 +222,8 @@ def run_time_based_evaluation(
         try:
             geek_rating_cmd = [
                 sys.executable,
-                "src/models/geek_rating.py",
+                "-m",
+                "src.models.geek_rating",
                 f"--hurdle=hurdle_{experiment_base}",
                 f"--complexity=complexity_{experiment_base}",
                 f"--rating=rating_{experiment_base}",
@@ -217,6 +240,69 @@ def run_time_based_evaluation(
             )
             logger.info("Geek Rating Calculation Completed")
             logger.debug(result.stdout)
+
+            # Performance Evaluation
+            # Load predicted geek ratings
+            predicted_ratings = pl.read_parquet(
+                os.path.join(
+                    output_dir, "predictions", f"geek_rating_{experiment_base}.parquet"
+                )
+            ).to_pandas()
+
+            # Calculate actual geek ratings for test dataset
+            test_df_with_geek_rating = test_df.copy()
+            test_df_with_geek_rating["actual_geek_rating"] = calculate_geek_rating(
+                test_df_with_geek_rating
+            )
+
+            # Merge predicted and actual ratings
+            merged_ratings = predicted_ratings.merge(
+                test_df_with_geek_rating[["game_id", "actual_geek_rating"]],
+                on="game_id",
+                how="inner",
+            )
+
+            # Calculate performance metrics
+            mae = metrics.mean_absolute_error(
+                merged_ratings["actual_geek_rating"],
+                merged_ratings["predicted_geek_rating"],
+            )
+            rmse = np.sqrt(
+                metrics.mean_squared_error(
+                    merged_ratings["actual_geek_rating"],
+                    merged_ratings["predicted_geek_rating"],
+                )
+            )
+            r2 = metrics.r2_score(
+                merged_ratings["actual_geek_rating"],
+                merged_ratings["predicted_geek_rating"],
+            )
+
+            # Log performance metrics
+            logger.info(f"Geek Rating Performance Metrics for Split {experiment_base}:")
+            logger.info(f"  Mean Absolute Error (MAE): {mae:.4f}")
+            logger.info(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+            logger.info(f"  R-squared (R²): {r2:.4f}")
+
+            # Optional: Save performance metrics to a file
+            performance_metrics = {
+                "split": experiment_base,
+                "mae": mae,
+                "rmse": rmse,
+                "r2": r2,
+            }
+            performance_path = os.path.join(
+                output_dir,
+                "metrics",
+                f"geek_rating_metrics_{experiment_base}.json",
+            )
+            os.makedirs(os.path.dirname(performance_path), exist_ok=True)
+
+            import json
+
+            with open(performance_path, "w") as f:
+                json.dump(performance_metrics, f, indent=2)
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Error calculating geek ratings: {e}")
             logger.error(f"STDOUT: {e.stdout}")
