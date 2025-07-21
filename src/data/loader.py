@@ -42,6 +42,7 @@ class BGGDataLoader:
         SELECT 
             *,
             CASE WHEN users_rated >= 25 THEN 1 ELSE 0 END as hurdle,
+            bayes_average as geek_rating,
             average_weight as complexity,
             average_rating as rating,
             LN(users_rated + 1) as log_users_rated
