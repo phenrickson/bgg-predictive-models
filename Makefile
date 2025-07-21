@@ -123,7 +123,7 @@ time_evaluate:
         rating.preprocessor-type=tree \
         rating.model=lightgbm \
 		rating.min-ratings=10 \
-		rating.use-sample-weights=True \
+		rating.use-sample-weights \
 		users_rated.preprocessor-type=tree \
 		users_rated.model=lightgbm_linear \
 		users_rated.min-ratings=0
