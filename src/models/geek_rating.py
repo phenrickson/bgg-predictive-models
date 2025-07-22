@@ -477,14 +477,16 @@ def main():
     config = load_config()
     loader = BGGDataLoader(config)
 
-    # Load all games with non-null year_published
-    df = loader.load_data(preprocessor=None)
-
-    # Apply year filtering if specified
+    # Construct WHERE clause for year filtering
+    where_clauses = []
     if args.start_year is not None:
-        df = df.filter(pl.col("year_published") >= args.start_year)
+        where_clauses.append(f"year_published >= {args.start_year}")
     if args.end_year is not None:
-        df = df.filter(pl.col("year_published") < args.end_year)
+        where_clauses.append(f"year_published < {args.end_year}")
+
+    # Load data with optional year filtering
+    where_clause = " AND ".join(where_clauses) if where_clauses else ""
+    df = loader.load_data(where_clause=where_clause, preprocessor=None)
 
     logger.info(
         f"Filtered to {len(df)} games between years {args.start_year or 'min'} and {args.end_year or 'max'}"
