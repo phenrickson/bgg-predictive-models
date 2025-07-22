@@ -308,6 +308,8 @@ def run_time_based_evaluation(
                 f"--users-rated=users_rated_{experiment_base}",
                 f"--experiment=geek_rating_{experiment_base}",
                 f"--output={os.path.join('geek_rating', f'geek_rating_{experiment_base}', 'v1', 'test_predictions.parquet')}",
+                f"--start-year={split_config['test_start_year']}",
+                f"--end-year={split_config['test_end_year']}",
             ]
 
             # Add any global additional arguments

@@ -115,19 +115,19 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 # evaluate
 evaluation:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2015 \
-	--end-year 2018 \
+	--start-year 2014 \
+	--end-year 2015 \
     --model-args \
-        hurdle.preprocessor-type=tree \
-        hurdle.model=lightgbm \
+        hurdle.preprocessor-type=linear \
+        hurdle.model=logistic \
         complexity.preprocessor-type=tree \
         complexity.model=lightgbm \
-        rating.preprocessor-type=tree \
-        rating.model=lightgbm \
-		rating.min-ratings=10 \
+        rating.preprocessor-type=linear \
+        rating.model=linear \
+		rating.min-ratings=5 \
 		rating.use-sample-weights=True \
 		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm_linear \
+		users_rated.model=lightgbm \
 		users_rated.min-ratings=0
 
 ## view experiments
