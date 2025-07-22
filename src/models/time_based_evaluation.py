@@ -19,6 +19,7 @@ from src.models.finalize_model import finalize_model
 import subprocess
 import sys
 import os
+import json
 
 
 def generate_time_splits(
@@ -55,6 +56,83 @@ def generate_time_splits(
 
     logger.info(f"Generated {len(splits)} time splits")
     return splits
+
+
+def evaluate_geek_rating_performance(
+    output_dir: str,
+    experiment_base: str,
+    predicted_ratings_path: str,
+    test_df: pd.DataFrame,
+    df: pd.DataFrame,
+):
+    """
+    Evaluate geek rating performance by comparing predicted and actual ratings.
+
+    Args:
+        output_dir: Base directory for storing experiments
+        experiment_base: Base name for the experiment
+        predicted_ratings_path: Path to the predicted ratings file
+        test_df: Test dataset
+        df: Full original dataset
+    """
+    logger = logging.getLogger(__name__)
+
+    # Load predicted geek ratings
+    predicted_ratings = pl.read_parquet(predicted_ratings_path).to_pandas()
+
+    # Calculate actual geek ratings by joining with the original dataset
+    test_df_with_geek_rating = test_df.merge(
+        df[["game_id", "geek_rating"]], on="game_id", how="left"
+    )
+    test_df_with_geek_rating.rename(
+        columns={"geek_rating": "actual_geek_rating"}, inplace=True
+    )
+
+    # Merge predicted and actual ratings
+    merged_ratings = predicted_ratings.merge(
+        test_df_with_geek_rating[["game_id", "actual_geek_rating"]],
+        on="game_id",
+        how="inner",
+    )
+
+    # Calculate performance metrics
+    mae = metrics.mean_absolute_error(
+        merged_ratings["actual_geek_rating"],
+        merged_ratings["predicted_geek_rating"],
+    )
+    rmse = np.sqrt(
+        metrics.mean_squared_error(
+            merged_ratings["actual_geek_rating"],
+            merged_ratings["predicted_geek_rating"],
+        )
+    )
+    r2 = metrics.r2_score(
+        merged_ratings["actual_geek_rating"],
+        merged_ratings["predicted_geek_rating"],
+    )
+
+    # Log performance metrics
+    logger.info(f"Geek Rating Performance Metrics for Split {experiment_base}:")
+    logger.info(f"  Mean Absolute Error (MAE): {mae:.4f}")
+    logger.info(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+    logger.info(f"  R-squared (R²): {r2:.4f}")
+
+    # Optional: Save performance metrics to a file
+    performance_metrics = {
+        "split": experiment_base,
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+    }
+    performance_path = os.path.join(
+        output_dir,
+        "metrics",
+        f"geek_rating_metrics_{experiment_base}.json",
+    )
+    os.makedirs(os.path.dirname(performance_path), exist_ok=True)
+
+    with open(performance_path, "w") as f:
+        json.dump(performance_metrics, f, indent=2)
 
 
 def run_time_based_evaluation(
@@ -229,7 +307,7 @@ def run_time_based_evaluation(
                 f"--rating=rating_{experiment_base}",
                 f"--users-rated=users_rated_{experiment_base}",
                 f"--experiment=geek_rating_{experiment_base}",
-                f"--output=geek_rating_{experiment_base}.parquet",
+                f"--output={os.path.join('geek_rating', f'geek_rating_{experiment_base}', 'v1', 'test_predictions.parquet')}",
             ]
 
             # Add any global additional arguments
@@ -241,67 +319,20 @@ def run_time_based_evaluation(
             logger.info("Geek Rating Calculation Completed")
             logger.debug(result.stdout)
 
-            # Performance Evaluation
-            # Load predicted geek ratings
-            predicted_ratings = pl.read_parquet(
-                os.path.join(
-                    output_dir, "predictions", f"geek_rating_{experiment_base}.parquet"
-                )
-            ).to_pandas()
-
-            # Calculate actual geek ratings for test dataset
-            test_df_with_geek_rating = test_df.copy()
-            test_df_with_geek_rating["actual_geek_rating"] = calculate_geek_rating(
-                test_df_with_geek_rating
-            )
-
-            # Merge predicted and actual ratings
-            merged_ratings = predicted_ratings.merge(
-                test_df_with_geek_rating[["game_id", "actual_geek_rating"]],
-                on="game_id",
-                how="inner",
-            )
-
-            # Calculate performance metrics
-            mae = metrics.mean_absolute_error(
-                merged_ratings["actual_geek_rating"],
-                merged_ratings["predicted_geek_rating"],
-            )
-            rmse = np.sqrt(
-                metrics.mean_squared_error(
-                    merged_ratings["actual_geek_rating"],
-                    merged_ratings["predicted_geek_rating"],
-                )
-            )
-            r2 = metrics.r2_score(
-                merged_ratings["actual_geek_rating"],
-                merged_ratings["predicted_geek_rating"],
-            )
-
-            # Log performance metrics
-            logger.info(f"Geek Rating Performance Metrics for Split {experiment_base}:")
-            logger.info(f"  Mean Absolute Error (MAE): {mae:.4f}")
-            logger.info(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
-            logger.info(f"  R-squared (R²): {r2:.4f}")
-
-            # Optional: Save performance metrics to a file
-            performance_metrics = {
-                "split": experiment_base,
-                "mae": mae,
-                "rmse": rmse,
-                "r2": r2,
-            }
-            performance_path = os.path.join(
-                output_dir,
-                "metrics",
-                f"geek_rating_metrics_{experiment_base}.json",
-            )
-            os.makedirs(os.path.dirname(performance_path), exist_ok=True)
-
-            import json
-
-            with open(performance_path, "w") as f:
-                json.dump(performance_metrics, f, indent=2)
+            # # Performance Evaluation
+            # evaluate_geek_rating_performance(
+            #     output_dir=output_dir,
+            #     experiment_base=experiment_base,
+            #     predicted_ratings_path=os.path.join(
+            #         output_dir,
+            #         "geek_rating",
+            #         f"geek_rating_{experiment_base}",
+            #         "v1",
+            #         "test_predictions.parquet",
+            #     ),
+            #     test_df=test_df,
+            #     df=df,
+            # )
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Error calculating geek ratings: {e}")
