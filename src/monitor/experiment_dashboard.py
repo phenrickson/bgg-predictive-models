@@ -688,7 +688,11 @@ def main():
     st.title("Experiment Tracking Dashboard")
 
     # Model Type Selection
-    model_types = [d.name for d in Path("models/experiments").iterdir() if d.is_dir()]
+    model_types = [
+        d.name
+        for d in Path("models/experiments").iterdir()
+        if d.is_dir() and d.name not in ["predictions"]
+    ]
     selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
 
     # Load experiments
