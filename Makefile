@@ -119,12 +119,12 @@ score_rating:
 rating: train_rating finalize_rating score_rating
 
 ## rating model
-RATING_TREE_CANDIDATE = catboost-rating
+RATING_TREE_CANDIDATE = lightgbm-rating
 train_rating_tree:
 	uv run -m src.models.rating \
 	--use-sample-weights \
 	--preprocessor-type tree \
-	--model catboost \
+	--model lightgbm \
 	--min-ratings 5 \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
@@ -174,21 +174,32 @@ train_users_rated_tree:
 	--model lightgbm_linear \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
-	--experiment $(USERS_RATED_CANDIDATE) \
+	--experiment $(USERS_RATED_TREE_CANDIDATE) \
 	--min-ratings=0
 
 finalize_users_rated_tree: 
 	uv run -m src.models.finalize_model \
 	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE)
+	--experiment $(USERS_RATED_TREE_CANDIDATE)
 
 score_users_rated_tree:
 	uv run -m src.models.score \
 	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
+	--experiment $(USERS_RATED_TREE_CANDIDATE) \
 	--complexity-predictions models/experiments/predictions/catboost-complexity.parquet
 
 users_rated_tree: train_users_rated_tree finalize_users_rated_tree score_users_rated_tree
+
+# predict geek rating given models
+geek_rating: 
+	uv run -m src.models.geek_rating \
+	--start-year 2024 \
+	--end-year 2029 \
+	--hurdle linear-hurdle \
+	--complexity catboost-complexity \
+	--rating catboost-rating \
+	--users-rated test-users_rated \
+	--experiment calculated-geek-rating
 
 # evaluate
 evaluation:
@@ -200,8 +211,9 @@ evaluation:
         hurdle.model=logistic \
         complexity.preprocessor-type=tree \
         complexity.model=lightgbm \
+		complext.model=use-sample-weights \
         rating.preprocessor-type=linear \
-        rating.model=linear \
+        rating.model=catboost \
 		rating.min-ratings=5 \
 		rating.use-sample-weights \
 		users_rated.preprocessor-type=tree \
@@ -212,6 +224,7 @@ evaluation:
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
+# dashboard to look at predicted geek rating
 geek_rating_dashboard:
 	uv run streamlit run src/monitor/geek_rating_dashboard.py
 	

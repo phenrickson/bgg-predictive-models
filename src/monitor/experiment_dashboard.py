@@ -479,6 +479,41 @@ def display_predictions(experiment, dataset: str, model_type: str):
         st.info("2. Predictions were not saved during experiment tracking")
         return None
 
+    # Special handling for geek_rating model type
+    if model_type == "geek_rating":
+        # Diagnostic logging
+        st.warning(f"Geek Rating Model: Initial DataFrame Null Check")
+        st.warning(f"DataFrame columns: {predictions_df.columns}")
+
+        # Check if 'actual' column exists
+        if "actual" not in predictions_df.columns:
+            st.error("No 'actual' column found in the DataFrame")
+            st.warning(f"Available columns: {predictions_df.columns}")
+            st.warning(f"DataFrame schema: {predictions_df.schema}")
+            return None
+
+        # Detailed null check
+        null_mask = predictions_df["actual"].is_null()
+        st.warning(f"Null values in 'actual' column: {null_mask.sum()}")
+
+        # If there are null values, show some examples
+        if null_mask.sum() > 0:
+            null_rows = predictions_df.filter(null_mask)
+            st.warning("Sample of rows with null 'actual' values:")
+            st.dataframe(null_rows)
+
+        # Attempt to replace NAs with 5.5
+        try:
+            predictions_df = predictions_df.with_columns(
+                pl.col("actual").fill_null(5.5)
+            )
+            st.warning(
+                f"Null values after replacement: {predictions_df['actual'].is_null().sum()}"
+            )
+        except Exception as e:
+            st.error(f"Error replacing null values: {e}")
+            return None
+
     # Select relevant columns for display
     display_columns = [
         col
@@ -508,10 +543,30 @@ def display_predictions(experiment, dataset: str, model_type: str):
                 display_df["users_rated"].quantile(min_users_rated_filter / 100)
             )
 
-            # Apply filter
+            # Apply users_rated filter
             display_df = display_df.filter(
                 pl.col("users_rated") >= actual_min_users_rated
             )
+
+            # Check if year_published column exists and add year filter
+            if "year_published" in display_df.columns:
+                # Get min and max years
+                min_year = display_df["year_published"].min()
+                max_year = display_df["year_published"].max()
+
+                # Add year filter
+                year_filter = st.slider(
+                    "Year Published Range",
+                    min_value=int(min_year),
+                    max_value=int(max_year),
+                    value=(int(min_year), int(max_year)),
+                )
+
+                # Apply year filter
+                display_df = display_df.filter(
+                    (pl.col("year_published") >= year_filter[0])
+                    & (pl.col("year_published") <= year_filter[1])
+                )
 
             # # Display filter info
             # st.info(
