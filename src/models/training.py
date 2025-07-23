@@ -15,6 +15,9 @@ from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import ParameterGrid
 from tqdm import tqdm
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+import lightgbm as lgb
+from catboost import CatBoostRegressor
 
 # Project imports
 from src.data.config import load_config
@@ -614,6 +617,27 @@ def tune_model(
     return tuned_pipeline, best_params
 
 
+def calculate_sample_weights(
+    df: pd.DataFrame, weight_column: str = "users_rated"
+) -> np.ndarray:
+    """
+    Calculate sample weights based on a specified column.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing the weight column
+        weight_column (str, optional): Column to use for calculating weights.
+                                       Defaults to 'users_rated'.
+
+    Returns:
+        numpy array of normalized weights
+    """
+    if weight_column not in df.columns:
+        raise ValueError(f"Column '{weight_column}' not found in DataFrame")
+
+    weights = np.sqrt(df[weight_column]) / np.sqrt(df[weight_column].max())
+    return weights
+
+
 def evaluate_model(
     model,
     X: pd.DataFrame,
@@ -759,3 +783,60 @@ def evaluate_model(
             logger.info(f"  {metric}: {value}")
 
     return metrics
+
+
+def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+    """Set up regression model and parameter grid."""
+    model_MAPPING = {
+        "linear": LinearRegression,
+        "ridge": Ridge,
+        "lasso": Lasso,
+        "catboost": CatBoostRegressor,
+        "lightgbm": lgb.LGBMRegressor,
+        "lightgbm_linear": lgb.LGBMRegressor,  # New model type
+    }
+
+    PARAM_GRIDS = {
+        "linear": {},  # Linear Regression has no hyperparameters to tune
+        "ridge": {
+            "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
+            "model__solver": ["auto"],
+            "model__fit_intercept": [True],
+        },
+        "lasso": {
+            "model__alpha": [0.1, 1.0, 10.0],
+            "model__selection": ["cyclic", "random"],
+        },
+        "lightgbm": {
+            "model__n_estimators": [500],
+            "model__learning_rate": [0.01],
+            "model__max_depth": [-1],  # -1 means no limit
+            "model__num_leaves": [50, 100],
+            "model__min_child_samples": [10],
+            "model__reg_alpha": [0.1],
+        },
+        "catboost": {
+            "model__iterations": [500],
+            "model__learning_rate": [0.01, 0.5],
+            "model__depth": [4, 6, 8],
+            "model__l2_leaf_reg": [1, 3, 5],
+        },
+        "lightgbm_linear": {
+            "model__n_estimators": [500, 1000],
+            "model__learning_rate": [0.01, 0.05],
+            "model__max_depth": [
+                3,
+                5,
+                7,
+            ],  # Shallower trees work better with linear leaves
+            "model__num_leaves": [31, 50],  # Fewer leaves for linear trees
+            "model__min_child_samples": [10, 20],
+            "model__reg_alpha": [0.1, 1.0],
+            "model__linear_tree": [True],  # Key parameter for linear leaves
+        },
+    }
+
+    model = model_MAPPING[model_name]()
+    param_grid = PARAM_GRIDS[model_name]
+
+    return model, param_grid

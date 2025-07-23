@@ -134,10 +134,7 @@ def find_optimal_threshold(
             best_f1 = f1
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Optimal Threshold Analysis:")
-    logger.info(f"  Best {metric} threshold: {best_threshold:.4f}")
-    logger.info(f"  Best {metric} score: {best_score:.4f}")
-    logger.info(f"  F1 score at optimal threshold: {best_f1:.4f}")
+    logger.info(f"Optimal Threshold: {best_threshold:.4f}")
 
     return {
         "threshold": best_threshold,

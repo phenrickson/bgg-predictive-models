@@ -16,19 +16,15 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
-from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, QuantileRegressor
 from sklearn.base import clone
 from sklearn.base import BaseEstimator, clone
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import lightgbm as lgb
 
 # Project imports
 from src.data.config import load_config
-from src.data.loader import BGGDataLoader
 from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split
 from src.models.training import (
@@ -39,6 +35,8 @@ from src.models.training import (
     preprocess_data,
     tune_model,
     evaluate_model,
+    calculate_sample_weights,
+    configure_model,
 )
 
 
@@ -62,103 +60,6 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:
     """Constrain predictions to be between 1 and 5."""
     return np.clip(predictions, 1, 5)
-
-
-def calculate_complexity_weights(
-    complexities: np.ndarray,
-    base: float = 10.0,  # Increased base for more dramatic weighting
-    min_weight: float = 1.0,
-    max_weight: float = 100.0,  # Added max weight to prevent extreme values
-) -> np.ndarray:
-    """
-    Calculate exponential weights for complexity values.
-
-    Args:
-        complexities (array-like): Complexity values
-        base (float): Base for exponential weighting. Higher values
-                      create more dramatic weight increases
-        min_weight (float): Minimum weight to apply
-        max_weight (float): Maximum weight to prevent extreme values
-
-    Returns:
-        numpy array of weights normalized to have mean 1.0
-    """
-    logger = logging.getLogger(__name__)
-
-    # Log input complexity distribution
-    logger.info("Complexity Weight Calculation Diagnostic:")
-    logger.info(
-        f"  Complexity Range: min={complexities.min():.2f}, max={complexities.max():.2f}"
-    )
-    logger.info(f"  Complexity Mean: {complexities.mean():.2f}")
-    logger.info(f"  Complexity Std Dev: {complexities.std():.2f}")
-
-    # Normalize complexities to start from 0
-    normalized_complexities = complexities - complexities.min()
-
-    # Calculate exponential weights with more dramatic scaling
-    weights = np.power(base, normalized_complexities)
-
-    # Clip weights to prevent extreme values
-    weights = np.clip(weights, min_weight, max_weight)
-
-    # Normalize weights to have mean 1.0
-    weights = weights / np.mean(weights)
-
-    # Log weight distribution
-    logger.info("  Weight Distribution:")
-    logger.info(f"    Weight Range: min={weights.min():.2f}, max={weights.max():.2f}")
-    logger.info(f"    Weight Mean: {weights.mean():.2f}")
-    logger.info(f"    Weight Std Dev: {weights.std():.2f}")
-
-    # Log a few example mappings
-    logger.info("  Sample Complexity to Weight Mapping:")
-    for complexity, weight in zip(complexities[:10], weights[:10]):
-        logger.info(f"    Complexity {complexity:.2f} -> Weight {weight:.2f}")
-
-    return weights
-
-
-def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
-    """Set up regression model and parameter grid."""
-    model_MAPPING = {
-        "linear": LinearRegression,
-        "ridge": Ridge,
-        "lasso": Lasso,
-        "lightgbm": lgb.LGBMRegressor,
-        "quantile": QuantileRegressor,
-    }
-
-    PARAM_GRIDS = {
-        "linear": {},  # Linear Regression has no hyperparameters to tune
-        "ridge": {
-            "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
-            "model__solver": ["auto"],
-            "model__fit_intercept": [True],
-        },
-        "lasso": {
-            "model__alpha": [0.1, 1.0, 10.0],
-            "model__selection": ["cyclic", "random"],
-        },
-        "lightgbm": {
-            "model__n_estimators": [500, 1000],
-            "model__learning_rate": [0.01, 0.05],
-            "model__max_depth": [3, 7, 11],
-            "model__num_leaves": [10, 20, 50],
-            "model__min_child_samples": [20],
-        },
-        "quantile": {
-            "model__quantile": [0.4, 0.5, 0.6],  # Different quantiles to explore
-            "model__solver": ["highs-ds"],
-            "model__alpha": [1e-4, 1e-3, 1e-2, 0.1, 1.0],  # Regularization strength
-            "model__fit_intercept": [True],
-        },
-    }
-
-    model = model_MAPPING[model_name]()
-    param_grid = PARAM_GRIDS[model_name]
-
-    return model, param_grid
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -212,7 +113,6 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         default="ridge",
-        choices=["linear", "ridge", "lasso", "lightgbm", "quantile"],
         help="Regression model type to use",
     )
     parser.add_argument(
@@ -239,6 +139,12 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Enable sample weights based on complexity values",
+    )
+    parser.add_argument(
+        "--sample-weight-column",
+        type=str,
+        default="num_weights",
+        help="Column to use for calculating sample weights (default: num_weights)",
     )
     parser.add_argument(
         "--preprocessor-type",
@@ -319,12 +225,14 @@ def main():
     # Calculate sample weights for training data
     train_sample_weights = None
     if args.use_sample_weights:
-        train_sample_weights = calculate_complexity_weights(train_y.values)
-        logger.info("Training Sample Weights Diagnostic:")
-        logger.info(
-            f"  Weight Range: min={train_sample_weights.min():.2f}, max={train_sample_weights.max():.2f}"
+        train_sample_weights = calculate_sample_weights(
+            train_df, weight_column="num_weights"
         )
-        logger.info(f"  Weight Mean: {train_sample_weights.mean():.2f}")
+
+        logger.info("Sample Weights Diagnostic:")
+        logger.info(
+            f"  Train weights - min: {train_sample_weights.min():.4f}, max: {train_sample_weights.max():.4f}, mean: {train_sample_weights.mean():.4f}"
+        )
 
     # Tune model
     tuned_pipeline, best_params = tune_model(
@@ -365,12 +273,18 @@ def main():
     # Calculate sample weights for combined data
     combined_sample_weights = None
     if args.use_sample_weights:
-        combined_sample_weights = calculate_complexity_weights(y_combined.values)
+        # Convert Polars DataFrames to Pandas
+        train_df_pandas = train_df.to_pandas()
+        tune_df_pandas = tune_df.to_pandas()
+
+        combined_sample_weights = calculate_sample_weights(
+            pd.concat([train_df_pandas, tune_df_pandas]), weight_column="num_weights"
+        )
+
         logger.info("Combined Sample Weights Diagnostic:")
         logger.info(
-            f"  Weight Range: min={combined_sample_weights.min():.2f}, max={combined_sample_weights.max():.2f}"
+            f"  Combined weights - min: {combined_sample_weights.min():.4f}, max: {combined_sample_weights.max():.4f}, mean: {combined_sample_weights.mean():.4f}"
         )
-        logger.info(f"  Weight Mean: {combined_sample_weights.mean():.2f}")
 
     # Fit final model with optional sample weights
     if args.use_sample_weights:
@@ -392,20 +306,32 @@ def main():
     # Log experiment results
     tracker = ExperimentTracker("complexity", args.output_dir)
 
-    # Create experiment
+    # Create experiment metadata
+    experiment_metadata = {
+        "train_end_year_exclusive": args.train_end_year,
+        "tune_start_year": args.tune_start_year,
+        "tune_end_year": args.tune_end_year,
+        "test_start_year": args.test_start_year,
+        "test_end_year": args.test_end_year,
+        "model_type": "complexity_regression",
+        "target": "complexity",
+        "min_weights": args.min_weights,
+    }
+
+    # Add sample weight metadata if used
+    if args.use_sample_weights:
+        experiment_metadata.update(
+            {
+                "sample_weights": {
+                    "column": "num_weights",
+                }
+            }
+        )
+
     experiment = tracker.create_experiment(
         name=args.experiment,
         description=args.description,
-        metadata={
-            "train_end_year_exclusive": args.train_end_year,
-            "tune_start_year": args.tune_start_year,
-            "tune_end_year": args.tune_end_year,
-            "test_start_year": args.test_start_year,
-            "test_end_year": args.test_end_year,
-            "model_type": "complexity_regression",
-            "target": "complexity",
-            "min_weights": args.min_weights,
-        },
+        metadata=experiment_metadata,
         config={
             "model_params": best_params,
             "preprocessing": {
@@ -439,6 +365,7 @@ def main():
             },
             "target": "complexity",
             "target_type": "regression",
+            "sample_weight_column": "num_weights",
         },
     )
 

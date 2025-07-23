@@ -55,6 +55,7 @@ hurdle: train_hurdle finalize_hurdle score_hurdle
 COMPLEXITY_CANDIDATE ?= test-complexity
 train_complexity:
 	uv run -m src.models.complexity \
+	--use-sample-weights \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
 finalize_complexity: 
@@ -73,6 +74,8 @@ complexity: train_complexity finalize_complexity score_complexity
 RATING_CANDIDATE ?= test-rating
 train_rating:
 	uv run -m src.models.rating \
+	--use-sample-weights \
+	--min-ratings 5 \
 	--complexity-experiment test-complexity \
 	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
 	--experiment $(RATING_CANDIDATE)
@@ -90,6 +93,31 @@ score_rating:
 
 
 rating: train_rating finalize_rating score_rating
+
+## rating model
+RATING_TREE_CANDIDATE = lightgbm-tree
+train_rating_tree:
+	uv run -m src.models.rating \
+	--use-sample-weights \
+	--preprocessor-type tree \
+	--model lightgbm_linear \
+	--min-ratings 5 \
+	--complexity-experiment test-complexity \
+	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
+	--experiment $(RATING_TREE_CANDIDATE)
+
+finalize_rating_tree: 
+	uv run -m src.models.finalize_model \
+	--model-type rating \
+	--experiment $(RATING_TREE_CANDIDATE)
+
+score_rating+tree:
+	uv run -m src.models.score \
+	--model-type rating \
+	--experiment $(RATING_TREE_CANDIDATE) \
+	--complexity-predictions data/estimates/test-complexity_complexity_predictions.parquet
+	
+rating_tree: train_rating_tree finalize_rating_tree score_rating+tree
 
 ## users rated model
 USERS_RATED_CANDIDATE ?= test-users_rated
@@ -125,9 +153,9 @@ evaluation:
         rating.preprocessor-type=linear \
         rating.model=linear \
 		rating.min-ratings=5 \
-		rating.use-sample-weights=True \
+		rating.use-sample-weights \
 		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm-linear \
+		users_rated.model=lightgbm_linear \
 		users_rated.min-ratings=0
 
 ## view experiments
