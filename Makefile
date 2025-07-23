@@ -116,7 +116,7 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 evaluation:
 	uv run -m src.models.time_based_evaluation \
 	--start-year 2014 \
-	--end-year 2015 \
+	--end-year 2021 \
     --model-args \
         hurdle.preprocessor-type=linear \
         hurdle.model=logistic \
@@ -127,7 +127,7 @@ evaluation:
 		rating.min-ratings=5 \
 		rating.use-sample-weights=True \
 		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm \
+		users_rated.model=lightgbm-linear \
 		users_rated.min-ratings=0
 
 ## view experiments
