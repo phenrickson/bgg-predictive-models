@@ -254,8 +254,8 @@ clean_users_rated:
 # upload experiments to Google Cloud Storage
 .PHONY: upload_experiments
 upload_experiments:
-	uv run -m src.models.upload_experiments --create-bucket
+	uv run -m src.utils.sync_experiments --create-bucket
 
 .PHONY: download_experiments
 download_experiments:
-	uv run -m src.models.upload_experiments --download
+	uv run -m src.utils.sync_experiments --download

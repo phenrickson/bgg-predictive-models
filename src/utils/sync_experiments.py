@@ -71,6 +71,12 @@ def sync_experiments_to_gcs(
         except FileNotFoundError:
             logger.warning(f"Config file {config_path} not found")
 
+    # Check environment and modify bucket name if in dev
+    environment = os.environ.get("ENVIRONMENT", "dev").lower()
+    if environment == "dev":
+        bucket_name = f"{bucket_name}-dev"
+        logger.info(f"Using dev bucket: {bucket_name}")
+
     if not bucket_name:
         raise ValueError("No bucket name specified or found in configuration")
 
@@ -165,9 +171,9 @@ def sync_experiments_to_gcs(
                 relative_path = file_path.relative_to(local_path)
 
                 # # Skip files matching .gitignore patterns
-                # if gitignore_spec and gitignore_spec.match_file(str(relative_path)):
-                #     logger.info(f"Skipped by .gitignore: {relative_path}")
-                #     continue
+                if gitignore_spec and gitignore_spec.match_file(str(relative_path)):
+                    logger.info(f"Skipped by .gitignore: {relative_path}")
+                    continue
 
                 total_files += 1
 
