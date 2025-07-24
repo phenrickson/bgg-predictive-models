@@ -134,7 +134,6 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         default="ridge",
-        choices=["linear", "ridge", "lasso", "lightgbm", "lightgbm_linear"],
         help="Regression model type to use",
     )
     parser.add_argument(

@@ -119,12 +119,12 @@ score_rating:
 rating: train_rating finalize_rating score_rating
 
 ## rating model
-RATING_TREE_CANDIDATE = lightgbm-rating
+RATING_TREE_CANDIDATE = catboost-rating
 train_rating_tree:
 	uv run -m src.models.rating \
 	--use-sample-weights \
 	--preprocessor-type tree \
-	--model lightgbm \
+	--model catboost \
 	--min-ratings 5 \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
@@ -144,7 +144,7 @@ score_rating_tree:
 rating_tree: train_rating_tree finalize_rating_tree score_rating_tree
 
 ## users rated model
-USERS_RATED_CANDIDATE ?= test-users_rated
+USERS_RATED_CANDIDATE ?= linear-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--complexity-experiment test-complexity \
@@ -167,11 +167,11 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 
 ## users rated with catboost
 ## users rated model
-USERS_RATED_TREE_CANDIDATE ?= lightgbm-linear-users_rated
+USERS_RATED_TREE_CANDIDATE ?= catboost-users_rated
 train_users_rated_tree:
 	uv run -m src.models.users_rated \
 	--preprocessor-type tree \
-	--model lightgbm_linear \
+	--model catboost \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
 	--experiment $(USERS_RATED_TREE_CANDIDATE) \
@@ -190,6 +190,10 @@ score_users_rated_tree:
 
 users_rated_tree: train_users_rated_tree finalize_users_rated_tree score_users_rated_tree
 
+# run all models
+linear_models: hurdle complexity rating users_rated
+models: hurdle complexity_tree rating_tree users_rated_tree
+
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
@@ -198,7 +202,7 @@ geek_rating:
 	--hurdle linear-hurdle \
 	--complexity catboost-complexity \
 	--rating catboost-rating \
-	--users-rated lightgbm-linear-users_rated \
+	--users-rated linear-users_rated \
 	--experiment calculated-geek-rating
 
 # evaluate
@@ -210,9 +214,9 @@ evaluation:
         hurdle.preprocessor-type=linear \
         hurdle.model=logistic \
         complexity.preprocessor-type=tree \
-        complexity.model=complexity \
+        complexity.model=catboost \
 		complext.model=use-sample-weights \
-        rating.preprocessor-type=linear \
+        rating.preprocessor-type=tree \
         rating.model=catboost \
 		rating.min-ratings=5 \
 		rating.use-sample-weights \

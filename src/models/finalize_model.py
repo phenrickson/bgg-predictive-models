@@ -361,7 +361,7 @@ def finalize_model(
 
     # For rating models, extract complexity experiment name from metadata
     complexity_experiment = None
-    if model_type == "rating":
+    if model_type in ["rating", "users_rated"]:
         # Try to extract complexity experiment from metadata
         complexity_experiment = experiment.metadata.get(
             "complexity_experiment"
