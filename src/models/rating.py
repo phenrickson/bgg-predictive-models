@@ -18,27 +18,24 @@ import polars as pl
 import matplotlib.pyplot as plt
 from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, QuantileRegressor
 from sklearn.base import clone
 from sklearn.base import BaseEstimator, clone
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import lightgbm as lgb
 
 # Project imports
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
-from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split
 from src.models.training import (
     load_data,
     create_data_splits,
     select_X_y,
     create_preprocessing_pipeline,
-    preprocess_data,
     tune_model,
     evaluate_model,
+    calculate_sample_weights,
+    configure_model,
 )
 
 
@@ -62,48 +59,6 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:
     """Constrain predictions to be between 1 and 10."""
     return np.clip(predictions, 1, 10)
-
-
-def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
-    """Set up regression model and parameter grid."""
-    model_MAPPING = {
-        "linear": LinearRegression,
-        "ridge": Ridge,
-        "lasso": Lasso,
-        "lightgbm": lgb.LGBMRegressor,
-        "quantile": QuantileRegressor,
-    }
-
-    PARAM_GRIDS = {
-        "linear": {},  # Linear Regression has no hyperparameters to tune
-        "ridge": {
-            "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
-            "model__solver": ["auto"],
-            "model__fit_intercept": [True],
-        },
-        "lasso": {
-            "model__alpha": [0.1, 1.0, 10.0],
-            "model__selection": ["cyclic", "random"],
-        },
-        "lightgbm": {
-            "model__n_estimators": [500, 1000],
-            "model__learning_rate": [0.01, 0.05],
-            "model__max_depth": [3, 7, 11],
-            "model__num_leaves": [10, 20, 50],
-            "model__min_child_samples": [20],
-        },
-        "quantile": {
-            "model__quantile": [0.4, 0.5, 0.6],  # Different quantiles to explore
-            "model__solver": ["highs-ds"],
-            "model__alpha": [1e-4, 1e-3, 1e-2, 0.1, 1.0],  # Regularization strength
-            "model__fit_intercept": [True],
-        },
-    }
-
-    model = model_MAPPING[model_name]()
-    param_grid = PARAM_GRIDS[model_name]
-
-    return model, param_grid
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -174,7 +129,6 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         default="ridge",
-        choices=["linear", "ridge", "lasso", "lightgbm", "quantile"],
         help="Regression model type to use",
     )
     parser.add_argument(
@@ -201,6 +155,12 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Enable sample weights based on number of ratings",
+    )
+    parser.add_argument(
+        "--sample-weight-column",
+        type=str,
+        default="users_rated",
+        help="Column to use for calculating sample weights (default: users_rated)",
     )
     parser.add_argument(
         "--preprocessor-type",
@@ -233,11 +193,6 @@ def parse_arguments() -> argparse.Namespace:
         raise ValueError("Quantile must be between 0 and 1")
 
     return args
-
-
-def calculate_sample_weights(users_rated: pd.Series) -> np.ndarray:
-    """Calculate sample weights based on number of user ratings."""
-    return np.sqrt(users_rated) / np.sqrt(users_rated.max())
 
 
 def stratified_evaluation(
@@ -383,7 +338,10 @@ def main():
 
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
-    preprocessor = create_preprocessing_pipeline(model_type=args.preprocessor_type)
+    preprocessor = create_preprocessing_pipeline(
+        model_type=args.preprocessor_type,
+        preserve_columns=["year_published", "predicted_complexity"],
+    )
     pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
 
     # Log experiment details
@@ -398,8 +356,12 @@ def main():
     train_sample_weights = None
     tune_sample_weights = None
     if args.use_sample_weights:
-        train_sample_weights = calculate_sample_weights(train_df["users_rated"])
-        tune_sample_weights = calculate_sample_weights(tune_df["users_rated"])
+        train_sample_weights = calculate_sample_weights(
+            train_df, weight_column=args.sample_weight_column
+        )
+        tune_sample_weights = calculate_sample_weights(
+            tune_df, weight_column=args.sample_weight_column
+        )
 
         logger.info("Sample Weights Diagnostic:")
         logger.info(
@@ -480,12 +442,12 @@ def main():
     }
 
     # Add sample weight metadata if used
+    # Add sample weight metadata if used
     if args.use_sample_weights:
         experiment_metadata.update(
             {
                 "sample_weights": {
-                    "method": "sqrt_users_rated",
-                    "description": "Sample weights calculated as sqrt(users_rated) / sqrt(max(users_rated))",
+                    "column": "users_rated",
                 }
             }
         )

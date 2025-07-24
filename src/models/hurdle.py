@@ -134,10 +134,7 @@ def find_optimal_threshold(
             best_f1 = f1
 
     logger = logging.getLogger(__name__)
-    logger.info(f"Optimal Threshold Analysis:")
-    logger.info(f"  Best {metric} threshold: {best_threshold:.4f}")
-    logger.info(f"  Best {metric} score: {best_score:.4f}")
-    logger.info(f"  F1 score at optimal threshold: {best_f1:.4f}")
+    logger.info(f"Optimal Threshold: {best_threshold:.4f}")
 
     return {
         "threshold": best_threshold,
@@ -273,6 +270,12 @@ def parse_arguments() -> argparse.Namespace:
         choices=["linear", "tree"],
         help="Type of preprocessor to use",
     )
+    parser.add_argument(
+        "--min-ratings",
+        type=int,
+        default=0,
+        help="Minimum number of ratings for a game to be included in the dataset",
+    )
 
     args = parser.parse_args()
 
@@ -302,7 +305,7 @@ def main():
     logger = setup_logging()
 
     # Load and split data
-    df = load_data(args.local_data, args.test_end_year)
+    df = load_data(args.local_data, args.test_end_year, min_ratings=args.min_ratings)
     train_df, tune_df, test_df = create_data_splits(
         df,
         train_end_year=args.train_end_year,

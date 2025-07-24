@@ -369,19 +369,19 @@ class Experiment:
 
             # Additional diagnostic for preprocessor steps
             if hasattr(step, "named_steps"):
-                logger.info("    Preprocessor Sub-Steps:")
+                logger.debug("    Preprocessor Sub-Steps:")
                 for sub_name, sub_step in step.named_steps.items():
-                    logger.info(f"      Sub-Step: {sub_name}, Type: {type(sub_step)}")
+                    logger.debug(f"      Sub-Step: {sub_name}, Type: {type(sub_step)}")
                     try:
                         sub_feature_names = sub_step.get_feature_names_out()
-                        logger.info(
+                        logger.debug(
                             f"        Sub-Step Feature Names: {sub_feature_names[:10]}"
                         )
-                        logger.info(
+                        logger.debug(
                             f"        Sub-Step Total Feature Names Count: {len(sub_feature_names)}"
                         )
                     except Exception as e:
-                        logger.info(
+                        logger.debug(
                             f"        Could not extract sub-step feature names: {e}"
                         )
 

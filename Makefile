@@ -34,15 +34,18 @@ $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql 
 features_data: $(RAW_DIR)/game_features.parquet
 
 ## train hurdle moodel
-HURDLE_CANDIDATE ?= test-hurdle
+HURDLE_CANDIDATE ?= linear-hurdle
 
 train_hurdle:
 	uv run -m src.models.hurdle \
-	--experiment $(HURDLE_CANDIDATE)
+	--experiment $(HURDLE_CANDIDATE) \
+	--preprocessor-type linear \
+	--model logistic
 
 finalize_hurdle: 
 	uv run -m src.models.finalize_model \
-	--model-type hurdle --experiment $(HURDLE_CANDIDATE)
+	--model-type hurdle \
+	--experiment $(HURDLE_CANDIDATE)
 
 score_hurdle: 
 	uv run -m src.models.score \
@@ -55,6 +58,7 @@ hurdle: train_hurdle finalize_hurdle score_hurdle
 COMPLEXITY_CANDIDATE ?= test-complexity
 train_complexity:
 	uv run -m src.models.complexity \
+	--use-sample-weights \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
 finalize_complexity: 
@@ -69,12 +73,35 @@ score_complexity:
 
 complexity: train_complexity finalize_complexity score_complexity
 
+## complexity model
+COMPLEXITY_TREE_CANDIDATE ?= catboost-complexity
+train_complexity_tree:
+	uv run -m src.models.complexity \
+	--preprocessor-type tree \
+	--model catboost \
+	--use-sample-weights \
+	--experiment $(COMPLEXITY_TREE_CANDIDATE)
+
+finalize_complexity_tree: 
+	uv run -m src.models.finalize_model \
+	--model-type complexity \
+	--experiment $(COMPLEXITY_TREE_CANDIDATE)
+
+score_complexity_tree: 
+	uv run -m src.models.score \
+	--model-type complexity \
+	--experiment $(COMPLEXITY_TREE_CANDIDATE)
+
+complexity_tree: train_complexity_tree finalize_complexity_tree score_complexity_tree
+
 ## rating model
-RATING_CANDIDATE ?= test-rating
+RATING_CANDIDATE ?= linear-rating
 train_rating:
 	uv run -m src.models.rating \
+	--use-sample-weights \
+	--min-ratings 5 \
 	--complexity-experiment test-complexity \
-	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
+	--local-complexity-path models/experiments/predictions/test-complexity.parquet \
 	--experiment $(RATING_CANDIDATE)
 
 finalize_rating: 
@@ -86,18 +113,44 @@ score_rating:
 	uv run -m src.models.score \
 	--model-type rating \
 	--experiment $(RATING_CANDIDATE) \
-	--complexity-predictions data/estimates/test-complexity_complexity_predictions.parquet \
+	--complexity-predictions models/experiments/predictions/test-complexity.parquet
 
 
 rating: train_rating finalize_rating score_rating
 
+## rating model
+RATING_TREE_CANDIDATE = catboost-rating
+train_rating_tree:
+	uv run -m src.models.rating \
+	--use-sample-weights \
+	--preprocessor-type tree \
+	--model catboost \
+	--min-ratings 5 \
+	--complexity-experiment catboost-complexity \
+	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
+	--experiment $(RATING_TREE_CANDIDATE)
+
+finalize_rating_tree: 
+	uv run -m src.models.finalize_model \
+	--model-type rating \
+	--experiment $(RATING_TREE_CANDIDATE)
+
+score_rating_tree:
+	uv run -m src.models.score \
+	--model-type rating \
+	--experiment $(RATING_TREE_CANDIDATE) \
+	--complexity-predictions models/experiments/predictions/catboost-complexity.parquet
+	
+rating_tree: train_rating_tree finalize_rating_tree score_rating_tree
+
 ## users rated model
-USERS_RATED_CANDIDATE ?= test-users_rated
+USERS_RATED_CANDIDATE ?= linear-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--complexity-experiment test-complexity \
-	--local-complexity-path data/estimates/test-complexity_complexity_predictions.parquet \
-	--experiment $(USERS_RATED_CANDIDATE)
+	--local-complexity-path models/experiments/predictions/test-complexity.parquet \
+	--experiment $(USERS_RATED_CANDIDATE) \
+	--min-ratings 0
 
 finalize_users_rated: 
 	uv run -m src.models.finalize_model \
@@ -108,14 +161,77 @@ score_users_rated:
 	uv run -m src.models.score \
 	--model-type users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--complexity-predictions data/estimates/test-complexity_complexity_predictions.parquet \
+	--complexity-predictions models/experiments/predictions/test-complexity.parquet
 
 users_rated: train_users_rated finalize_users_rated score_users_rated
+
+## users rated with catboost
+## users rated model
+USERS_RATED_TREE_CANDIDATE ?= lightgbm-users_rated
+train_users_rated_tree:
+	uv run -m src.models.users_rated \
+	--preprocessor-type tree \
+	--model lightgbm \
+	--complexity-experiment catboost-complexity \
+	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
+	--experiment $(USERS_RATED_TREE_CANDIDATE) \
+	--min-ratings 0
+
+finalize_users_rated_tree: 
+	uv run -m src.models.finalize_model \
+	--model-type users_rated \
+	--experiment $(USERS_RATED_TREE_CANDIDATE)
+
+score_users_rated_tree:
+	uv run -m src.models.score \
+	--model-type users_rated \
+	--experiment $(USERS_RATED_TREE_CANDIDATE) \
+	--complexity-predictions models/experiments/predictions/catboost-complexity.parquet
+
+users_rated_tree: train_users_rated_tree finalize_users_rated_tree score_users_rated_tree
+
+# run all models
+linear_models: hurdle complexity rating users_rated
+tree_models: complexity_tree rating_tree users_rated_tree
+
+# predict geek rating given models
+geek_rating: 
+	uv run -m src.models.geek_rating \
+	--start-year 2024 \
+	--end-year 2029 \
+	--hurdle linear-hurdle \
+	--complexity catboost-complexity \
+	--rating catboost-rating \
+	--users-rated lightgbm-users_rated \
+	--experiment calculated-geek-rating
+
+# evaluate
+evaluation:
+	uv run -m src.models.time_based_evaluation \
+	--start-year 2016 \
+	--end-year 2021 \
+    --model-args \
+        hurdle.preprocessor-type=linear \
+        hurdle.model=logistic \
+        complexity.preprocessor-type=tree \
+        complexity.model=catboost \
+		complexty.model=use-sample-weights \
+        rating.preprocessor-type=tree \
+        rating.model=catboost \
+		rating.min-ratings=5 \
+		rating.use-sample-weights \
+		users_rated.preprocessor-type=tree \
+		users_rated.model=lightgbm \
+		users_rated.min-ratings=0
 
 ## view experiments
 experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
+# dashboard to look at predicted geek rating
+geek_rating_dashboard:
+	uv run streamlit run src/monitor/geek_rating_dashboard.py
+	
 # remove trained experiments
 .PHONY: clean_experiments
 clean_experiments:
@@ -151,3 +267,12 @@ clean_users_rated:
 	else \
 		echo "Aborted."; \
 	fi
+
+# upload experiments to Google Cloud Storage
+.PHONY: upload_experiments
+upload_experiments:
+	uv run -m src.utils.sync_experiments --create-bucket
+
+.PHONY: download_experiments
+download_experiments:
+	uv run -m src.utils.sync_experiments --download

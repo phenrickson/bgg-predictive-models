@@ -95,7 +95,7 @@ def predict_game(
     results["name"] = features["name"]
     results["year_published"] = features["year_published"]
 
-    results["will_rate"] = will_rate_proba
+    results["predicted_hurdle_prob"] = will_rate_proba
 
     # Identify games likely to receive ratings
     likely_games_mask = will_rate_proba >= threshold
@@ -106,34 +106,37 @@ def predict_game(
         likely_features = features[likely_games_mask]
 
         # Predict complexity
-        results.loc[likely_games_mask, "complexity"] = models["complexity"].predict(
-            likely_features
-        )
+        results.loc[likely_games_mask, "predicted_complexity"] = models[
+            "complexity"
+        ].predict(likely_features)
 
         # Add predicted complexity as feature
         likely_features_with_complexity = likely_features.copy()
         likely_features_with_complexity["predicted_complexity"] = results.loc[
-            likely_games_mask, "complexity"
+            likely_games_mask, "predicted_complexity"
         ]
 
         # Predict rating and users
-        results.loc[likely_games_mask, "rating"] = models["rating"].predict(
+        results.loc[likely_games_mask, "predicted_rating"] = models["rating"].predict(
             likely_features_with_complexity
         )
-        results.loc[likely_games_mask, "users_rated"] = models["users_rated"].predict(
-            likely_features_with_complexity
-        )
+        results.loc[likely_games_mask, "predicted_users_rated"] = models[
+            "users_rated"
+        ].predict(likely_features_with_complexity)
 
         # Ensure users is at least minimum threshold
-        results.loc[likely_games_mask, "users_rated"] = np.maximum(
-            np.round(np.expm1(results.loc[likely_games_mask, "users_rated"]) / 50) * 50,
+        results.loc[likely_games_mask, "predicted_users_rated"] = np.maximum(
+            np.round(
+                np.expm1(results.loc[likely_games_mask, "predicted_users_rated"]) / 50
+            )
+            * 50,
             25,
         )
 
     # Fill in default values for unlikely games
-    results.loc[~likely_games_mask, "complexity"] = 1.0
-    results.loc[~likely_games_mask, "rating"] = 5.5
-    results.loc[~likely_games_mask, "users_rated"] = 25
+    results.loc[~likely_games_mask, "predicted_complexity"] = 1.0
+    results.loc[~likely_games_mask, "predicted_rating"] = 5.5
+    results.loc[~likely_games_mask, "predicted_users_rated"] = 25
 
     logger.info(
         f"Predictions: {len(likely_games_mask)} likely games out of {len(features)} total"
@@ -160,14 +163,13 @@ def calculate_geek_rating(
         Series of geek ratings if input is DataFrame,
         or single geek rating float if input is Dict
     """
+    # Try original column names first, then predicted column names
     try:
-        # DataFrame case - access columns
         rating = predictions["rating"]
         users = predictions["users_rated"]
-    except (TypeError, AttributeError):
-        # Dictionary case - access keys
-        rating = predictions["rating"]
-        users = predictions["users_rated"]
+    except (KeyError, TypeError):
+        rating = predictions["predicted_rating"]
+        users = predictions["predicted_users_rated"]
 
     return ((rating * users) + (prior_rating * prior_weight)) / (users + prior_weight)
 
@@ -322,7 +324,7 @@ def predict_geek_rating(
     )
 
     # Calculate geek rating
-    predictions["geek_rating"] = calculate_geek_rating(
+    predictions["prediction"] = calculate_geek_rating(
         predictions, prior_rating=prior_rating, prior_weight=prior_weight
     )
 
@@ -408,6 +410,21 @@ def main():
         help="Name of the experiment for tracking (default: geek_rating_prediction)",
     )
 
+    # Add output directory argument
+    parser.add_argument(
+        "--output-dir",
+        default="./models/experiments",
+        help="Base directory for output files",
+    )
+
+    # Add year filtering arguments
+    parser.add_argument(
+        "--start-year", type=int, help="Start year for filtering games (inclusive)"
+    )
+    parser.add_argument(
+        "--end-year", type=int, help="End year for filtering games (exclusive)"
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -460,8 +477,20 @@ def main():
     config = load_config()
     loader = BGGDataLoader(config)
 
-    # Load all games with non-null year_published
-    df = loader.load_data(preprocessor=None)
+    # Construct WHERE clause for year filtering
+    where_clauses = []
+    if args.start_year is not None:
+        where_clauses.append(f"year_published >= {args.start_year}")
+    if args.end_year is not None:
+        where_clauses.append(f"year_published <= {args.end_year}")
+
+    # Load data with optional year filtering
+    where_clause = " AND ".join(where_clauses) if where_clauses else ""
+    df = loader.load_data(where_clause=where_clause, preprocessor=None)
+
+    logger.info(
+        f"Filtered to {len(df)} games between years {args.start_year or 'min'} and {args.end_year or 'max'}"
+    )
 
     # Convert to pandas for prediction
     df_pandas = df.to_pandas()
@@ -481,22 +510,51 @@ def main():
     # Convert to Polars for saving
     results = pl.from_pandas(predictions)
 
-    # Ensure predictions directory exists
-    os.makedirs("data/predictions/geek_rating", exist_ok=True)
+    # Ensure predictions directory exists with full path
+    predictions_dir = os.path.join(
+        os.path.abspath(args.output_dir), tracker.model_type, args.experiment
+    )
+    os.makedirs(predictions_dir, exist_ok=True)
 
-    # Save predictions
-    output_path = f"data/predictions/geek_rating/{args.output}"
-    results.write_parquet(output_path)
+    # # Construct output filename
+    # output_filename = "predictions.parquet"
+    # output_path = os.path.join(predictions_dir, output_filename)
+
+    # # Log detailed file saving information
+    # logger.info(f"Saving predictions to: {output_path}")
+
+    # # Verify directory exists and is writable
+    # if not os.access(predictions_dir, os.W_OK):
+    #     logger.error(f"Cannot write to directory: {predictions_dir}")
+    #     raise PermissionError(f"No write permission for directory: {predictions_dir}")
+
+    # # Save predictions
+    # results.write_parquet(output_path)
+
+    # # Verify file was created
+    # if not os.path.exists(output_path):
+    #     logger.error(f"Failed to save predictions to: {output_path}")
+    #     raise IOError(f"Could not save predictions file: {output_path}")
+
+    # Determine actual values
+    if "geek_rating" in df.columns:
+        # Use existing geek_rating as actual values
+        # Set to NaN if geek_rating is zero (representing missingness)
+        actuals = np.where(
+            df["geek_rating"].to_numpy() == 0, np.nan, df["geek_rating"].to_numpy()
+        )
+    else:
+        # Fallback to NaN if no geek_rating column exists
+        actuals = np.full(len(results), np.nan)
 
     # Log predictions to the experiment
     experiment.log_predictions(
-        predictions=results["geek_rating"].to_numpy(),
-        actuals=np.full(len(results), np.nan),  # Placeholder array of NaNs
+        predictions=results["prediction"].to_numpy(),
+        actuals=actuals,
         df=results,
-        dataset="prediction",
+        dataset="test",  # Changed to "test" to match the filename
     )
 
-    logger.info(f"Predictions saved to {output_path}")
     logger.info(f"Experiment tracked:")
     logger.info(f"  Name: {args.experiment}")
     logger.info(f"  Experiments used:")

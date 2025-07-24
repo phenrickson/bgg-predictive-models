@@ -16,11 +16,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
-from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
-from sklearn.compose import TransformedTargetRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso, PoissonRegressor
 from sklearn.base import clone
 from sklearn.base import BaseEstimator, clone
 from tqdm import tqdm
@@ -30,7 +26,6 @@ from sklearn.metrics import (
     r2_score,
     mean_poisson_deviance,
 )
-import lightgbm as lgb
 
 # Project imports
 from src.data.config import load_config
@@ -45,6 +40,7 @@ from src.models.training import (
     preprocess_data,
     tune_model,
     evaluate_model,
+    configure_model,
 )
 
 
@@ -68,42 +64,6 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:
     """Constrain predictions to be non-negative integers after exponentiating."""
     return np.maximum(np.round(np.exp(predictions)), 0).astype(int)
-
-
-def configure_model(model_name: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
-    """Set up regression model and parameter grid."""
-    model_MAPPING = {
-        "linear": LinearRegression,
-        "ridge": Ridge,
-        "lasso": Lasso,
-        "lightgbm": lgb.LGBMRegressor,
-    }
-
-    PARAM_GRIDS = {
-        "linear": {},  # Linear Regression has no hyperparameters to tune
-        "ridge": {
-            "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],  # Expanded alpha range
-            "model__solver": ["auto"],
-            "model__fit_intercept": [True],
-        },
-        "lasso": {
-            "model__alpha": [0.1, 1.0, 10.0],
-            "model__selection": ["cyclic", "random"],
-        },
-        "lightgbm": {
-            "model__n_estimators": [500],
-            "model__learning_rate": [0.01],
-            "model__max_depth": [-1],  # -1 means no limit
-            "model__num_leaves": [50, 100],
-            "model__min_child_samples": [10],
-            "model__reg_alpha": [0.1],
-        },
-    }
-
-    model = model_MAPPING[model_name]()
-    param_grid = PARAM_GRIDS[model_name]
-
-    return model, param_grid
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -174,7 +134,6 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         default="ridge",
-        choices=["linear", "ridge", "lasso", "lightgbm"],
         help="Regression model type to use",
     )
     parser.add_argument(
@@ -308,7 +267,10 @@ def main():
 
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
-    preprocessor = create_preprocessing_pipeline(model_type=args.preprocessor_type)
+    preprocessor = create_preprocessing_pipeline(
+        model_type=args.preprocessor_type,
+        preserve_columns=["year_published", "predicted_complexity"],
+    )
 
     # # Wrap the model with TransformedTargetRegressor
     # transformed_model = TransformedTargetRegressor(

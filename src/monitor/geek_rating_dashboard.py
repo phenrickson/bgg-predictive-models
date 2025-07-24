@@ -62,10 +62,10 @@ def load_predictions(
     prediction_paths = [
         # Check in models/experiments directory first
         Path(
-            f"models/experiments/geek_rating/{experiment_name}/v{version}/prediction_predictions.parquet"
+            f"models/experiments/geek_rating/{experiment_name}/v{version}/test_predictions.parquet"
         ),
         Path(
-            f"models/experiments/geek_rating/{experiment_name}/prediction_predictions.parquet"
+            f"models/experiments/geek_rating/{experiment_name}/test_predictions.parquet"
         ),
     ]
 
@@ -143,7 +143,7 @@ def main():
 
     # Tabs for different views
     tab1, tab2, tab3 = st.tabs(
-        ["Predictions Table", "Geek Rating Distribution", "Complexity Analysis"]
+        ["Predictions Table", "Geek Rating Distribution", "Analysis"]
     )
 
     with tab1:
@@ -151,6 +151,10 @@ def main():
         df["year_bucket"] = df["year_published"].apply(
             lambda x: "Other" if x < 2010 else str(x)
         )
+
+        # rename
+        df["predicted_geek_rating"] = df["prediction"]
+        df["actual_geek_rating"] = df["actual"]
 
         # Year selection
         unique_years = sorted(
@@ -171,7 +175,7 @@ def main():
         filtered_df = df[df["year_bucket"] == selected_year]
 
         # Sort by geek_rating in descending order
-        filtered_df = filtered_df.sort_values("geek_rating", ascending=False)
+        filtered_df = filtered_df.sort_values("predicted_geek_rating", ascending=False)
 
         # Basic statistics
         st.header("Prediction Statistics")
@@ -181,25 +185,30 @@ def main():
             st.metric("Total Games", len(filtered_df))
 
         with col2:
-            st.metric("Average Geek Rating", f"{filtered_df['geek_rating'].mean():.2f}")
+            st.metric(
+                "Average Geek Rating",
+                f"{filtered_df['predicted_geek_rating'].mean():.2f}",
+            )
 
         with col3:
             st.metric(
-                "Median Geek Rating", f"{filtered_df['geek_rating'].median():.2f}"
+                "Median Geek Rating",
+                f"{filtered_df['predicted_geek_rating'].median():.2f}",
             )
 
-        st.header("Predictions Table")
+        # st.header("Predictions Table")
 
         # Columns to display
         display_columns = [
+            "year_published",
             "game_id",
             "name",
-            "year_published",
-            "will_rate",
-            "complexity",
-            "rating",
-            "users_rated",
-            "geek_rating",
+            "actual_geek_rating",
+            "predicted_geek_rating",
+            "predicted_hurdle_prob",
+            "predicted_complexity",
+            "predicted_rating",
+            "predicted_users_rated",
         ]
 
         # Ensure all columns exist
@@ -221,6 +230,7 @@ def main():
             display_df[display_columns],
             use_container_width=True,
             hide_index=True,
+            height=800,  # Increase default height to show more rows
             column_config={
                 "bgg_link": st.column_config.LinkColumn(
                     "BoardGameGeek", display_text="BGG"
@@ -234,7 +244,7 @@ def main():
         # Histogram of geek ratings for selected year
         fig = px.histogram(
             filtered_df,
-            x="geek_rating",
+            x="predicted_geek_rating",
             title=f"Distribution of Geek Ratings for {selected_year}",
             labels={"geek_rating": "Geek Rating"},
             marginal="box",  # Add box plot
@@ -242,23 +252,31 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        st.header("Complexity Analysis")
+        st.header("Analysis")
 
         # Select x-axis variable
-        x_axis_options = ["complexity", "will_rate", "users_rated", "rating"]
+        x_axis_options = [
+            "predicted_complexity",
+            "predicted_hurdle_prob",
+            "predicted_users_rated",
+            "predicted_rating",
+        ]
         x_axis = st.selectbox("Select X-Axis Variable", x_axis_options, index=0)
 
         # Scatter plot with dynamic x-axis
         fig = px.scatter(
             filtered_df,
             x=x_axis,
-            y="geek_rating",
-            color="will_rate",
+            y="predicted_geek_rating",
+            color="predicted_hurdle_prob",
             title=f"{x_axis.replace('_', ' ').title()} vs Geek Rating for {selected_year}",
             labels={
                 x_axis: x_axis.replace("_", " ").title(),
-                "geek_rating": "Geek Rating",
-                "will_rate": "Likelihood of Rating",
+                "predicted_geek_rating": "Geek Rating",
+                "predicted_complexity": "Complexity",
+                "predicted_rating": "Rating",
+                "predicted_users_rated": "Users Rated",
+                "predicted_hurdle_prob": "Likelihood of Rating",
             },
             hover_data=["name", "year_published"],
         )

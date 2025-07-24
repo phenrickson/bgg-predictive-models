@@ -223,81 +223,234 @@ def create_parameters_overview(experiments: List[Dict[str, Any]]):
     return pl.DataFrame(params_data)
 
 
-def create_feature_importance_plot(experiments: List[Dict[str, Any]]):
+def create_feature_importance_plot(
+    experiment: Dict[str, Any],
+    model_type: str,
+    top_n: int = 20,
+):
     """
-    Create feature importance visualization.
+    Create feature importance visualization for a single experiment.
 
     Args:
-        experiments: List of experiments
+        experiment: Specific experiment details
+        model_type: Type of model for experiment
+        top_n: Number of top features to display (default: 20)
 
     Returns:
         Plotly figure or None
     """
-    feature_data = []
+    # Construct coefficient file path with more robust method
+    exp_name = experiment.get("name", experiment.get("full_name", "unknown"))
+    exp_version = experiment.get("version", 1)
 
-    for exp in experiments:
-        try:
-            # Load coefficients
-            coef_path = Path(
-                f"models/experiments/{exp['name']}/v{exp['version']}/coefficients.csv"
+    # Construct the specific paths for both coefficient and feature importance files
+    coef_paths = [
+        Path(
+            f"models/experiments/{model_type}/{exp_name}/v{exp_version}/coefficients.csv"
+        ),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/coefficients.csv"),
+        Path(f"models/experiments/{exp_name}/coefficients.csv"),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/metadata/coefficients.csv"),
+    ]
+
+    feature_importance_paths = [
+        Path(
+            f"models/experiments/{model_type}/{exp_name}/v{exp_version}/feature_importance.csv"
+        ),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/feature_importance.csv"),
+        Path(f"models/experiments/{exp_name}/feature_importance.csv"),
+        Path(
+            f"models/experiments/{exp_name}/v{exp_version}/metadata/feature_importance.csv"
+        ),
+    ]
+
+    # Find the first existing path
+    coef_path = next((path for path in coef_paths if path.exists()), None)
+    feature_importance_path = next(
+        (path for path in feature_importance_paths if path.exists()), None
+    )
+
+    # Abbreviate feature names
+    def abbreviate_feature(feature, n=40):
+        # Truncate to maximum n characters
+        if len(feature) > n:
+            return feature[: n - 3] + "..."
+        return feature
+
+    try:
+        # Prefer coefficient file if it exists
+        if coef_path:
+            coef_df = pl.read_csv(coef_path)
+
+            # Sort and select top N features by absolute coefficient value
+            df_sorted = (
+                coef_df.with_columns(
+                    [
+                        pl.col("coefficient").abs().alias("abs_coefficient"),
+                        pl.Series(
+                            name="abbreviated_feature",
+                            values=[
+                                abbreviate_feature(f)
+                                for f in coef_df.get_column("feature")
+                            ],
+                        ),
+                    ]
+                )
+                .sort("abs_coefficient", descending=True)
+                .head(top_n)
+                .sort(
+                    "coefficient"
+                )  # Sort by signed coefficient for correct y-axis order
             )
-            if coef_path.exists():
-                coef_df = pl.read_csv(coef_path)
 
-                # Extract feature and coefficient data
-                for row in coef_df.iter_rows(named=True):
-                    feature_data.append(
-                        {
-                            "Experiment": exp["full_name"],
-                            "Feature": row["feature"],
-                            "Coefficient": float(row["coefficient"]),
-                        }
-                    )
-        except Exception as e:
-            st.warning(f"Could not process coefficients for {exp['full_name']}: {e}")
+            # Create horizontal bar plot
+            fig = px.bar(
+                df_sorted.to_pandas(),
+                y="abbreviated_feature",
+                x="coefficient",
+                orientation="h",
+                color="coefficient",
+                color_continuous_scale="RdBu",
+                color_continuous_midpoint=0,
+            )
 
-    # Create visualization
-    if feature_data:
-        df = pl.DataFrame(feature_data)
+            # Enhanced layout
+            fig.update_layout(
+                height=800,
+                width=1000,
+                title=f"Top {top_n} Features {exp_name} (Coefficients)",
+                yaxis_title="Feature",
+                xaxis_title="Effect",
+                title_x=0.5,
+            )
 
-        # Aggregate coefficients
-        df_agg = (
-            df.group_by(["Experiment", "Feature"])
-            .agg(pl.col("Coefficient").mean())
-            .sort("Coefficient", descending=True)
-        )
+            # Remove color axis label
+            fig.update_layout(coloraxis_colorbar=dict(title=""))
 
-        # Convert to pandas for Plotly
-        df_pandas = df_agg.to_pandas()
+            # Ensure zero line is visible
+            fig.add_vline(x=0, line_width=2, line_dash="dash", line_color="gray")
 
-        # Create interactive bar plot
-        fig = px.bar(
-            df_pandas,
-            x="Feature",
-            y="Coefficient",
-            color="Experiment",
-            barmode="group",
-            title="Feature Importance Across Experiments",
-            labels={"Coefficient": "Mean Coefficient"},
-        )
+            # Add hover text with full feature names and remove bar text
+            fig.update_traces(
+                hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>Coefficient: %{x:.4f}<extra></extra>",
+                text=df_sorted.get_column("feature"),
+                texttemplate="",
+                textposition="none",
+            )
 
-        # Enhanced layout
-        fig.update_layout(
-            height=600,
-            width=1000,
-            xaxis_tickangle=-45,
-            xaxis_tickfont=dict(size=8),
-            legend_title_text="Experiment",
-            title_x=0.5,
-            hovermode="closest",
-        )
+            return fig
 
-        return fig
+        # If no coefficient file, try feature importance file
+        elif feature_importance_path:
+            feature_df = pl.read_csv(feature_importance_path)
 
-    return None
+            # Diagnostic logging of columns
+            # Flexible column name detection
+            feature_col = None
+            importance_col = None
+
+            # Common column name variations
+            feature_candidates = [
+                "feature",
+                "features",
+                "feature_name",
+                "name",
+                "column",
+            ]
+            importance_candidates = [
+                "importance",
+                "feature_importance",
+                "importance_score",
+                "score",
+                "value",
+            ]
+
+            # Find first matching column names
+            for candidate in feature_candidates:
+                if candidate in feature_df.columns:
+                    feature_col = candidate
+                    break
+
+            for candidate in importance_candidates:
+                if candidate in feature_df.columns:
+                    importance_col = candidate
+                    break
+
+            # Validate column detection
+            if not feature_col or not importance_col:
+                st.warning(
+                    f"Could not find feature and importance columns in {feature_importance_path}"
+                )
+                st.warning(f"Available columns: {feature_df.columns}")
+                return None
+
+            # Sort and select top N features by importance
+            df_sorted = (
+                feature_df.with_columns(
+                    [
+                        pl.Series(
+                            name="abbreviated_feature",
+                            values=[
+                                abbreviate_feature(str(f))
+                                for f in feature_df.get_column(feature_col)
+                            ],
+                        )
+                    ]
+                )
+                .sort(importance_col, descending=True)
+                .head(top_n)
+                .sort(
+                    importance_col, descending=False
+                )  # Reverse order to have most important at top
+            )
+
+            # Create horizontal bar plot for feature importance
+            fig = px.bar(
+                df_sorted.to_pandas(),
+                y="abbreviated_feature",
+                x=importance_col,
+                orientation="h",
+                color=importance_col,
+                color_continuous_scale="Viridis",  # Different color scale to distinguish from coefficient plot
+            )
+
+            # Enhanced layout
+            fig.update_layout(
+                height=800,
+                width=1000,
+                title=f"Top {top_n} Features {exp_name} (Feature Importance)",
+                yaxis_title="Feature",
+                xaxis_title="Importance",
+                title_x=0.5,
+            )
+
+            # Remove color axis label
+            fig.update_layout(coloraxis_colorbar=dict(title=""))
+
+            # Add hover text with full feature names
+            fig.update_traces(
+                hovertemplate=f"<b>%{{y}}</b><br>Full Name: %{{text}}<br>Importance: %{{x:.4f}}<extra></extra>",
+                text=df_sorted.get_column(feature_col),
+                texttemplate="",
+                textposition="none",
+            )
+
+            return fig
+
+        else:
+            st.warning(
+                f"No coefficient or feature importance file found for experiment {exp_name}"
+            )
+            return None
+
+    except Exception as e:
+        st.warning(f"Error processing feature importance for {exp_name}: {e}")
+        return None
 
 
-def display_predictions(experiment, dataset: str, model_type: str):
+def display_predictions(
+    experiment, dataset: str, model_type: str, selected_model_type: str
+):
     """
     Display predictions for a specific dataset with comprehensive analysis.
 
@@ -305,6 +458,7 @@ def display_predictions(experiment, dataset: str, model_type: str):
         experiment: Experiment object
         dataset: Dataset to display predictions for ('tune' or 'test')
         model_type: Type of model ('regression' or 'classification')
+        selected_model_type: Model type selected in the sidebar
 
     Returns:
         Polars DataFrame with predictions
@@ -328,6 +482,44 @@ def display_predictions(experiment, dataset: str, model_type: str):
         st.info("2. Predictions were not saved during experiment tracking")
         return None
 
+    # Special handling for geek_rating model type
+    if selected_model_type == "geek_rating":
+        # # Diagnostic logging
+        # st.warning(f"Geek Rating Model: Initial DataFrame Null Check")
+        # st.warning(f"DataFrame columns: {predictions_df.columns}")
+
+        # Check if 'actual' column exists
+        if "actual" not in predictions_df.columns:
+            st.error("No 'actual' column found in the DataFrame")
+            st.warning(f"Available columns: {predictions_df.columns}")
+            st.warning(f"DataFrame schema: {predictions_df.schema}")
+            return None
+
+        # Detailed null check
+        null_mask = predictions_df["actual"].is_null()
+        # st.warning(f"Null values in 'actual' column: {null_mask.sum()}")
+
+        # If there are null values, show some examples
+        if null_mask.sum() > 0:
+            null_rows = predictions_df.filter(null_mask)
+            st.warning("Sample of rows with null 'actual' values:")
+            st.dataframe(null_rows)
+
+        try:
+            # Replace only non-numeric values with 5.5
+            predictions_df = predictions_df.with_columns(
+                [
+                    pl.when(~pl.col("actual").cast(pl.Float64).is_finite())
+                    .then(pl.lit(5.5))
+                    .otherwise(pl.col("actual"))
+                    .alias("actual")
+                ]
+            )
+            st.success("Set non-numeric 'actual' values to 5.5 for geek_rating model")
+        except Exception as e:
+            st.error(f"Error replacing null values: {e}")
+            return None
+
     # Select relevant columns for display
     display_columns = [
         col
@@ -340,6 +532,62 @@ def display_predictions(experiment, dataset: str, model_type: str):
 
     # Performance metrics and visualization based on model type
     try:
+        # Check if users_rated column exists and add filter if it does
+        if "users_rated" in display_df.columns:
+            # Add users_rated filter above the plot
+            # st.header("Filter Predictions")
+            min_users_rated_filter = st.slider(
+                "Minimum Number of Users Rated",
+                min_value=0,
+                max_value=100,
+                value=5,
+                step=5,
+            )
+
+            # Calculate the actual minimum users_rated based on the percentage
+            actual_min_users_rated = int(
+                display_df["users_rated"].quantile(min_users_rated_filter / 100)
+            )
+
+            # Apply users_rated filter
+            display_df = display_df.filter(
+                pl.col("users_rated") >= actual_min_users_rated
+            )
+
+            # Check if year_published column exists and add year filter
+            if "year_published" in display_df.columns:
+                # Get min and max years
+                min_year = display_df["year_published"].min()
+                max_year = display_df["year_published"].max()
+
+                # Add year filter
+                year_filter = st.slider(
+                    "Year Published Range",
+                    min_value=int(min_year),
+                    max_value=int(max_year),
+                    value=(int(min_year), int(max_year)),
+                )
+
+                # Apply year filter
+                display_df = display_df.filter(
+                    (pl.col("year_published") >= year_filter[0])
+                    & (pl.col("year_published") <= year_filter[1])
+                )
+
+            # # Display filter info
+            # st.info(
+            #     f"Showing games with at least {actual_min_users_rated} users rated (percentile {min_users_rated_filter}%)"
+            # )
+
+        # Add filter for geek_rating model type to exclude games with actual = 5.5
+        if selected_model_type == "geek_rating":
+            filter_5_5 = st.checkbox(
+                "Filter out games where actual rating = 5.5", value=False
+            )
+            if filter_5_5:
+                display_df = display_df.filter(pl.col("actual") != 5.5)
+                st.info(f"Filtered out games where actual rating = 5.5")
+
         if model_type == "regression":
             from sklearn.metrics import (
                 mean_squared_error,
@@ -510,7 +758,11 @@ def main():
     st.title("Experiment Tracking Dashboard")
 
     # Model Type Selection
-    model_types = [d.name for d in Path("models/experiments").iterdir() if d.is_dir()]
+    model_types = [
+        d.name
+        for d in Path("models/experiments").iterdir()
+        if d.is_dir() and d.name not in ["predictions"]
+    ]
     selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
 
     # Load experiments
@@ -600,9 +852,13 @@ def main():
                 st.error(f"Invalid dataset: {selected_dataset}")
                 return
 
+            # # Special handling for geek_rating model type
+            # if selected_model_type == "geek_rating":
+            #     st.warning("Geek Rating Model: Setting 'actual' to 5.5")
+
             # Display predictions
             predictions_df = display_predictions(
-                experiment, selected_dataset, model_type
+                experiment, selected_dataset, model_type, selected_model_type
             )
 
             if predictions_df is not None:
@@ -628,11 +884,40 @@ def main():
 
     with tab4:
         st.header("Feature Importance")
-        feature_fig = create_feature_importance_plot(experiments)
-        if feature_fig:
-            st.plotly_chart(feature_fig)
+
+        # Select specific experiment
+        selected_experiment = st.selectbox(
+            "Select Experiment",
+            [exp["full_name"] for exp in experiments],
+            key="feature_importance_experiment",
+        )
+
+        # Parse experiment name and version
+        exp_name, exp_version = selected_experiment.split("/")
+        exp_version = int(exp_version.replace("v", ""))
+
+        # Find the selected experiment
+        selected_exp = next(
+            (exp for exp in experiments if exp["full_name"] == selected_experiment),
+            None,
+        )
+
+        # Feature importance configuration
+        top_n = st.slider("Top N Features", min_value=5, max_value=50, value=30, step=5)
+
+        if selected_exp:
+            feature_fig = create_feature_importance_plot(
+                selected_exp,
+                model_type=selected_model_type,
+                top_n=top_n,
+            )
+
+            if feature_fig:
+                st.plotly_chart(feature_fig)
+            else:
+                st.write("No coefficient data available for this experiment")
         else:
-            st.write("No feature importance data available")
+            st.error("Could not find the selected experiment")
 
     with tab5:
         st.header("Experiment Details")

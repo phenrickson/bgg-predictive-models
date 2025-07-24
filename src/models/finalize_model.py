@@ -13,7 +13,7 @@ from src.models.experiments import Experiment
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.hurdle import setup_logging
-from src.models.complexity import calculate_complexity_weights
+from src.models.training import calculate_sample_weights  # Import the function
 
 
 def extract_model_threshold(experiment: Experiment) -> Optional[float]:
@@ -106,6 +106,39 @@ def generate_model_description(
     return description
 
 
+def extract_sample_weights(
+    experiment: Experiment, df: Optional[pl.DataFrame] = None
+) -> Optional[np.ndarray]:
+    """
+    Extract or calculate sample weights from experiment metadata.
+
+    Args:
+        experiment: Experiment object
+        df: Optional DataFrame to calculate weights if method is specified
+
+    Returns:
+        numpy array of sample weights or None
+    """
+    logger = logging.getLogger(__name__)
+
+    # Check for sample weights configuration
+    sample_weights_info = experiment.metadata.get("sample_weights", {})
+    weight_column = sample_weights_info.get("column")
+
+    # If no column specified, return None
+    if not weight_column:
+        logger.warning("No sample weight column specified in metadata")
+        return None
+
+    # If DataFrame is provided and column exists, calculate weights
+    if df is not None and weight_column in df.columns:
+        logger.info(f"Calculating sample weights using column: {weight_column}")
+        return calculate_sample_weights(df.to_pandas(), weight_column)
+
+    logger.warning(f"Could not calculate sample weights for column: {weight_column}")
+    return None
+
+
 def load_data(
     config: dict,
     loader: BGGDataLoader,
@@ -128,7 +161,7 @@ def load_data(
         min_weights: Minimum weights filter
         recent_year_threshold: Number of years to consider "recent" for filtering
         logger: Logging instance
-        complexity_experiment: Optional name of complexity experiment for rating models
+        complexity_experiment: Optional name of complexity experiment
 
     Returns:
         Tuple of (dataframe, final_end_year)
@@ -162,23 +195,43 @@ def load_data(
         end_train_year=end_year, min_ratings=min_ratings, min_weights=min_weights
     )
 
+    # Load complexity predictions if experiment is specified
+    if complexity_experiment:
+        logger.info(
+            f"Loading complexity predictions from experiment: {complexity_experiment}"
+        )
+        try:
+            import polars as pl
+
+            complexity_predictions_path = (
+                f"models/experiments/predictions/{complexity_experiment}.parquet"
+            )
+            complexity_predictions = pl.read_parquet(complexity_predictions_path)
+
+            # Join complexity predictions
+            df = df.join(
+                complexity_predictions.select(["game_id", "predicted_complexity"]),
+                on="game_id",
+                how="left",
+            )
+
+            logger.info(
+                f"Joined complexity predictions. New DataFrame shape: {df.shape}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not load complexity predictions: {e}")
+
     # Detailed data diagnostics
     logger.info("Data Loading Diagnostics:")
     logger.info(f"  Total Rows: {len(df)}")
     logger.info(
         f"  Year Range: {df['year_published'].min()} - {df['year_published'].max()}"
     )
-    logger.info(
-        f"  Complexity Range: {df['complexity'].min():.2f} - {df['complexity'].max():.2f}"
-    )
-    logger.info(f"  Complexity Mean: {df['complexity'].mean():.2f}")
-    logger.info(f"  Complexity Median: {df['complexity'].median():.2f}")
-
     # Sample row diagnostics
-    logger.info("\nSample Row Diagnostics:")
-    sample_row = df.head(1)
-    for col in sample_row.columns:
-        logger.info(f"  {col}: {sample_row[col].to_pandas().squeeze()}")
+    # logger.info("\nSample Row Diagnostics:")
+    # sample_row = df.head(1)
+    # for col in sample_row.columns:
+    #     logger.info(f"  {col}: {sample_row[col].to_pandas().squeeze()}")
 
     return df, end_year
 
@@ -230,13 +283,18 @@ def get_model_parameters(
         description: Optional base description
 
     Returns:
-        Tuple of (description, threshold, min_weights)
+        Tuple of (description, threshold, min_weights, min_ratings)
     """
     # Extract threshold if available
     threshold = extract_model_threshold(experiment)
     min_weights = extract_min_weights(experiment)
 
-    # Generate description with threshold and min_weights info
+    # Extract min_ratings from experiment metadata
+    min_ratings = experiment.metadata.get("min_ratings")
+    if min_ratings is None:
+        min_ratings = experiment.metadata.get("config", {}).get("min_ratings", 0)
+
+    # Generate description with threshold, min_weights, and min_ratings info
     description_parts = [
         description or f"Production model trained on data through {end_year}"
     ]
@@ -247,62 +305,12 @@ def get_model_parameters(
     if min_weights is not None:
         description_parts.append(f"Minimum weights filter: {min_weights}")
 
+    if min_ratings is not None and min_ratings > 0:
+        description_parts.append(f"Minimum ratings filter: {min_ratings}")
+
     description = ". ".join(description_parts)
 
-    return description, threshold, min_weights
-
-
-def extract_sample_weights(
-    experiment: Experiment, df: Optional[pl.DataFrame] = None
-) -> Optional[np.ndarray]:
-    """
-    Extract sample weights from experiment metadata if available.
-
-    Args:
-        experiment: Experiment object
-        df: Optional DataFrame to recalculate weights if method is specified
-
-    Returns:
-        numpy array of sample weights or None
-    """
-    try:
-        # Check for sample weights in metadata or config
-        sample_weights_paths = [("model_info", "sample_weights"), ("sample_weights",)]
-
-        for path in sample_weights_paths:
-            current = experiment.metadata
-            for key in path:
-                current = current.get(key)
-                if current is None:
-                    break
-
-            # If found and is a list or numpy array, convert to numpy array
-            if current is not None:
-                # Handle dictionary case
-                if isinstance(current, dict):
-                    # If it's a dictionary with a 'weights' key, extract that
-                    if "weights" in current:
-                        current = current["weights"]
-
-                # Convert to numpy array
-                return np.array(current)
-
-        # For rating model, check for sample weight method
-        sample_weights_method = experiment.metadata.get("sample_weights", {}).get(
-            "method"
-        )
-        if sample_weights_method == "sqrt_users_rated" and df is not None:
-            logger = logging.getLogger(__name__)
-            logger.info("Recalculating sample weights using sqrt(users_rated) method")
-
-            # Recalculate sample weights using the same method as in rating.py
-            users_rated = df["users_rated"].to_pandas()
-            return np.sqrt(users_rated) / np.sqrt(users_rated.max())
-
-        return None
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Error extracting sample weights: {e}")
-        return None
+    return description, threshold, min_weights, min_ratings
 
 
 def finalize_model(
@@ -311,9 +319,6 @@ def finalize_model(
     version: Optional[int] = None,
     end_year: Optional[int] = None,
     description: Optional[str] = None,
-    sample_weight_base: Optional[
-        float
-    ] = 10.0,  # Optional base for complexity weight calculation
     recent_year_threshold: int = 2,  # New parameter for filtering recent years
 ):
     """Finalize a model by fitting its pipeline on full dataset.
@@ -354,9 +359,9 @@ def finalize_model(
 
     logger.info(f"Using minimum ratings: {min_ratings}")
 
-    # For rating models, extract complexity experiment name from metadata
+    # For models, extract complexity experiment name from metadata
     complexity_experiment = None
-    if model_type == "rating":
+    if model_type in ["rating", "users_rated"]:
         # Try to extract complexity experiment from metadata
         complexity_experiment = experiment.metadata.get(
             "complexity_experiment"
@@ -387,47 +392,38 @@ def finalize_model(
     X, y = prepare_data(df, model_type)
 
     # Get model parameters
-    description, threshold, min_weights = get_model_parameters(
+    description, threshold, min_weights, min_ratings = get_model_parameters(
         experiment=experiment, end_year=final_end_year, description=description
     )
 
     # Determine sample weights
-    sample_weights = None
+    logger.info("Experiment Metadata:")
+    for key, value in experiment.metadata.items():
+        logger.info(f"  {key}: {value}")
 
-    # 1. Try to extract existing sample weights from experiment metadata
-    extracted_sample_weights = extract_sample_weights(experiment, df)
+    sample_weights = extract_sample_weights(experiment, df)
 
-    # 2. If no existing weights, generate weights for complexity model
-    if (
-        extracted_sample_weights is None
-        and model_type == "complexity"
-        and sample_weight_base is not None
-    ):
-        extracted_sample_weights = calculate_complexity_weights(
-            y.values, base=sample_weight_base
-        )
+    # Log comprehensive sample weight diagnostics
+    logger.info(f"Raw sample weights: {sample_weights}")
+    logger.info(f"Type of sample weights: {type(sample_weights)}")
 
-    # Log sample weight diagnostics
-    if extracted_sample_weights is not None:
-        logger.info("Sample Weights Diagnostic:")
-        logger.info(
-            f"  Weight Source: {'Extracted from metadata' if extracted_sample_weights is not None else 'Generated'}"
-        )
-
-        # Safely log weight range, mean, and std dev
+    if sample_weights is not None:
         try:
+            # Explicitly convert to numpy array
+            sample_weights_array = np.asarray(sample_weights)
+
+            logger.info("Sample Weights Diagnostic:")
+            logger.info(f"  Total sample weights: {len(sample_weights_array)}")
             logger.info(
-                f"  Weight Range: min={float(np.min(extracted_sample_weights)):.2f}, max={float(np.max(extracted_sample_weights)):.2f}"
+                f"  Weight range: {sample_weights_array.min():.4f} - {sample_weights_array.max():.4f}"
             )
-            logger.info(
-                f"  Weight Mean: {float(np.mean(extracted_sample_weights)):.2f}"
-            )
-            logger.info(
-                f"  Weight Std Dev: {float(np.std(extracted_sample_weights)):.2f}"
-            )
+            logger.info(f"  Mean weight: {np.mean(sample_weights_array):.4f}")
+            logger.info(f"  Median weight: {np.median(sample_weights_array):.4f}")
+            logger.info(f"  Standard deviation: {np.std(sample_weights_array):.4f}")
+
         except Exception as e:
-            logger.warning(f"Could not log sample weight statistics: {e}")
-            logger.info(f"  Raw sample weights: {extracted_sample_weights}")
+            logger.warning(f"Error processing sample weights: {e}")
+            logger.warning(f"Raw sample weights: {sample_weights}")
 
     # Finalize model
     logger.info("Fitting pipeline on full dataset...")
@@ -437,9 +433,7 @@ def finalize_model(
         description=description,
         final_end_year=final_end_year,
         sample_weight=(
-            np.asarray(extracted_sample_weights)
-            if extracted_sample_weights is not None
-            else None
+            np.asarray(sample_weights) if sample_weights is not None else None
         ),  # Pass sample weights if available
     )
 
