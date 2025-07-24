@@ -294,7 +294,7 @@ def load_scoring_data(
     df = loader.load_data(where_clause=where_str, preprocessor=None)
 
     # If complexity predictions are provided and model requires them, join predictions
-    if complexity_predictions is not None and model_type == "rating":
+    if complexity_predictions is not None and model_type in ["rating", "users_rated"]:
         print("Joining pre-computed complexity predictions")
         df = df.join(
             complexity_predictions.select(["game_id", "predicted_complexity"]),

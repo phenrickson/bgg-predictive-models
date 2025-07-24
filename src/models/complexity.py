@@ -407,7 +407,8 @@ def main():
 
         # Predict complexity for the entire dataset
         full_df_pandas = full_df.to_pandas()
-        complexity_predictions = final_pipeline.predict(full_df_pandas)
+        predictions = final_pipeline.predict(full_df_pandas)
+        complexity_predictions = np.clip(predictions, 1, 5)
 
         # Create predictions DataFrame
         predictions_df = pl.DataFrame(

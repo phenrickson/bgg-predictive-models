@@ -228,10 +228,10 @@ def load_data(
         f"  Year Range: {df['year_published'].min()} - {df['year_published'].max()}"
     )
     # Sample row diagnostics
-    logger.info("\nSample Row Diagnostics:")
-    sample_row = df.head(1)
-    for col in sample_row.columns:
-        logger.info(f"  {col}: {sample_row[col].to_pandas().squeeze()}")
+    # logger.info("\nSample Row Diagnostics:")
+    # sample_row = df.head(1)
+    # for col in sample_row.columns:
+    #     logger.info(f"  {col}: {sample_row[col].to_pandas().squeeze()}")
 
     return df, end_year
 
@@ -359,7 +359,7 @@ def finalize_model(
 
     logger.info(f"Using minimum ratings: {min_ratings}")
 
-    # For rating models, extract complexity experiment name from metadata
+    # For models, extract complexity experiment name from metadata
     complexity_experiment = None
     if model_type in ["rating", "users_rated"]:
         # Try to extract complexity experiment from metadata
