@@ -2,7 +2,8 @@ import os
 import argparse
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import storage
 import google.cloud.exceptions
@@ -30,6 +31,22 @@ def calculate_file_hash(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(4096), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def get_file_info(path: Path, base_path: Path) -> Dict[str, str]:
+    """
+    Get file information including relative path and hash.
+
+    Args:
+        path: Path to the file
+        base_path: Base path to calculate relative path from
+
+    Returns:
+        Dictionary with relative path and hash
+    """
+    relative_path = str(path.relative_to(base_path))
+    file_hash = calculate_file_hash(path)
+    return {"path": relative_path, "hash": file_hash}
 
 
 def sync_experiments_to_gcs(
@@ -108,118 +125,154 @@ def sync_experiments_to_gcs(
         with open(gitignore_path, "r") as f:
             gitignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
 
-    if download:
-        # Track download progress
-        total_files = 0
-        downloaded_files = 0
-        skipped_files = 0
+    # Get all local files and their hashes
+    local_files = {}
+    for file_path in local_path.rglob("*"):
+        if not file_path.is_file():
+            continue
 
-        # List all blobs in the bucket with the specified prefix
-        blobs = bucket.list_blobs(prefix=base_prefix)
+        relative_path = str(file_path.relative_to(local_path))
 
-        for blob in blobs:
-            # Remove base prefix from blob name to get relative path
-            relative_path = blob.name.replace(f"{base_prefix}/", "")
-            local_file_path = local_path / relative_path
-
-            # Skip files matching .gitignore patterns
-            if gitignore_spec and gitignore_spec.match_file(relative_path):
+        # Skip files matching .gitignore patterns, except .pkl files
+        if gitignore_spec and gitignore_spec.match_file(relative_path):
+            if not relative_path.endswith(".pkl"):
                 logger.info(f"Skipped by .gitignore: {relative_path}")
                 continue
+            else:
+                logger.info(f"Including .pkl file despite gitignore: {relative_path}")
 
-            # Skip if not a file (e.g., directory placeholders)
-            if relative_path.endswith("/") or relative_path.endswith(".DS_Store"):
-                logger.info(f"Skipping system file: {relative_path}")
-                continue
+        # Skip system files
+        if relative_path.endswith(".DS_Store"):
+            logger.info(f"Skipping system file: {relative_path}")
+            continue
 
+        local_files[relative_path] = calculate_file_hash(file_path)
+
+    # Get all remote files and their hashes
+    remote_files = {}
+    for blob in bucket.list_blobs(prefix=base_prefix):
+        relative_path = blob.name.replace(f"{base_prefix}/", "")
+
+        # Skip directory placeholders
+        if relative_path.endswith("/"):
+            logger.info(f"Skipping directory placeholder: {relative_path}")
+            continue
+
+        try:
+            blob.reload()
+            remote_files[relative_path] = (
+                blob.metadata.get("file_hash") if blob.metadata else None
+            )
+        except Exception as e:
+            logger.warning(f"Failed to get metadata for {relative_path}: {e}")
+            remote_files[relative_path] = None
+
+    total_files = 0
+    processed_files = 0
+    skipped_files = 0
+
+    # Determine which files need transfer
+    files_to_transfer: List[Tuple[str, str, bool]] = (
+        []
+    )  # [(relative_path, hash, is_new)]
+
+    if download:
+        # Find files that need downloading
+        for relative_path, remote_hash in remote_files.items():
             total_files += 1
+            local_file_path = local_path / relative_path
 
-            try:
-                # Create parent directories if they don't exist
-                local_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Check if file exists locally
-                if not local_file_path.exists():
-                    # Download missing file
-                    blob.download_to_filename(str(local_file_path))
-                    downloaded_files += 1
-                    logger.info(f"Downloaded: {relative_path}")
-                else:
+            # Skip if local file exists and hashes match
+            if local_file_path.exists():
+                local_hash = local_files.get(relative_path)
+                if local_hash == remote_hash:
                     skipped_files += 1
-                    logger.info(f"Skipped (already exists): {relative_path}")
-
-            except Exception as e:
-                logger.error(f"Failed to download {blob.name}: {e}")
-
-        # Summary log for download
-        logger.info(
-            f"Download sync complete. "
-            f"{downloaded_files} files downloaded, "
-            f"{skipped_files} files skipped, "
-            f"total {total_files} files processed from bucket {bucket_name}"
-        )
-    else:
-        # Original upload logic
-        total_files = 0
-        uploaded_files = 0
-        skipped_files = 0
-
-        # Walk through local directory
-        for file_path in local_path.rglob("*"):
-            if file_path.is_file():
-                # Construct relative path
-                relative_path = file_path.relative_to(local_path)
-
-                # # Skip files matching .gitignore patterns
-                if gitignore_spec and gitignore_spec.match_file(str(relative_path)):
-                    logger.info(f"Skipped by .gitignore: {relative_path}")
+                    logger.info(f"Skipped (unchanged): {relative_path}")
                     continue
 
-                total_files += 1
+            # Add to transfer list
+            files_to_transfer.append(
+                (relative_path, remote_hash, not local_file_path.exists())
+            )
 
-                # Construct blob path, preserving directory structure
-                blob_path = f"{base_prefix}/{relative_path}"
+        # Create all necessary directories upfront
+        all_dirs = {(local_path / path).parent for path, _, _ in files_to_transfer}
+        for dir_path in all_dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
 
-                try:
-                    # Check if blob exists
-                    blob = bucket.blob(str(blob_path))
+        # Download files in parallel
+        def download_file(args) -> Tuple[str, bool]:
+            relative_path, _, is_new = args
+            try:
+                blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                blob.download_to_filename(str(local_path / relative_path))
+                logger.info(
+                    f"{'Downloaded new' if is_new else 'Updated'}: {relative_path}"
+                )
+                return relative_path, True
+            except Exception as e:
+                logger.error(f"Failed to download {relative_path}: {e}")
+                return relative_path, False
 
-                    # Calculate local file hash
-                    local_file_hash = calculate_file_hash(file_path)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [
+                executor.submit(download_file, args) for args in files_to_transfer
+            ]
+            for future in as_completed(futures):
+                _, success = future.result()
+                if success:
+                    processed_files += 1
 
-                    # Try to get existing blob metadata
-                    try:
-                        existing_hash = (
-                            blob.metadata.get("file_hash") if blob.metadata else None
-                        )
-                    except Exception:
-                        existing_hash = None
+    else:
+        # Find files that need uploading
+        for relative_path, local_hash in local_files.items():
+            total_files += 1
+            is_new = relative_path not in remote_files
 
-                    # Upload if hash is different or blob doesn't exist
-                    if existing_hash != local_file_hash:
-                        # Upload file
-                        blob.upload_from_filename(str(file_path))
+            # Skip if remote file exists and hashes match
+            if not is_new:
+                remote_hash = remote_files[relative_path]
+                if remote_hash == local_hash:
+                    skipped_files += 1
+                    logger.info(f"Skipped (unchanged): {relative_path}")
+                    continue
+            else:
+                logger.info(f"New file detected: {relative_path}")
 
-                        # Set metadata after upload
-                        blob.metadata = {"file_hash": local_file_hash}
-                        blob.patch()
+            # Add to transfer list
+            files_to_transfer.append((relative_path, local_hash, is_new))
 
-                        uploaded_files += 1
-                        logger.info(f"Uploaded: {relative_path}")
-                    else:
-                        skipped_files += 1
-                        logger.info(f"Skipped (unchanged): {relative_path}")
+        # Upload files in parallel
+        def upload_file(args) -> Tuple[str, bool]:
+            relative_path, local_hash, is_new = args
+            try:
+                blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                blob.upload_from_filename(str(local_path / relative_path))
+                blob.metadata = {"file_hash": local_hash}
+                blob.patch()
+                logger.info(
+                    f"{'Uploaded new' if is_new else 'Updated'}: {relative_path}"
+                )
+                return relative_path, True
+            except Exception as e:
+                logger.error(f"Failed to process {relative_path}: {e}")
+                return relative_path, False
 
-                except Exception as e:
-                    logger.error(f"Failed to process {file_path}: {e}")
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(upload_file, args) for args in files_to_transfer]
+            for future in as_completed(futures):
+                _, success = future.result()
+                if success:
+                    processed_files += 1
 
-        # Summary log
-        logger.info(
-            f"Sync complete. "
-            f"{uploaded_files} files uploaded, "
-            f"{skipped_files} files skipped, "
-            f"total {total_files} files processed in bucket {bucket_name}"
-        )
+    # Summary log
+    operation = "Download" if download else "Upload"
+    logger.info(
+        f"{operation} sync complete. "
+        f"{processed_files} files processed, "
+        f"{skipped_files} files skipped, "
+        f"total {total_files} files examined in bucket {bucket_name}"
+    )
 
 
 def main():
