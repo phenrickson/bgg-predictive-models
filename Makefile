@@ -167,11 +167,11 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 
 ## users rated with catboost
 ## users rated model
-USERS_RATED_TREE_CANDIDATE ?= catboost-users_rated
+USERS_RATED_TREE_CANDIDATE ?= lightgbm-users_rated
 train_users_rated_tree:
 	uv run -m src.models.users_rated \
 	--preprocessor-type tree \
-	--model catboost \
+	--model lightgbm \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
 	--experiment $(USERS_RATED_TREE_CANDIDATE) \
@@ -192,7 +192,7 @@ users_rated_tree: train_users_rated_tree finalize_users_rated_tree score_users_r
 
 # run all models
 linear_models: hurdle complexity rating users_rated
-models: hurdle complexity_tree rating_tree users_rated_tree
+tree_models: complexity_tree rating_tree users_rated_tree
 
 # predict geek rating given models
 geek_rating: 
@@ -202,7 +202,7 @@ geek_rating:
 	--hurdle linear-hurdle \
 	--complexity catboost-complexity \
 	--rating catboost-rating \
-	--users-rated linear-users_rated \
+	--users-rated lightgbm-users_rated \
 	--experiment calculated-geek-rating
 
 # evaluate
