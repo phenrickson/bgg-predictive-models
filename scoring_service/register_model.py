@@ -5,25 +5,16 @@ import os
 from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
-import logging 
+import logging
 
 from src.models.experiments import ExperimentTracker
-from scoring_service.registered_model import RegisteredModel, ModelValidationError
+from scoring_service.registered_model import RegisteredModel
 
-# load environment variaables
+# load environment variables
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info(f"{os.getenv("GCP_PROJECT_ID")}")
-
-
-# Default validation metrics for each model type
-DEFAULT_VALIDATION_METRICS: Dict[str, Dict[str, float]] = {
-    "hurdle": {"min_auc": 0.7, "min_accuracy": 0.7},
-    "rating": {"min_r2": 0.5, "max_rmse": 1.0},
-    "complexity": {"min_r2": 0.4, "max_rmse": 0.8},
-    "users_rated": {"min_r2": 0.5, "max_rmse": 1.0},
-}
+logger.info(f"{os.getenv('GCP_PROJECT_ID')}")
 
 
 def register_model(
@@ -32,7 +23,6 @@ def register_model(
     registered_name: str,
     description: str,
     bucket_name: Optional[str] = None,
-    validation_metrics: Optional[Dict[str, float]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Register a model for production use.
@@ -43,7 +33,6 @@ def register_model(
         registered_name: Name to give the registered model
         description: Description of the model
         bucket_name: GCS bucket for storing registered models
-        validation_metrics: Optional metric thresholds for validation
         metadata: Optional additional metadata
 
     Returns:
@@ -69,10 +58,6 @@ def register_model(
         latest_experiment["name"], latest_experiment["version"]
     )
 
-    # Use default validation metrics if none provided
-    if validation_metrics is None:
-        validation_metrics = DEFAULT_VALIDATION_METRICS.get(model_type, {})
-
     # Create registered model manager
     project_id = os.getenv("GCP_PROJECT_ID")
     registered_model = RegisteredModel(
@@ -85,7 +70,6 @@ def register_model(
             experiment=experiment,
             name=registered_name,
             description=description,
-            validation_metrics=validation_metrics,
             metadata=metadata,
         )
 
@@ -94,19 +78,8 @@ def register_model(
         print(f"  Version: {registration['version']}")
         print(f"  Description: {registration['description']}")
         print(f"  Registered at: {registration['registered_at']}")
-        print("\nValidation Metrics:")
-        for metric, value in registration["validation_metrics"].items():
-            print(f"  {metric}: {value}")
 
         return registration
-
-    except ModelValidationError as e:
-        print(f"\nModel validation failed:")
-        print(f"  {str(e)}")
-        print(
-            "\nModel was not registered. Please check the validation metrics and try again."
-        )
-        raise
 
     except Exception as e:
         print(f"\nError registering model:")
@@ -136,10 +109,6 @@ def main():
 
     parser.add_argument("--bucket", help="GCS bucket for storing registered models")
 
-    parser.add_argument(
-        "--skip-validation", action="store_true", help="Skip validation metrics check"
-    )
-
     args = parser.parse_args()
 
     try:
@@ -150,16 +119,11 @@ def main():
             registered_name=args.name,
             description=args.description,
             bucket_name=args.bucket,
-            validation_metrics=(
-                None
-                if args.skip_validation
-                else DEFAULT_VALIDATION_METRICS.get(args.model_type)
-            ),
         )
 
         print("\nModel registration successful!")
 
-    except (ModelValidationError, ValueError) as e:
+    except ValueError as e:
         print(f"\nError: {str(e)}")
         exit(1)
     except Exception as e:

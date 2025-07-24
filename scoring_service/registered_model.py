@@ -69,48 +69,11 @@ class RegisteredModel(ExperimentTracker):
             "ARCHIVED": "archived",
         }
 
-    def validate_model(
-        self, experiment: Experiment, validation_metrics: Dict[str, float]
-    ) -> bool:
-        """Validate model meets requirements for registration.
-
-        Args:
-            experiment: Experiment to validate
-            validation_metrics: Dictionary of metric thresholds
-                e.g. {"min_r2": 0.7, "max_rmse": 1.0}
-
-        Returns:
-            True if validation passes
-
-        Raises:
-            ModelValidationError if validation fails
-        """
-        # Get test metrics
-        test_metrics = experiment.get_metrics("test")
-
-        # Validate each metric
-        for metric_name, threshold in validation_metrics.items():
-            if metric_name.startswith("min_"):
-                metric = metric_name[4:]  # Remove "min_"
-                if test_metrics[metric] < threshold:
-                    raise ModelValidationError(
-                        f"{metric} value {test_metrics[metric]} below minimum threshold {threshold}"
-                    )
-            elif metric_name.startswith("max_"):
-                metric = metric_name[4:]  # Remove "max_"
-                if test_metrics[metric] > threshold:
-                    raise ModelValidationError(
-                        f"{metric} value {test_metrics[metric]} above maximum threshold {threshold}"
-                    )
-
-        return True
-
     def register(
         self,
         experiment: Experiment,
         name: str,
         description: str,
-        validation_metrics: Optional[Dict[str, float]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Register a model for production use.
@@ -119,16 +82,11 @@ class RegisteredModel(ExperimentTracker):
             experiment: Experiment to register
             name: Name for the registered model
             description: Description of the model
-            validation_metrics: Optional metric thresholds for validation
             metadata: Optional additional metadata
 
         Returns:
             Dictionary containing registration details
         """
-        # Validate model if metrics provided
-        if validation_metrics:
-            self.validate_model(experiment, validation_metrics)
-
         # Load experiment pipeline and info
         pipeline = experiment.load_pipeline()
         model_info = experiment.get_model_info()
@@ -148,7 +106,6 @@ class RegisteredModel(ExperimentTracker):
                 "metadata": experiment.metadata,
             },
             "model_info": model_info,
-            "validation_metrics": validation_metrics,
             "registered_at": datetime.now().isoformat(),
             "registered_by": metadata.get("registered_by") if metadata else None,
             "metadata": metadata or {},

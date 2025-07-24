@@ -25,13 +25,17 @@ help:  ## Show this help message
 requirements: 
 	uv sync
 
+# lint
+	black .
+	ruff check .
+
 # Target for features file - this is what keeps track of freshness
 $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql src/data/get_raw_data.py src/data/loader.py
 	uv run -m src.data.get_raw_data
 
 ## fetch raw data from BigQuery
-.PHONY: features_data
-features_data: $(RAW_DIR)/game_features.parquet
+.PHONY: data
+data: $(RAW_DIR)/game_features.parquet
 
 ## train hurdle moodel
 HURDLE_CANDIDATE ?= linear-hurdle
@@ -52,7 +56,28 @@ score_hurdle:
 	--model-type hurdle \
 	--experiment $(HURDLE_CANDIDATE)
 
-hurdle: train_hurdle finalize_hurdle score_hurdle
+hurdle: train_hurdle finalize_hurdle score_hurdle_tree
+
+## train hurdle moodel
+HURDLE_CANDIDATE_TREE ?= lightgbm-hurdle
+
+train_hurdle_tree:
+	uv run -m src.models.hurdle \
+	--experiment $(HURDLE_CANDIDATE_TREE) \
+	--preprocessor-type tree \
+	--model lightgbm
+
+finalize_hurdle_tree: 
+	uv run -m src.models.finalize_model \
+	--model-type hurdle \
+	--experiment $(HURDLE_CANDIDATE_TREE)
+
+score_hurdle_tree: 
+	uv run -m src.models.score \
+	--model-type hurdle
+	--experiment $(HURDLE_CANDIDATE_TREE)
+
+hurdle_tree: train_hurdle_tree finalize_hurdle_tree score_hurdle
 
 ## complexity model
 COMPLEXITY_CANDIDATE ?= test-complexity
@@ -114,7 +139,6 @@ score_rating:
 	--model-type rating \
 	--experiment $(RATING_CANDIDATE) \
 	--complexity-predictions models/experiments/predictions/test-complexity.parquet
-
 
 rating: train_rating finalize_rating score_rating
 
@@ -206,7 +230,7 @@ geek_rating:
 	--experiment calculated-geek-rating
 
 # predictions
-geek_rating: 
+predictions: 
 	uv run predict.py \
 	--start-year 2024 \
 	--end-year 2029 \
@@ -234,14 +258,51 @@ evaluation:
 		users_rated.model=lightgbm \
 		users_rated.min-ratings=0
 
-# register
-register-complexity:
+### register model candidates
+# register models
+register_complexity:
 	uv run -m scoring_service.register_model \
 	--model-type complexity \
 	--experiment catboost-complexity \
 	--name complexity-v2025 \
 	--description "Production (v2025) model for predicting game complexity" \
 	--bucket bgg-predictive-models-dev
+
+register_rating:
+	uv run -m scoring_service.register_model \
+	--model-type rating \
+	--experiment catboost-rating \
+	--name rating-v2025 \
+	--description "Production (v2025) model for predicting game rating" \
+	--bucket bgg-predictive-models-dev
+
+register_users_rated:
+	uv run -m scoring_service.register_model \
+	--model-type users_rated \
+	--experiment lightgbm-users_rated \
+	--name users_rated-v2025 \
+	--description "Production (v2025) model for predicting users_rated" \
+	--bucket bgg-predictive-models-dev
+
+register_hurdle:
+	uv run -m scoring_service.register_model \
+	--model-type hurdle \
+	--experiment lightgbm-hurdle \
+	--name hurdle-v2025 \
+	--description "Production (v2025) model for predicting whether games will achieve ratings (hurdle)" \
+	--bucket bgg-predictive-models-dev
+
+## train finalize and register models
+model_hurdle: train_hurdle_tree finalize_hurdle_tree register_hurdle
+model_complexity: train_complexity_tree finalize_complexity_tree register_complexity
+model_rating: train_rating_tree finalize_rating_tree register_rating
+model_users_rated: train_users_rated_tree finalize_users_rated_tree register_users_rated
+
+### train model candidates
+models: model_hurdle model_complexity model_rating model_users_rated
+
+# register models
+register: register-hurdle register-complexity register-rating register-users_rated
 
 ## view experiments
 experiment_dashboard:
