@@ -21,13 +21,15 @@ help:  ## Show this help message
 	@echo '  make all OUTPUT_DIR=custom/path MIN_RATINGS=50'
 
 # requirements
-.PHONY: requirements
+.PHONY: requirements format lint
 requirements: 
 	uv sync
 
-# lint
-	black .
-	ruff check .
+format: 
+	uv run black --check .
+
+lint:
+	uv run black .
 
 # Target for features file - this is what keeps track of freshness
 $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql src/data/get_raw_data.py src/data/loader.py
