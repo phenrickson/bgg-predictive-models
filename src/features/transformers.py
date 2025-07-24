@@ -6,7 +6,6 @@ from typing import List, Optional
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.base import BaseEstimator, TransformerMixin
 from sentence_transformers import SentenceTransformer
 
 
@@ -742,7 +741,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                 # In case mechanics is a string representation of a list
                 try:
                     return len(eval(mechanics))
-                except:
+                except (TypeError, SyntaxError, NameError):
+                    # Handle potential errors in eval
                     return 0
             else:
                 # Log unexpected type for debugging
@@ -777,7 +777,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                 # In case categories is a string representation of a list
                 try:
                     return len(eval(categories))
-                except:
+                except (TypeError, SyntaxError, NameError):
+                    # Handle potential errors in eval
                     return 0
             else:
                 # Log unexpected type for debugging
@@ -959,7 +960,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         return filtered
 
-    def fit(self, X: pd.DataFrame, y=None) -> "BGGSklearnPreprocessor":
+    def fit(self, X: pd.DataFrame, y=None):
         """Fit the preprocessor.
 
         Parameters
@@ -972,7 +973,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         Returns
         -------
-        self : BGGSklearnPreprocessor
+        self : BaseBGGTransformer
             The fitted preprocessor.
         """
         X = X.copy()
@@ -1133,7 +1134,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                     # In case mechanics is a string representation of a list
                     try:
                         return len(eval(mechanics))
-                    except:
+                    except (TypeError, SyntaxError, NameError):
+                        # Handle potential errors in eval
                         return 0
                 else:
                     # Log unexpected type for debugging
@@ -1164,7 +1166,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                     # In case categories is a string representation of a list
                     try:
                         return len(eval(categories))
-                    except:
+                    except (TypeError, SyntaxError, NameError):
+                        # Handle potential errors in eval
                         return 0
                 else:
                     # Log unexpected type for debugging

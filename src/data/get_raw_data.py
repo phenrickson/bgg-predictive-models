@@ -3,8 +3,6 @@
 import argparse
 from pathlib import Path
 
-import polars as pl
-from google.cloud import bigquery
 
 from .config import load_config
 from .loader import BGGDataLoader

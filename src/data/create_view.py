@@ -2,7 +2,6 @@ from google.cloud import bigquery
 import os
 import logging
 from enum import Enum
-from typing import Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -61,9 +60,6 @@ def create_games_features_view(
         job_config = bigquery.QueryJobConfig()
         query_job = client.query(view_sql, job_config=job_config)
 
-        # Wait for the job to complete and log details
-        query_result = query_job.result()
-
         logger.info(
             f"View created successfully in dataset {dataset_id} using {view_type.value} implementation"
         )
@@ -99,6 +95,7 @@ def refresh_materialized_view(client: bigquery.Client, dataset_id: str):
 
         query_job = client.query(refresh_sql)
         query_result = query_job.result()
+        logger.info(query_result)
 
         logger.info("Materialized view refreshed successfully")
 

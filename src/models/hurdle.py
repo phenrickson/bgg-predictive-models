@@ -4,46 +4,31 @@ import logging
 import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime
 import numpy as np
 import pandas as pd
-import polars as pl
 
-from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, FunctionTransformer
-from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
-from tqdm import tqdm
+from sklearn.base import BaseEstimator, clone
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
     f1_score,
-    roc_auc_score,
-    log_loss,
     fbeta_score,
-    matthews_corrcoef,
     confusion_matrix,
 )
 
 # Project imports
 from src.models.experiments import ExperimentTracker, log_experiment
 
-from src.features.transformers import BaseBGGTransformer
-from src.data.config import load_config
-from src.data.loader import BGGDataLoader
-from src.features.preprocessor import create_bgg_preprocessor
-from src.models.splitting import time_based_split
 from src.models.training import (
     load_data,
     create_data_splits,
     select_X_y,
     create_preprocessing_pipeline,
-    preprocess_data,
     tune_model,
     evaluate_model,
 )
@@ -53,7 +38,7 @@ from catboost import CatBoostClassifier
 
 # LightGBM imports
 import lightgbm as lgb
-from typing import Type, Union, Tuple
+from typing import Tuple
 
 
 def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:

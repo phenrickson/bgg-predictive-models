@@ -30,6 +30,7 @@ format:
 
 lint:
 	uv run black .
+	uv run ruff check .
 
 # Target for features file - this is what keeps track of freshness
 $(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql src/data/get_raw_data.py src/data/loader.py

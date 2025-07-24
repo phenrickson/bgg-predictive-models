@@ -47,7 +47,7 @@ class BigQueryConfig:
             # Try default credentials
             return bigquery.Client(project=self.project_id)
 
-        except Exception as e:
+        except Exception:
             raise
 
 

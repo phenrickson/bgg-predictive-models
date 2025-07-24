@@ -5,7 +5,6 @@ import polars as pl
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
-import numpy as np
 
 
 def load_predictions(file_path):
@@ -223,8 +222,6 @@ def plot_probability_distribution(df, threshold):
 
 def plot_confusion_matrix(df, threshold):
     """Create a confusion matrix based on the current threshold."""
-    import pandas as pd
-    import plotly.graph_objects as go
     from sklearn.metrics import confusion_matrix
 
     # Prepare data

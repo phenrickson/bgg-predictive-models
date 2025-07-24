@@ -3,7 +3,6 @@
 from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
-from google.cloud import bigquery
 
 from .config import BigQueryConfig
 

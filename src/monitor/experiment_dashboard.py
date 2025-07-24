@@ -3,13 +3,11 @@
 import streamlit as st
 import polars as pl
 import plotly.express as px
-import plotly.graph_objs as go
 import os
 import sys
-import json
 from pathlib import Path
 from typing import Dict, List, Any
-from datetime import datetime, timezone
+from datetime import datetime
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -429,7 +427,7 @@ def create_feature_importance_plot(
 
             # Add hover text with full feature names
             fig.update_traces(
-                hovertemplate=f"<b>%{{y}}</b><br>Full Name: %{{text}}<br>Importance: %{{x:.4f}}<extra></extra>",
+                hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>Importance: %{x:.4f}<extra></extra>",
                 text=df_sorted.get_column(feature_col),
                 texttemplate="",
                 textposition="none",
@@ -586,7 +584,7 @@ def display_predictions(
             )
             if filter_5_5:
                 display_df = display_df.filter(pl.col("actual") != 5.5)
-                st.info(f"Filtered out games where actual rating = 5.5")
+                st.info("Filtered out games where actual rating = 5.5")
 
         if model_type == "regression":
             from sklearn.metrics import (

@@ -1,6 +1,6 @@
 """Time-based data splitting utilities for model training and evaluation."""
 
-from typing import Dict, Tuple, Optional, Union, List
+from typing import Dict, Tuple, Optional, Union
 
 import polars as pl
 

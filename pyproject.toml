@@ -31,6 +31,7 @@ dependencies = [
     "streamlit-aggrid>=1.1.6",
     "dotenv>=0.9.9",
     "black>=25.1.0",
+    "ruff>=0.12.5",
 ]
 
 [dependency-groups]

@@ -330,7 +330,6 @@ def predict_data(
         Tuple of (predicted_values, None, threshold)
     """
     import numpy as np
-    from src.models.experiments import ExperimentTracker
 
     # Predict based on model type
     if model_type == "hurdle":

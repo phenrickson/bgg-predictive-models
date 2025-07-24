@@ -10,8 +10,7 @@ from typing import Dict, Optional, Union
 
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config
-from src.models.score import load_model, load_scoring_data, save_and_display_results
-from src.models.experiments import ExperimentTracker
+from src.models.score import load_model
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ def load_all_models(
     Returns:
         Dict of loaded models
     """
-    logger.info(f"Loading models from experiments:")
+    logger.info("Loading models from experiments:")
     logger.info(f"Hurdle: {hurdle_experiment}")
     logger.info(f"Complexity: {complexity_experiment}")
     logger.info(f"Rating: {rating_experiment}")
@@ -555,9 +554,9 @@ def main():
         dataset="test",  # Changed to "test" to match the filename
     )
 
-    logger.info(f"Experiment tracked:")
+    logger.info("Experiment tracked:")
     logger.info(f"  Name: {args.experiment}")
-    logger.info(f"  Experiments used:")
+    logger.info("  Experiments used:")
     logger.info(f"    Hurdle: {args.hurdle}")
     logger.info(f"    Complexity: {args.complexity}")
     logger.info(f"    Rating: {args.rating}")
