@@ -189,6 +189,7 @@ BEGIN
       g.average_rating,
       g.average_weight,
       g.users_rated,
+      g.num_weights,
       g.min_players,
       g.max_players,
       g.min_playtime,

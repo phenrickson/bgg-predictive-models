@@ -9,10 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class ViewType(Enum):
-    """Enum for different view implementation types."""
+    """Enum for materialized view implementation."""
 
-    STANDARD = "standard"
-    OPTIMIZED = "optimized"
     MATERIALIZED = "materialized"
 
 
@@ -29,18 +27,9 @@ def create_games_features_view(
         dataset_id (str): ID of the dataset where the view will be created
         view_type (ViewType, optional): Type of view to create. Defaults to ViewType.OPTIMIZED.
     """
-    # Determine which SQL file to use
-    if view_type == ViewType.STANDARD:
-        sql_filename = "games_features_view.sql"
-        logger.info("Creating standard view (warning: may have performance issues)")
-    elif view_type == ViewType.OPTIMIZED:
-        sql_filename = "games_features_optimized_view.sql"
-        logger.info("Creating optimized view")
-    elif view_type == ViewType.MATERIALIZED:
-        sql_filename = "games_features_materialized_view.sql"
-        logger.info("Creating materialized view (best performance)")
-    else:
-        raise ValueError(f"Invalid view type: {view_type}")
+    # Use materialized view SQL
+    sql_filename = "games_features_materialized_view.sql"
+    logger.info("Creating materialized view (best performance)")
 
     # Read the SQL template
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -56,51 +45,16 @@ def create_games_features_view(
         # Log the SQL file being used
         logger.info(f"Using SQL template from: {sql_filename}")
 
-        # Create the view
+        # Create the materialized view using the full SQL template
         job_config = bigquery.QueryJobConfig()
         query_job = client.query(view_sql, job_config=job_config)
+        query_job.result()  # Wait for the job to complete
 
-        logger.info(
-            f"View created successfully in dataset {dataset_id} using {view_type.value} implementation"
-        )
-
-        # Log additional job details
-        logger.info(f"Job ID: {query_job.job_id}")
-        logger.info(f"Total bytes processed: {query_job.total_bytes_processed}")
+        table_id = f"{dataset_id}.games_features_materialized"
+        logger.info(f"Materialized view created successfully: {table_id}")
 
     except Exception as e:
-        logger.error(f"Error creating view: {e}")
-
-        # If it's a BigQuery specific error, provide more context
-        if hasattr(e, "errors"):
-            for error in e.errors:
-                logger.error(f"BigQuery Error: {error}")
-
-        # Re-raise the exception to stop execution
-        raise
-
-
-def refresh_materialized_view(client: bigquery.Client, dataset_id: str):
-    """
-    Refresh the materialized view by calling the stored procedure.
-
-    Args:
-        client (bigquery.Client): Authenticated BigQuery client
-        dataset_id (str): ID of the dataset where the view exists
-    """
-    try:
-        # Call the refresh procedure
-        refresh_sql = f"CALL `{dataset_id}.refresh_games_features_materialized`()"
-        logger.info(f"Refreshing materialized view with: {refresh_sql}")
-
-        query_job = client.query(refresh_sql)
-        query_result = query_job.result()
-        logger.info(query_result)
-
-        logger.info("Materialized view refreshed successfully")
-
-    except Exception as e:
-        logger.error(f"Error refreshing materialized view: {e}")
+        logger.error(f"Error creating materialized view: {e}")
 
         # If it's a BigQuery specific error, provide more context
         if hasattr(e, "errors"):
@@ -121,18 +75,13 @@ def main():
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description="Create or refresh the games features view"
+        description="Create the games features materialized view"
     )
     parser.add_argument(
         "--type",
-        choices=["standard", "optimized", "materialized"],
+        choices=["materialized"],
         default="materialized",
-        help="Type of view to create (default: materialized)",
-    )
-    parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help="Refresh the materialized view instead of creating it",
+        help="Type of view to create (materialized)",
     )
     args = parser.parse_args()
 
@@ -145,13 +94,9 @@ def main():
     # Use dataset from configuration
     dataset_id = config.dataset
 
-    if args.refresh:
-        # Refresh the materialized view
-        refresh_materialized_view(client, dataset_id)
-    else:
-        # Create the view with the specified type
-        view_type = ViewType(args.type)
-        create_games_features_view(client, dataset_id, view_type)
+    # Create the view with the specified type
+    view_type = ViewType(args.type)
+    create_games_features_view(client, dataset_id, view_type)
 
 
 if __name__ == "__main__":
