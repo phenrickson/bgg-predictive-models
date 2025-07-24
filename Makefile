@@ -295,6 +295,8 @@ register_hurdle:
 	--description "Production (v2025) model for predicting whether games will achieve ratings (hurdle)" \
 	--bucket bgg-predictive-models-dev
 
+register: register_complexity register_rating register_users_rated register_hurdle
+
 ## train finalize and register models
 model_hurdle: train_hurdle_tree finalize_hurdle_tree register_hurdle
 model_complexity: train_complexity_tree finalize_complexity_tree register_complexity
@@ -303,9 +305,6 @@ model_users_rated: train_users_rated_tree finalize_users_rated_tree register_use
 
 ### train model candidates
 models: model_hurdle model_complexity model_rating model_users_rated
-
-# register models
-register: register-hurdle register-complexity register-rating register-users_rated
 
 ## view experiments
 experiment_dashboard:

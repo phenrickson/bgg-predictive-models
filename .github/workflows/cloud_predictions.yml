@@ -37,6 +37,16 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+    - name: Setup Environment
+      run: |
+        mkdir -p credentials 
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
+        
+        cat << EOF > .env
+        GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+        GCS_BUCKET=${{ vars.GCS_BUCKET_NAME}}
+        GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
+        EOF
 
     - name: Authenticate to Google Cloud
       id: auth
@@ -92,8 +102,7 @@ jobs:
       id: auth
       uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: 'projects/YOUR_PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-        service_account: 'cloud-run-predictor@YOUR_PROJECT_ID.iam.gserviceaccount.com'
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
@@ -110,7 +119,7 @@ jobs:
             "users_rated_model_name": "${{ needs.get-latest-models.outputs.users_rated_model }}",
             "start_year": ${{ github.event.inputs.start_year || 2024 }},
             "end_year": ${{ github.event.inputs.end_year || 2029 }},
-            "output_path": "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
+            "output_path": "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/cloud_predictions/game_predictions.parquet' }}"
           }'
 
     - name: Log Prediction Metadata
