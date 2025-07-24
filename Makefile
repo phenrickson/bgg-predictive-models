@@ -198,7 +198,7 @@ geek_rating:
 	--hurdle linear-hurdle \
 	--complexity catboost-complexity \
 	--rating catboost-rating \
-	--users-rated test-users_rated \
+	--users-rated lightgbm-linear-users_rated \
 	--experiment calculated-geek-rating
 
 # evaluate
@@ -210,7 +210,7 @@ evaluation:
         hurdle.preprocessor-type=linear \
         hurdle.model=logistic \
         complexity.preprocessor-type=tree \
-        complexity.model=lightgbm \
+        complexity.model=complexity \
 		complext.model=use-sample-weights \
         rating.preprocessor-type=linear \
         rating.model=catboost \
