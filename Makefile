@@ -208,20 +208,20 @@ geek_rating:
 # evaluate
 evaluation:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2014 \
+	--start-year 2016 \
 	--end-year 2021 \
     --model-args \
         hurdle.preprocessor-type=linear \
         hurdle.model=logistic \
         complexity.preprocessor-type=tree \
         complexity.model=catboost \
-		complext.model=use-sample-weights \
+		complexty.model=use-sample-weights \
         rating.preprocessor-type=tree \
         rating.model=catboost \
 		rating.min-ratings=5 \
 		rating.use-sample-weights \
 		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm_linear \
+		users_rated.model=lightgbm \
 		users_rated.min-ratings=0
 
 ## view experiments

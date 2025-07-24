@@ -482,7 +482,7 @@ def main():
     if args.start_year is not None:
         where_clauses.append(f"year_published >= {args.start_year}")
     if args.end_year is not None:
-        where_clauses.append(f"year_published < {args.end_year}")
+        where_clauses.append(f"year_published <= {args.end_year}")
 
     # Load data with optional year filtering
     where_clause = " AND ".join(where_clauses) if where_clauses else ""

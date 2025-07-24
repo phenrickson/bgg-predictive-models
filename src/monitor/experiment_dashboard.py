@@ -448,7 +448,9 @@ def create_feature_importance_plot(
         return None
 
 
-def display_predictions(experiment, dataset: str, model_type: str):
+def display_predictions(
+    experiment, dataset: str, model_type: str, selected_model_type: str
+):
     """
     Display predictions for a specific dataset with comprehensive analysis.
 
@@ -456,6 +458,7 @@ def display_predictions(experiment, dataset: str, model_type: str):
         experiment: Experiment object
         dataset: Dataset to display predictions for ('tune' or 'test')
         model_type: Type of model ('regression' or 'classification')
+        selected_model_type: Model type selected in the sidebar
 
     Returns:
         Polars DataFrame with predictions
@@ -480,10 +483,10 @@ def display_predictions(experiment, dataset: str, model_type: str):
         return None
 
     # Special handling for geek_rating model type
-    if model_type == "geek_rating":
-        # Diagnostic logging
-        st.warning(f"Geek Rating Model: Initial DataFrame Null Check")
-        st.warning(f"DataFrame columns: {predictions_df.columns}")
+    if selected_model_type == "geek_rating":
+        # # Diagnostic logging
+        # st.warning(f"Geek Rating Model: Initial DataFrame Null Check")
+        # st.warning(f"DataFrame columns: {predictions_df.columns}")
 
         # Check if 'actual' column exists
         if "actual" not in predictions_df.columns:
@@ -494,7 +497,7 @@ def display_predictions(experiment, dataset: str, model_type: str):
 
         # Detailed null check
         null_mask = predictions_df["actual"].is_null()
-        st.warning(f"Null values in 'actual' column: {null_mask.sum()}")
+        # st.warning(f"Null values in 'actual' column: {null_mask.sum()}")
 
         # If there are null values, show some examples
         if null_mask.sum() > 0:
@@ -502,14 +505,17 @@ def display_predictions(experiment, dataset: str, model_type: str):
             st.warning("Sample of rows with null 'actual' values:")
             st.dataframe(null_rows)
 
-        # Attempt to replace NAs with 5.5
         try:
+            # Replace only non-numeric values with 5.5
             predictions_df = predictions_df.with_columns(
-                pl.col("actual").fill_null(5.5)
+                [
+                    pl.when(~pl.col("actual").cast(pl.Float64).is_finite())
+                    .then(pl.lit(5.5))
+                    .otherwise(pl.col("actual"))
+                    .alias("actual")
+                ]
             )
-            st.warning(
-                f"Null values after replacement: {predictions_df['actual'].is_null().sum()}"
-            )
+            st.success("Set non-numeric 'actual' values to 5.5 for geek_rating model")
         except Exception as e:
             st.error(f"Error replacing null values: {e}")
             return None
@@ -572,6 +578,15 @@ def display_predictions(experiment, dataset: str, model_type: str):
             # st.info(
             #     f"Showing games with at least {actual_min_users_rated} users rated (percentile {min_users_rated_filter}%)"
             # )
+
+        # Add filter for geek_rating model type to exclude games with actual = 5.5
+        if selected_model_type == "geek_rating":
+            filter_5_5 = st.checkbox(
+                "Filter out games where actual rating = 5.5", value=False
+            )
+            if filter_5_5:
+                display_df = display_df.filter(pl.col("actual") != 5.5)
+                st.info(f"Filtered out games where actual rating = 5.5")
 
         if model_type == "regression":
             from sklearn.metrics import (
@@ -837,9 +852,13 @@ def main():
                 st.error(f"Invalid dataset: {selected_dataset}")
                 return
 
+            # # Special handling for geek_rating model type
+            # if selected_model_type == "geek_rating":
+            #     st.warning("Geek Rating Model: Setting 'actual' to 5.5")
+
             # Display predictions
             predictions_df = display_predictions(
-                experiment, selected_dataset, model_type
+                experiment, selected_dataset, model_type, selected_model_type
             )
 
             if predictions_df is not None:
