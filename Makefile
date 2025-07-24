@@ -205,6 +205,16 @@ geek_rating:
 	--users-rated lightgbm-users_rated \
 	--experiment calculated-geek-rating
 
+# predictions
+geek_rating: 
+	uv run predict.py \
+	--start-year 2024 \
+	--end-year 2029 \
+	--hurdle linear-hurdle \
+	--complexity catboost-complexity \
+	--rating catboost-rating \
+	--users-rated lightgbm-users_rated
+
 # evaluate
 evaluation:
 	uv run -m src.models.time_based_evaluation \
@@ -223,6 +233,15 @@ evaluation:
 		users_rated.preprocessor-type=tree \
 		users_rated.model=lightgbm \
 		users_rated.min-ratings=0
+
+# register
+register-complexity:
+	uv run -m scoring_service.register_model \
+	--model-type complexity \
+	--experiment catboost-complexity \
+	--name complexity-v2025 \
+	--description "Production (v2025) model for predicting game complexity" \
+	--bucket bgg-predictive-models-dev
 
 ## view experiments
 experiment_dashboard:

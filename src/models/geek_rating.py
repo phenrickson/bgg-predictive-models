@@ -413,7 +413,7 @@ def main():
     # Add output directory argument
     parser.add_argument(
         "--output-dir",
-        default="./models/experiments",
+        default="./data/predictions",
         help="Base directory for output files",
     )
 
@@ -516,25 +516,25 @@ def main():
     )
     os.makedirs(predictions_dir, exist_ok=True)
 
-    # # Construct output filename
-    # output_filename = "predictions.parquet"
-    # output_path = os.path.join(predictions_dir, output_filename)
+    # Construct output filename
+    output_filename = "predictions.parquet"
+    output_path = os.path.join(predictions_dir, output_filename)
 
-    # # Log detailed file saving information
-    # logger.info(f"Saving predictions to: {output_path}")
+    # Log detailed file saving information
+    logger.info(f"Saving predictions to: {output_path}")
 
-    # # Verify directory exists and is writable
-    # if not os.access(predictions_dir, os.W_OK):
-    #     logger.error(f"Cannot write to directory: {predictions_dir}")
-    #     raise PermissionError(f"No write permission for directory: {predictions_dir}")
+    # Verify directory exists and is writable
+    if not os.access(predictions_dir, os.W_OK):
+        logger.error(f"Cannot write to directory: {predictions_dir}")
+        raise PermissionError(f"No write permission for directory: {predictions_dir}")
 
-    # # Save predictions
-    # results.write_parquet(output_path)
+    # Save predictions
+    results.write_parquet(output_path)
 
-    # # Verify file was created
-    # if not os.path.exists(output_path):
-    #     logger.error(f"Failed to save predictions to: {output_path}")
-    #     raise IOError(f"Could not save predictions file: {output_path}")
+    # Verify file was created
+    if not os.path.exists(output_path):
+        logger.error(f"Failed to save predictions to: {output_path}")
+        raise IOError(f"Could not save predictions file: {output_path}")
 
     # Determine actual values
     if "geek_rating" in df.columns:
