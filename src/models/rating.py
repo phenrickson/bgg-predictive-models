@@ -26,14 +26,12 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 # Project imports
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
-from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split
 from src.models.training import (
     load_data,
     create_data_splits,
     select_X_y,
     create_preprocessing_pipeline,
-    preprocess_data,
     tune_model,
     evaluate_model,
     calculate_sample_weights,
@@ -340,7 +338,10 @@ def main():
 
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
-    preprocessor = create_preprocessing_pipeline(model_type=args.preprocessor_type)
+    preprocessor = create_preprocessing_pipeline(
+        model_type=args.preprocessor_type,
+        preserve_columns=["year_published", "predicted_complexity"],
+    )
     pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
 
     # Log experiment details

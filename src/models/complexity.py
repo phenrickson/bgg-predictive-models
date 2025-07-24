@@ -400,13 +400,21 @@ def main():
         predictions_dir = os.path.join(args.output_dir, "predictions")
         os.makedirs(predictions_dir, exist_ok=True)
 
+        # retrieve full data for predeictions
+        full_df = load_data(
+            local_data_path=args.local_data, end_train_year=args.test_end_year
+        )
+
         # Predict complexity for the entire dataset
-        df_pandas = df.to_pandas()
-        complexity_predictions = final_pipeline.predict(df_pandas)
+        full_df_pandas = full_df.to_pandas()
+        complexity_predictions = final_pipeline.predict(full_df_pandas)
 
         # Create predictions DataFrame
         predictions_df = pl.DataFrame(
-            {"game_id": df["game_id"], "predicted_complexity": complexity_predictions}
+            {
+                "game_id": full_df["game_id"],
+                "predicted_complexity": complexity_predictions,
+            }
         )
 
         # Save predictions to parquet

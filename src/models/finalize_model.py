@@ -161,7 +161,7 @@ def load_data(
         min_weights: Minimum weights filter
         recent_year_threshold: Number of years to consider "recent" for filtering
         logger: Logging instance
-        complexity_experiment: Optional name of complexity experiment for rating models
+        complexity_experiment: Optional name of complexity experiment
 
     Returns:
         Tuple of (dataframe, final_end_year)
@@ -194,6 +194,32 @@ def load_data(
     df = loader.load_training_data(
         end_train_year=end_year, min_ratings=min_ratings, min_weights=min_weights
     )
+
+    # Load complexity predictions if experiment is specified
+    if complexity_experiment:
+        logger.info(
+            f"Loading complexity predictions from experiment: {complexity_experiment}"
+        )
+        try:
+            import polars as pl
+
+            complexity_predictions_path = (
+                f"models/experiments/predictions/{complexity_experiment}.parquet"
+            )
+            complexity_predictions = pl.read_parquet(complexity_predictions_path)
+
+            # Join complexity predictions
+            df = df.join(
+                complexity_predictions.select(["game_id", "predicted_complexity"]),
+                on="game_id",
+                how="left",
+            )
+
+            logger.info(
+                f"Joined complexity predictions. New DataFrame shape: {df.shape}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not load complexity predictions: {e}")
 
     # Detailed data diagnostics
     logger.info("Data Loading Diagnostics:")

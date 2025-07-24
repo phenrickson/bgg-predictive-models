@@ -229,6 +229,7 @@ def create_preprocessing_pipeline(model_type: str = "linear", **kwargs) -> Pipel
         "create_player_dummies": True,
         "include_base_numeric": True,
         "verbose": False,
+        "preserve_columns": ["year_published"],
     }
 
     # Update default config with provided kwargs

@@ -268,7 +268,10 @@ def main():
 
     # Setup model and pipeline
     model, param_grid = configure_model(args.model)
-    preprocessor = create_preprocessing_pipeline(model_type=args.preprocessor_type)
+    preprocessor = create_preprocessing_pipeline(
+        model_type=args.preprocessor_type,
+        preserve_columns=["year_published", "predicted_complexity"],
+    )
 
     # # Wrap the model with TransformedTargetRegressor
     # transformed_model = TransformedTargetRegressor(

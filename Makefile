@@ -175,7 +175,7 @@ train_users_rated_tree:
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
 	--experiment $(USERS_RATED_TREE_CANDIDATE) \
-	--min-ratings=0
+	--min-ratings 0
 
 finalize_users_rated_tree: 
 	uv run -m src.models.finalize_model \
