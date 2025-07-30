@@ -1,5 +1,6 @@
 import os
 import json
+from dotenv import load_dotenv
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
@@ -11,14 +12,21 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from scoring_service.registered_model import RegisteredModel
+from registered_model import RegisteredModel
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config
 from src.models.geek_rating import calculate_geek_rating
 from src.models.score import load_model
 
-# Get bucket name from environment variable
+load_dotenv()
+
+# Get environment variables
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+if not GCP_PROJECT_ID:
+    raise ValueError("GCP_PROJECT_ID environment variable must be set")
+
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+CREDENTIALS_PATH = os.getenv("GOOGLE_ACCOUNT_CREDENTIALS")
 
 
 class PredictGamesRequest(BaseModel):
@@ -149,10 +157,18 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         job_id = str(uuid.uuid4())
 
         # Load models
-        registered_hurdle_model = RegisteredModel("hurdle", BUCKET_NAME)
-        registered_complexity_model = RegisteredModel("complexity", BUCKET_NAME)
-        registered_rating_model = RegisteredModel("rating", BUCKET_NAME)
-        registered_users_rated_model = RegisteredModel("users_rated", BUCKET_NAME)
+        registered_hurdle_model = RegisteredModel(
+            "hurdle", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        registered_complexity_model = RegisteredModel(
+            "complexity", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        registered_rating_model = RegisteredModel(
+            "rating", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        registered_users_rated_model = RegisteredModel(
+            "users_rated", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
 
         # Load model pipelines and registrations
         hurdle_pipeline, hurdle_registration = (
@@ -293,7 +309,9 @@ async def list_available_models():
 
     for model_type in model_types:
         try:
-            registered_model = RegisteredModel(model_type, BUCKET_NAME)
+            registered_model = RegisteredModel(
+                model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
+            )
             available_models[model_type] = registered_model.list_registered_models()
         except Exception as e:
             available_models[model_type] = []
@@ -307,7 +325,9 @@ async def get_model_info(
 ):
     """Get detailed information about a specific registered model."""
     try:
-        registered_model = RegisteredModel(model_type, BUCKET_NAME)
+        registered_model = RegisteredModel(
+            model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
         pipeline, registration = registered_model.load_registered_model(
             model_name, version
         )

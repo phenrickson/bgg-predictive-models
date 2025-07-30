@@ -47,17 +47,23 @@ jobs:
         GCS_BUCKET=${{ vars.GCS_BUCKET_NAME}}
         GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
         EOF
-
+        
     - name: Authenticate to Google Cloud
       id: auth
       uses: google-github-actions/auth@v2
       with:
-        workload_identity_provider: 'projects/YOUR_PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
-        service_account: 'cloud-run-predictor@YOUR_PROJECT_ID.iam.gserviceaccount.com'
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+        gcloud config set core/disable_usage_reporting true
+        gcloud config set core/disable_prompts true
+        gcloud components update
     - name: Get Latest Registered Models
       id: get-models
       run: |
@@ -85,7 +91,6 @@ jobs:
         echo "complexity_model=$COMPLEXITY_MODEL" >> $GITHUB_OUTPUT
         echo "rating_model=$RATING_MODEL" >> $GITHUB_OUTPUT
         echo "users_rated_model=$USERS_RATED_MODEL" >> $GITHUB_OUTPUT
-
   trigger-predictions:
     needs: get-latest-models
     runs-on: ubuntu-latest
@@ -119,7 +124,7 @@ jobs:
             "users_rated_model_name": "${{ needs.get-latest-models.outputs.users_rated_model }}",
             "start_year": ${{ github.event.inputs.start_year || 2024 }},
             "end_year": ${{ github.event.inputs.end_year || 2029 }},
-            "output_path": "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/cloud_predictions/game_predictions.parquet' }}"
+            "output_path": "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
           }'
 
     - name: Log Prediction Metadata

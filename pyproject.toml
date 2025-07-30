@@ -32,6 +32,10 @@ dependencies = [
     "dotenv>=0.9.9",
     "black>=25.1.0",
     "ruff>=0.12.5",
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
+    "joblib>=1.5.1",
+    "python-multipart>=0.0.20",
 ]
 
 [dependency-groups]
