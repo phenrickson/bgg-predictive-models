@@ -313,6 +313,10 @@ experiment_dashboard:
 # dashboard to look at predicted geek rating
 geek_rating_dashboard:
 	uv run streamlit run src/monitor/geek_rating_dashboard.py
+
+# dashboard to look at unsupervised learning methods
+unsupervised_dashboard:
+	uv run streamlit run src/monitor/unsupervised_dashboard.py
 	
 # remove trained experiments
 .PHONY: clean_experiments
