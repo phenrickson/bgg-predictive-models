@@ -8,7 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
+from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker
+
+logger = setup_logging()
 
 
 def get_model_info(finalized_dir: Path) -> Optional[int]:
@@ -29,7 +32,7 @@ def get_model_info(finalized_dir: Path) -> Optional[int]:
                 info = json.load(f)
                 final_end_year = info.get("final_end_year")
         except Exception as e:
-            print(f"Warning: Error reading model info: {e}")
+            logger.info(f"Warning: Error reading model info: {e}")
 
     return final_end_year
 
@@ -56,7 +59,7 @@ def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
     ]
 
     if not matching_experiments:
-        print(f"No experiments found matching {experiment_name}")
+        logger.info(f"No experiments found matching {experiment_name}")
         return None
 
     # Get the latest version
@@ -76,10 +79,10 @@ def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
                 threshold = metadata.get("metadata", {}).get("optimal_threshold")
 
                 if threshold is not None:
-                    print(f"Found threshold {threshold} in {metadata_path}")
+                    logger.info(f"Found threshold {threshold} in {metadata_path}")
                     return threshold
         except Exception as e:
-            print(f"Warning: Error reading {metadata_path}: {e}")
+            logger.info(f"Warning: Error reading {metadata_path}: {e}")
 
     # Then, look for model_info.json in the experiment directory
     model_info_path = experiment.exp_dir / "model_info.json"
@@ -91,13 +94,13 @@ def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
                 threshold = model_info.get("threshold")
 
                 if threshold is not None:
-                    print(f"Found threshold {threshold} in {model_info_path}")
+                    logger.info(f"Found threshold {threshold} in {model_info_path}")
                     return threshold
         except Exception as e:
-            print(f"Warning: Error reading {model_info_path}: {e}")
+            logger.info(f"Warning: Error reading {model_info_path}: {e}")
 
     # If no threshold found
-    print("No threshold found in metadata.json or model_info.json")
+    logger.info("No threshold found in metadata.json or model_info.json")
     return None
 
 
@@ -122,19 +125,19 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
         # Otherwise, search in all known model types
         model_types = ["hurdle", "rating", "complexity", "users_rated"]
 
-    # Print diagnostic information
-    print(f"Attempting to load experiment: {experiment_name}")
-    print(f"Searching in model types: {model_types}")
+    # logger.info diagnostic information
+    logger.info(f"Attempting to load experiment: {experiment_name}")
+    logger.info(f"Searching in model types: {model_types}")
 
     # Try each model type until successful
     for current_model_type in model_types:
         try:
-            print(f"Trying model type: {current_model_type}")
+            logger.info(f"Trying model type: {current_model_type}")
             tracker = ExperimentTracker(current_model_type)
 
-            # Print available experiments for this model type
+            # logger.info available experiments for this model type
             experiments = tracker.list_experiments()
-            print(
+            logger.info(
                 f"Available experiments for {current_model_type}: {[exp['full_name'] for exp in experiments]}"
             )
 
@@ -151,7 +154,9 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                 ]
 
                 if not matching_experiments:
-                    print(f"No experiments found matching base name: {experiment_name}")
+                    logger.info(
+                        f"No experiments found matching base name: {experiment_name}"
+                    )
                     continue
 
                 # Sort and get the latest version
@@ -159,20 +164,20 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     matching_experiments, key=lambda x: x["version"]
                 )
 
-                print(
+                logger.info(
                     f"Auto-selecting latest version: {latest_experiment['full_name']}"
                 )
                 experiment = tracker.load_experiment(
                     latest_experiment["name"], latest_experiment["version"]
                 )
 
-            # Print experiment directory for debugging
-            print(f"Experiment directory: {experiment.exp_dir}")
+            # logger.info experiment directory for debugging
+            logger.info(f"Experiment directory: {experiment.exp_dir}")
 
             # Explicitly look for finalized model
             finalized_path = experiment.exp_dir / "finalized" / "pipeline.pkl"
-            print(f"Checking finalized model path: {finalized_path}")
-            print(f"Path exists: {finalized_path.exists()}")
+            logger.info(f"Checking finalized model path: {finalized_path}")
+            logger.info(f"Path exists: {finalized_path.exists()}")
 
             if not finalized_path.exists():
                 # Look for latest version's finalized model
@@ -181,20 +186,24 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     for d in experiment.exp_dir.iterdir()
                     if d.is_dir() and d.name.startswith("v")
                 ]
-                print(f"Version directories found: {[d.name for d in version_dirs]}")
+                logger.info(
+                    f"Version directories found: {[d.name for d in version_dirs]}"
+                )
 
                 if version_dirs:
                     latest_version_dir = max(
                         version_dirs, key=lambda x: int(x.name[1:])
                     )
                     finalized_path = latest_version_dir / "finalized" / "pipeline.pkl"
-                    print(
+                    logger.info(
                         f"Checking alternative finalized model path: {finalized_path}"
                     )
-                    print(f"Alternative path exists: {finalized_path.exists()}")
+                    logger.info(f"Alternative path exists: {finalized_path.exists()}")
 
             if finalized_path.exists():
-                print(f"Successfully loaded finalized model from: {finalized_path}")
+                logger.info(
+                    f"Successfully loaded finalized model from: {finalized_path}"
+                )
                 import joblib
 
                 return joblib.load(finalized_path)
@@ -202,7 +211,7 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
             raise FileNotFoundError(f"No finalized model found for {experiment_name}")
 
         except (ValueError, FileNotFoundError, Exception) as e:
-            print(
+            logger.info(
                 f"Failed to load in {current_model_type} model type: {type(e).__name__}: {e}"
             )
             import traceback
@@ -295,7 +304,7 @@ def load_scoring_data(
 
     # If complexity predictions are provided and model requires them, join predictions
     if complexity_predictions is not None and model_type in ["rating", "users_rated"]:
-        print("Joining pre-computed complexity predictions")
+        logger.info("Joining pre-computed complexity predictions")
         df = df.join(
             complexity_predictions.select(["game_id", "predicted_complexity"]),
             on="game_id",
@@ -341,51 +350,51 @@ def predict_data(
 
         # Use default threshold of 0.5 if none found
         threshold = threshold if threshold is not None else 0.5
-        print(f"Using classification threshold: {threshold}")
+        logger.info(f"Using classification threshold: {threshold}")
 
         predicted_class = predictions >= threshold
         predicted_values = predictions
     elif model_type == "complexity":
         # Diagnostic logging for complexity model
-        print("Complexity Model Prediction Diagnostics:")
+        logger.info("Complexity Model Prediction Diagnostics:")
 
         # Convert to pandas for prediction
         df_pandas = df.to_pandas()
 
-        print(f"Input DataFrame shape: {df.shape}")
-        print(f"Input columns: {df.columns}")
+        logger.info(f"Input DataFrame shape: {df.shape}")
+        logger.info(f"Input columns: {df.columns}")
 
-        # Print first few rows of input data
-        print("First few rows of input data:")
-        print(df_pandas.head())
+        # logger.info first few rows of input data
+        logger.info("First few rows of input data:")
+        logger.info(df_pandas.head())
 
         # Predict and log details
         predictions = pipeline.predict(df_pandas)
-        print(f"Raw predictions: {predictions}")
-        print(
+        logger.info(f"Raw predictions: {predictions}")
+        logger.info(
             f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
         )
 
         # Constrain predictions to 1-5 range
         predicted_values = np.clip(predictions, 1, 5)
-        print(f"Constrained predictions: {predicted_values}")
+        logger.info(f"Constrained predictions: {predicted_values}")
 
         predicted_class = None  # No predicted_class for regression
         threshold = None  # No threshold for complexity
     elif model_type in ["users_rated", "rating"]:
         # Regression outcome for rating and users_rated models
-        print(f"{model_type.capitalize()} Model Prediction Diagnostics:")
+        logger.info(f"{model_type.capitalize()} Model Prediction Diagnostics:")
 
         # Convert to pandas for prediction
         df_pandas = df.to_pandas()
 
-        print(f"Input DataFrame shape: {df.shape}")
-        print(f"Input columns: {df.columns}")
+        logger.info(f"Input DataFrame shape: {df.shape}")
+        logger.info(f"Input columns: {df.columns}")
 
         # Predict and log details
         predictions = pipeline.predict(df_pandas)
-        print(f"Raw predictions: {predictions}")
-        print(
+        logger.info(f"Raw predictions: {predictions}")
+        logger.info(
             f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
         )
 
@@ -397,7 +406,7 @@ def predict_data(
             # Constrain rating predictions to appropriate range
             predicted_values = np.clip(predictions, 1, 10)
 
-        print(f"Transformed predictions: {predicted_values}")
+        logger.info(f"Transformed predictions: {predicted_values}")
 
         predicted_class = None  # No predicted_class for regression
         threshold = None  # No threshold for regression
@@ -410,7 +419,7 @@ def predict_data(
 
         # Use default threshold of 0.5 if none found
         threshold = threshold if threshold is not None else 0.5
-        print(f"Using classification threshold: {threshold}")
+        logger.info(f"Using classification threshold: {threshold}")
 
         predicted_class = predictions >= threshold
         predicted_values = predictions
@@ -532,11 +541,11 @@ def save_and_display_results(
 
     # Save results
     results.write_parquet(str(output_path))
-    print(f"Predictions for {experiment_name} saved to {output_path}")
-    print(f"Data loaded from year {start_year or 'beginning'} to {end_year}")
+    logger.info(f"Predictions for {experiment_name} saved to {output_path}")
+    logger.info(f"Data loaded from year {start_year or 'beginning'} to {end_year}")
 
     # Display sample of results
-    print("\nSample predictions:")
+    logger.info("\nSample predictions:")
 
     # Dynamically select sample columns based on model type
     if model_type == "complexity":
@@ -583,7 +592,7 @@ def save_and_display_results(
             "predicted_class",
         ]
 
-    print(results.select(sample_columns).head())
+    logger.info(results.select(sample_columns).head())
 
     return results
 
@@ -625,8 +634,8 @@ def score_data(
         experiment = max(experiments, key=lambda x: x.get("version", 0))
         experiment_name = experiment["name"]
 
-    # Print debug information about model type
-    print(f"Using model type: {model_type}")
+    # logger.info debug information about model type
+    logger.info(f"Using model type: {model_type}")
 
     # Load pipeline
     pipeline = load_model(experiment_name)

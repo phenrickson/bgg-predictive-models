@@ -11,9 +11,10 @@ from typing import Dict, Optional, Union
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config
 from src.models.score import load_model
+from src.utils.logging import setup_logging
+from src.models.experiments import ExperimentTracker
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 
 def load_all_models(
@@ -428,8 +429,6 @@ def main():
     args = parser.parse_args()
 
     # Create experiment tracker
-    from src.models.experiments import ExperimentTracker
-
     tracker = ExperimentTracker(model_type="geek_rating")
 
     # Function to get experiment years
