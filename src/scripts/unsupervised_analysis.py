@@ -1,33 +1,87 @@
 import os
-import pandas as pd
 import numpy as np
+import polars as pl
+import plotnine as pn
+import plotly.io as pio
+from pprint import pprint
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
 
-from src.data.loader import load_data
-from src.features.unsupervised import (
-    create_unsupervised_pipeline,
-    perform_pca,
-    perform_kmeans,
-    perform_gmm,
-    plot_pca_variance,
-    plot_clustering_metrics,
-    visualize_clustering,
-)
+from src.utils.logging import setup_logging
+from src.data.config import load_config
+from src.data.loader import BGGDataLoader
+from src.features.transformers import ColumnTransformerNoPrefix
+from src.features.preprocessor import create_bgg_preprocessor
+from src.features.unsupervised import *
+from src.visualizations.pca_loadings_plot import plot_pca_loadings
+
+
+# Load training data
+def load_data(loader):
+
+    # query dataset
+    df_raw = loader.load_training_data(
+        end_train_year=2024,  # Use a reasonable training year
+        min_ratings=25,  # Ensure games have a minimum number of ratings
+    )
+
+    # load predictions to inner join with predicted_complexity
+    predictions = pl.read_parquet("data/predictions/game_predictions.parquet")
+
+    # Use estimated complexity as feature and convert to pandas
+    df_pandas = df_raw.join(
+        predictions.select(pl.col("game_id", "predicted_complexity")),
+        on="game_id",
+        how="inner",
+    ).to_pandas()
+
+    return df_raw, df_pandas
 
 
 def main():
-    # Load data
-    df = load_data()
 
-    # Create preprocessing pipeline
-    pipeline = create_unsupervised_pipeline(
-        model_type="linear", description_embedding=True
+    logger = setup_logging()
+
+    # Load configuration
+    config = load_config()
+
+    # Create data loader
+    loader = BGGDataLoader(config)
+
+    # get raw data and data with predictions
+    df_raw, df_pandas = load_data(loader)
+
+    # create preprocessor
+    preprocessor = create_bgg_preprocessor(
+        create_designer_features=False,
+        create_publisher_features=False,
+        create_artist_features=False,
+        create_family_features=False,
+        preserve_columns=["year_published", "predicted_complexity"],
     )
 
     # Preprocess data
-    X = pipeline.fit_transform(df)
+    X = preprocessor.fit_transform(df_pandas)
 
     # Perform PCA
-    pca_results = perform_pca(X)
+    pca_results = perform_pca(X.drop("year_published_transformed", axis=1))
+
+    # look at loadings
+    loadings = pl.from_pandas(pca_results["loadings"])
+
+    # Limit n_components to available components
+    n_components = 5
+    n_top_features = 15
+    n_components = min(n_components, loadings.shape[1])
+
+    top_loadings = get_top_loadings(
+        select_top_pcs(loadings, n_components=2), n_top_features=50
+    )
+
+    # Function removed
+    fig = plot_pca_loadings(top_loadings, cols=2)
+
+    # Save the figure as a PNG
     plot_pca_variance(pca_results, save_path="figures/unsupervised/pca_variance.png")
 
     # Perform K-Means
@@ -56,23 +110,25 @@ def main():
         save_path="figures/unsupervised/gmm_clustering_pca.png",
     )
 
-    # Print some results
-    print("PCA Results:")
-    print(f"Number of components: {len(pca_results['explained_variance_ratio'])}")
-    print(
+    # logger.info some results
+    logger.info("PCA Results:")
+    logger.info(f"Number of components: {len(pca_results['explained_variance_ratio'])}")
+    logger.info(
         f"Cumulative explained variance: {pca_results['cumulative_explained_variance'][-1]}"
     )
 
-    print("\nK-Means Results:")
-    print(f"Best number of clusters: {kmeans_results['best_n_clusters']}")
-    print(
+    logger.info("\nK-Means Results:")
+    logger.info(f"Best number of clusters: {kmeans_results['best_n_clusters']}")
+    logger.info(
         f"Best silhouette score: {max(kmeans_results['metrics']['silhouette_score'])}"
     )
 
-    print("\nGMM Results:")
-    print(f"Best number of components: {gmm_results['best_n_components']}")
-    print(f"Best silhouette score: {max(gmm_results['metrics']['silhouette_score'])}")
+    logger.info("\nGMM Results:")
+    logger.info(f"Best number of components: {gmm_results['best_n_components']}")
+    logger.info(
+        f"Best silhouette score: {max(gmm_results['metrics']['silhouette_score'])}"
+    )
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

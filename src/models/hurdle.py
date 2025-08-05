@@ -1,12 +1,17 @@
 """Train/Tune/Test Hurdle Model for Board Game Ratings Prediction"""
 
-import logging
 import argparse
 from pathlib import Path
 from typing import Dict, Any, Optional
 import numpy as np
 import pandas as pd
 
+# CatBoost imports
+from catboost import CatBoostClassifier
+
+# LightGBM imports
+import lightgbm as lgb
+from typing import Tuple
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -21,9 +26,8 @@ from sklearn.metrics import (
     confusion_matrix,
 )
 
-# Project imports
+# project imports
 from src.models.experiments import ExperimentTracker, log_experiment
-
 from src.models.training import (
     load_data,
     create_data_splits,
@@ -32,32 +36,10 @@ from src.models.training import (
     tune_model,
     evaluate_model,
 )
-
-# CatBoost imports
-from catboost import CatBoostClassifier
-
-# LightGBM imports
-import lightgbm as lgb
-from typing import Tuple
+from src.utils.logging import setup_logging
 
 
-def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
-    """Configure logging for the training process."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(__name__)
-
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        logger.addHandler(file_handler)
-
-    return logger
-
-
+# functions for hurdle
 def find_optimal_threshold(
     y_true: pd.Series, y_pred_proba: np.ndarray, metric: str = "f1"
 ) -> Dict[str, float]:

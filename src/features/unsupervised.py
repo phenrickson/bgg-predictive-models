@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+import polars as pl
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotnine as pn
 
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
@@ -88,15 +90,20 @@ def perform_pca(
 
     X_pca = pca.fit_transform(X_scaled)
 
+    # Create transformed data DataFrame
+    transformed_df = pd.DataFrame(
+        X_pca, columns=[f"PC{i+1}" for i in range(pca.n_components_)], index=X.index
+    )
+
     # Create loadings DataFrame
     loadings = pd.DataFrame(
         pca.components_.T,
         columns=[f"PC{i+1}" for i in range(pca.n_components_)],
         index=X.columns,
-    )
+    ).reset_index(names="feature")
 
     return {
-        "transformed_data": X_pca,
+        "transformed_data": transformed_df,
         "explained_variance_ratio": pca.explained_variance_ratio_,
         "cumulative_explained_variance": np.cumsum(pca.explained_variance_ratio_),
         "loadings": loadings,
@@ -104,11 +111,118 @@ def perform_pca(
     }
 
 
+def select_top_pcs(df: pl.DataFrame, n_components: int = 10) -> pl.DataFrame:
+    columns = ["feature"] + [f"PC{i}" for i in range(1, n_components + 1)]
+    selected = df.select([col for col in columns if col in df.columns])
+    return selected
+
+
+def get_top_loadings(df: pl.DataFrame, n_top_features: int = 15) -> pl.DataFrame:
+    top_loadings = (
+        df.unpivot(index="feature", variable_name="component")
+        .with_columns(pl.col("value").abs().alias("abs_value"))
+        .sort(["component", "abs_value"], descending=True)
+        .group_by("component")
+        .head(n_top_features)
+        .drop("abs_value")
+    )
+    return top_loadings
+
+
+def plot_pca_loadings(
+    pca_results: dict,
+    n_top_features: int = 25,
+    n_components: int = 5,
+    save_path: str = None,
+) -> pn.ggplot:
+    """
+    Create a loadings plot for top features within each principal component.
+
+    Parameters
+    ----------
+    pca_results : dict
+        Results from perform_pca function.
+
+    n_top_features : int, optional (default=25)
+        Number of top features to plot for each principal component.
+
+    n_components : int, optional (default=5)
+        Number of principal components to plot.
+
+    save_path : str, optional
+        Path to save the plot.
+
+    Returns
+    -------
+    pn.ggplot
+        Plotnine plot of feature loadings.
+    """
+    # Convert loadings to Polars DataFrame
+    loadings_pl = pl.DataFrame(
+        pca_results["loadings"].reset_index().rename(columns={"index": "feature"})
+    )
+
+    # Limit n_components to available components
+    n_components = min(n_components, loadings_pl.width - 1)
+    pc_columns = [f"PC{i+1}" for i in range(n_components)]
+
+    # Prepare data for plotting
+    plot_data_list = []
+    for pc_col in pc_columns:
+        # Get top features for this specific principal component
+        top_features = (
+            loadings_pl.select(["feature", pc_col])
+            .with_columns(pl.col(pc_col).abs().alias("abs_loading"))
+            .sort("abs_loading", descending=True)
+            .head(n_top_features)
+        )
+
+        # Add principal component column
+        top_features = top_features.with_columns(
+            pl.lit(pc_col).alias("Principal Component")
+        )
+
+        plot_data_list.append(top_features)
+
+    # Combine data for all components
+    plot_data_melted = pl.concat(plot_data_list)
+
+    # Convert to pandas for plotnine
+    plot_data_pd = plot_data_melted.to_pandas()
+
+    # Create plot
+    plot = (
+        pn.ggplot(plot_data_pd, pn.aes(x="feature", y=pc_col, fill=pc_col))
+        + pn.geom_bar(stat="identity", position="identity")
+        + pn.facet_wrap("~ Principal Component", scales="free_y", ncol=1)
+        + pn.coord_flip()
+        + pn.theme_minimal()
+        + pn.labs(
+            title="Top 25 Feature Loadings for Each Principal Component",
+            x="Features",
+            y="Loading",
+        )
+        + pn.scale_fill_gradient2(low="blue", mid="white", high="red")
+    )
+
+    # Save plot if path is provided
+    if save_path:
+        plot.save(save_path, dpi=300, bbox_inches="tight")
+
+    return plot
+
+
 def perform_kmeans(
-    X: pd.DataFrame, n_clusters_range: list = range(2, 11), random_state: int = 42
+    X: pd.DataFrame,
+    n_clusters_range: list = range(2, 11),
+    random_state: int = 42,
+    n_jobs: int = -1,
+    verbose: bool = True,
+    early_stopping_threshold: float = 0.01,
+    use_mini_batch: bool = False,
 ) -> dict:
     """
-    Perform K-Means clustering with evaluation metrics.
+    Perform K-Means clustering with advanced optimization and logging.
 
     Parameters
     ----------
@@ -121,11 +235,31 @@ def perform_kmeans(
     random_state : int, optional
         Random seed for reproducibility.
 
+    n_jobs : int, optional (default=-1)
+        Number of jobs to run in parallel. -1 means using all processors.
+
+    verbose : bool, optional (default=True)
+        Whether to print detailed logging information.
+
+    early_stopping_threshold : float, optional (default=0.01)
+        Threshold for early stopping based on improvement in Davies-Bouldin score.
+
+    use_mini_batch : bool, optional (default=False)
+        Whether to use MiniBatchKMeans for faster processing on large datasets.
+
     Returns
     -------
     dict
         K-Means clustering results including best model, metrics, and visualizations.
     """
+    import logging
+
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s - %(levelname)s: %(message)s",
+    )
+    logger = logging.getLogger(__name__)
+
     # Standardize the data
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -138,25 +272,76 @@ def perform_kmeans(
         "davies_bouldin_score": [],
     }
 
+    best_score = float("inf")
+    best_n_clusters = n_clusters_range[0]
+
     for n_clusters in n_clusters_range:
-        kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
-        kmeans.fit(X_scaled)
+        logger.info(f"Processing clustering with {n_clusters} clusters...")
+
+        # Choose clustering algorithm based on dataset size and user preference
+        if use_mini_batch:
+            clusterer = MiniBatchKMeans(
+                n_clusters=n_clusters,
+                random_state=random_state,
+                n_init="auto",
+                batch_size=min(1024, X_scaled.shape[0] // 10),
+                max_iter=100,
+            )
+        else:
+            clusterer = KMeans(
+                n_clusters=n_clusters,
+                random_state=random_state,
+                n_init="auto",
+                algorithm="lloyd",
+                n_jobs=n_jobs,
+            )
+
+        # Fit the model
+        clusterer.fit(X_scaled)
+
+        # Compute metrics
+        current_silhouette = silhouette_score(X_scaled, clusterer.labels_)
+        current_davies = davies_bouldin_score(X_scaled, clusterer.labels_)
 
         metrics["n_clusters"].append(n_clusters)
-        metrics["inertia"].append(kmeans.inertia_)
-        metrics["silhouette_score"].append(silhouette_score(X_scaled, kmeans.labels_))
-        metrics["davies_bouldin_score"].append(
-            davies_bouldin_score(X_scaled, kmeans.labels_)
+        metrics["inertia"].append(clusterer.inertia_)
+        metrics["silhouette_score"].append(current_silhouette)
+        metrics["davies_bouldin_score"].append(current_davies)
+
+        logger.info(
+            f"Clusters: {n_clusters}, Silhouette Score: {current_silhouette:.4f}, Davies-Bouldin Score: {current_davies:.4f}"
         )
 
-    # Find the best number of clusters (lowest Davies-Bouldin score)
-    best_n_clusters = metrics["n_clusters"][np.argmin(metrics["davies_bouldin_score"])]
+        # Early stopping logic
+        if current_davies < best_score * (1 - early_stopping_threshold):
+            best_score = current_davies
+            best_n_clusters = n_clusters
+            logger.info(f"Found better clustering with {n_clusters} clusters")
+        elif n_clusters > n_clusters_range[0] and current_davies >= best_score:
+            logger.info("No significant improvement in clustering. Stopping early.")
+            break
 
     # Fit the best K-Means model
-    best_kmeans = KMeans(
-        n_clusters=best_n_clusters, random_state=random_state, n_init=10
-    )
+    if use_mini_batch:
+        best_kmeans = MiniBatchKMeans(
+            n_clusters=best_n_clusters,
+            random_state=random_state,
+            n_init="auto",
+            batch_size=min(1024, X_scaled.shape[0] // 10),
+            max_iter=100,
+        )
+    else:
+        best_kmeans = KMeans(
+            n_clusters=best_n_clusters,
+            random_state=random_state,
+            n_init="auto",
+            algorithm="lloyd",
+            n_jobs=n_jobs,
+        )
+
     best_kmeans.fit(X_scaled)
+
+    logger.info(f"Best number of clusters: {best_n_clusters}")
 
     return {
         "best_model": best_kmeans,

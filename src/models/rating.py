@@ -2,14 +2,7 @@
 
 import logging
 import argparse
-from pathlib import Path
-from typing import Dict, Optional
-
-# Project imports
-from src.models.experiments import (
-    ExperimentTracker,
-    log_experiment,
-)
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -19,6 +12,12 @@ from sklearn.base import clone
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Project imports
+# Project imports
+from src.utils.logging import setup_logging
+from src.models.experiments import (
+    ExperimentTracker,
+    log_experiment,
+)
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.training import (
@@ -31,23 +30,6 @@ from src.models.training import (
     calculate_sample_weights,
     configure_model,
 )
-
-
-def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
-    """Configure logging for the training process."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(__name__)
-
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        logger.addHandler(file_handler)
-
-    return logger
 
 
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:
