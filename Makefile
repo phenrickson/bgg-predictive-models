@@ -235,7 +235,7 @@ geek_rating:
 # predictions
 predictions: 
 	uv run predict.py \
-	--start-year 2024 \
+	--start-year 0 \
 	--end-year 2029 \
 	--hurdle linear-hurdle \
 	--complexity catboost-complexity \
