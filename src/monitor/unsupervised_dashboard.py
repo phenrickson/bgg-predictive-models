@@ -188,8 +188,8 @@ def run_kmeans_wrapper(args):
     return k, perform_kmeans_single(data, k)
 
 
-@st.cache_data
-def perform_multi_k_means(data, k_values):
+@st.cache_data(show_spinner=False)
+def perform_multi_k_means(data, k_values, feature_flags):
     """Perform K-Means clustering for multiple k values in parallel with caching."""
     logger.info(f"Starting K-Means clustering for k values: {k_values}")
     start_time = time.time()
@@ -898,9 +898,11 @@ def main():
                             [col for col in viz_data.columns if col.startswith("PC")]
                         ]
 
-                        # Run clustering with user-specified k values
+                        # Run clustering with user-specified k values and feature flags
                         st.session_state.clustering_results = perform_multi_k_means(
-                            clustering_data, k_values=k_values
+                            clustering_data,
+                            k_values=k_values,
+                            feature_flags=st.session_state.feature_flags,
                         )
                         logger.info("K-Means clustering completed")
 
@@ -1195,42 +1197,115 @@ def main():
                         st.session_state.selected_k
                     ]["sample_silhouette_values"]
 
-                    # Create silhouette distribution plots
-                    fig_silhouette = go.Figure()
+                    # Create a DataFrame with game info and silhouette scores
+                    silhouette_df = pd.DataFrame(
+                        {
+                            "game_id": st.session_state.data["game_id"],
+                            "name": st.session_state.data["name"],
+                            "cluster": [f"Cluster {i+1}" for i in cluster_labels],
+                            "silhouette_score": silhouette_values,
+                        }
+                    )
 
-                    # Add histogram for each cluster
+                    # Sort by silhouette score within each cluster
+                    silhouette_df = silhouette_df.sort_values(
+                        ["cluster", "silhouette_score"], ascending=[True, False]
+                    )
+
+                    # Create box plot with individual points
                     n_clusters = int(st.session_state.selected_k.split("_")[1])
                     color_map = get_cluster_colors(n_clusters)
+
+                    fig_silhouette = go.Figure()
+
+                    # Add box plots for each cluster
                     for i in range(n_clusters):
-                        cluster_silhouette = silhouette_values[cluster_labels == i]
+                        cluster_name = f"Cluster {i+1}"
+                        cluster_data = silhouette_df[
+                            silhouette_df["cluster"] == cluster_name
+                        ]
+
+                        # Add box plot
                         fig_silhouette.add_trace(
-                            go.Histogram(
-                                x=cluster_silhouette,
-                                name=f"Cluster {i+1}",
-                                nbinsx=30,
-                                opacity=0.7,
-                                marker_color=color_map[str(i)],
+                            go.Box(
+                                y=cluster_data["silhouette_score"],
+                                name=cluster_name,
+                                boxpoints="all",  # Show all points
+                                jitter=0.3,  # Add jitter to points for better visibility
+                                pointpos=-1.8,  # Position points to the left of box
+                                marker=dict(color=color_map[str(i)], size=4),
+                                hovertemplate=(
+                                    "Game: %{customdata[0]}<br>"
+                                    + "Score: %{y:.4f}<br>"
+                                    + "<extra></extra>"
+                                ),
+                                customdata=cluster_data[["name"]].values,
                             )
                         )
 
-                    # Add vertical line for average silhouette score
-                    fig_silhouette.add_vline(
-                        x=silhouette_scores[st.session_state.selected_k],
-                        line_dash="dash",
-                        line_color="red",
-                        annotation_text=f"Average silhouette score: {silhouette_scores[st.session_state.selected_k]:.4f}",
-                        annotation_position="top",
+                    # Add horizontal line for average silhouette score
+                    avg_score = silhouette_scores[st.session_state.selected_k]
+                    fig_silhouette.add_shape(
+                        type="line",
+                        x0=0,
+                        x1=1,
+                        y0=avg_score,
+                        y1=avg_score,
+                        line=dict(
+                            color="red",
+                            dash="dash",
+                        ),
+                        xref="paper",
+                        yref="y",
+                    )
+                    fig_silhouette.add_annotation(
+                        text=f"Average silhouette score: {avg_score:.4f}",
+                        x=1,
+                        y=avg_score,
+                        xref="paper",
+                        yref="y",
+                        showarrow=False,
+                        xanchor="left",
+                        yanchor="bottom",
+                        xshift=10,
                     )
 
                     fig_silhouette.update_layout(
                         title="Distribution of Silhouette Scores by Cluster",
-                        xaxis_title="Silhouette Score (-1 to 1, higher is better)",
-                        yaxis_title="Number of Games",
-                        barmode="overlay",
+                        yaxis_title="Silhouette Score (-1 to 1, higher is better)",
                         height=600,
+                        showlegend=True,
+                        hovermode="closest",
                     )
 
                     st.plotly_chart(fig_silhouette, use_container_width=True)
+
+                    # Add table view of silhouette scores
+                    st.subheader("Individual Game Silhouette Scores")
+
+                    # Allow filtering by cluster
+                    selected_cluster = st.selectbox(
+                        "Filter by Cluster",
+                        ["All Clusters"]
+                        + [f"Cluster {i+1}" for i in range(n_clusters)],
+                    )
+
+                    # Filter data based on selection
+                    if selected_cluster == "All Clusters":
+                        filtered_df = silhouette_df
+                    else:
+                        filtered_df = silhouette_df[
+                            silhouette_df["cluster"] == selected_cluster
+                        ]
+
+                    # Display the data
+                    st.dataframe(
+                        filtered_df[
+                            ["name", "game_id", "cluster", "silhouette_score"]
+                        ].sort_values("silhouette_score", ascending=False),
+                        use_container_width=True,
+                        height=400,
+                    )
 
                     # # Add tooltip explanation
                     # st.help(
