@@ -78,59 +78,41 @@ def predict_game_characteristics(
     complexity_model: Any,
     rating_model: Any,
     users_rated_model: Any,
-    likely_games_mask: pd.Series,
+    likely_games_mask: pd.Series,  # Kept for compatibility but not used
 ) -> pd.DataFrame:
     """
-    Predict game complexity, rating, and users rated.
+    Predict game complexity, rating, and users rated for all games.
 
     Args:
         features: Game features DataFrame
         complexity_model: Trained complexity model
         rating_model: Trained rating model
         users_rated_model: Trained users rated model
-        likely_games_mask: Boolean mask of games likely to be rated
+        likely_games_mask: Boolean mask of games likely to be rated (kept for compatibility)
 
     Returns:
         DataFrame with predicted characteristics
     """
     results = pd.DataFrame(index=features.index)
 
-    # Default values for all games
-    results["predicted_complexity"] = 1.0
-    results["predicted_rating"] = 5.5
-    results["predicted_users_rated"] = 25
+    # Predict complexity for all games
+    results["predicted_complexity"] = complexity_model.predict(features)
 
-    # Predict for likely games
-    if likely_games_mask.any():
-        likely_features = features[likely_games_mask]
+    # Add predicted complexity to features
+    features_with_complexity = features.copy()
+    features_with_complexity["predicted_complexity"] = results["predicted_complexity"]
 
-        # Predict complexity
-        results.loc[likely_games_mask, "predicted_complexity"] = (
-            complexity_model.predict(likely_features)
-        )
+    # Predict rating and users rated for all games
+    results["predicted_rating"] = rating_model.predict(features_with_complexity)
+    results["predicted_users_rated"] = users_rated_model.predict(
+        features_with_complexity
+    )
 
-        # Add predicted complexity to features
-        likely_features_with_complexity = likely_features.copy()
-        likely_features_with_complexity["predicted_complexity"] = results.loc[
-            likely_games_mask, "predicted_complexity"
-        ]
-
-        # Predict rating and users rated
-        results.loc[likely_games_mask, "predicted_rating"] = rating_model.predict(
-            likely_features_with_complexity
-        )
-        results.loc[likely_games_mask, "predicted_users_rated"] = (
-            users_rated_model.predict(likely_features_with_complexity)
-        )
-
-        # Ensure users is at least minimum threshold
-        results.loc[likely_games_mask, "predicted_users_rated"] = np.maximum(
-            np.round(
-                np.expm1(results.loc[likely_games_mask, "predicted_users_rated"]) / 50
-            )
-            * 50,
-            25,
-        )
+    # Ensure users is at least minimum threshold
+    results["predicted_users_rated"] = np.maximum(
+        np.round(np.expm1(results["predicted_users_rated"]) / 50) * 50,
+        25,
+    )
 
     return results
 
