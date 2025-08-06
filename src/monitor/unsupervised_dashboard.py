@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import streamlit as st
 import pandas as pd
 import polars as pl
@@ -11,7 +12,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans, DBSCAN
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import (
+    silhouette_score,
+    calinski_harabasz_score,
+    davies_bouldin_score,
+)
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -21,6 +26,10 @@ from src.data.loader import BGGDataLoader
 from src.data.config import load_config
 from src.features.preprocessor import create_bgg_preprocessor
 from src.features.unsupervised import perform_pca, perform_kmeans
+from src.utils.logging import setup_logging
+
+# Set up logging
+logger = setup_logging()
 
 
 def load_bgg_data(end_train_year=2024, min_ratings=25):
@@ -116,18 +125,61 @@ def dimension_reduction(X, method="PCA", n_components=2):
     return X_reduced
 
 
-def clustering(X, method="KMeans", n_clusters=5, eps=0.5, min_samples=5):
-    # """Perform clustering."""
-    # scaler = StandardScaler()
-    # X_scaled = scaler.fit_transform(X)
+@st.cache_data(show_spinner=False)
+def perform_kmeans_single(data, k):
+    """Run K-Means clustering for a single k value with caching."""
+    logger.info(f"Running K-Means with k={k}")
+    k_start = time.time()
 
-    if method == "KMeans":
-        clusterer = KMeans(n_clusters=n_clusters, random_state=42)
-    elif method == "DBSCAN":
-        clusterer = DBSCAN(eps=eps, min_samples=min_samples)
+    # Run clustering
+    clusterer = KMeans(n_clusters=k, random_state=42)
+    labels = clusterer.fit_predict(data)
 
-    labels = clusterer.fit_predict(X)
-    return labels
+    # Calculate clustering metrics
+    silhouette = silhouette_score(data, labels)
+    calinski = calinski_harabasz_score(data, labels)
+    davies = davies_bouldin_score(data, labels)
+
+    logger.info(
+        f"K={k} metrics - Silhouette: {silhouette:.4f}, CH: {calinski:.4f}, DB: {davies:.4f}"
+    )
+
+    # Calculate feature importance per cluster
+    feature_importance = {}
+    for i in range(k):
+        cluster_mask = labels == i
+        cluster_mean = data[cluster_mask].mean()
+        cluster_std = data[cluster_mask].std()
+        # Z-score of cluster mean relative to overall distribution
+        importance = np.abs((cluster_mean - data.mean()) / data.std())
+        feature_importance[i] = importance
+
+    # Store results
+    result = {
+        "labels": labels,
+        "silhouette": silhouette,
+        "calinski_harabasz": calinski,
+        "davies_bouldin": davies,
+        "centroids": clusterer.cluster_centers_,
+        "inertia": clusterer.inertia_,
+        "feature_importance": feature_importance,
+    }
+
+    logger.info(f"Completed k={k} in {time.time() - k_start:.2f} seconds")
+    return result
+
+
+def perform_multi_k_means(data, k_values):
+    """Perform K-Means clustering for multiple k values."""
+    logger.info(f"Starting K-Means clustering for k values: {k_values}")
+    start_time = time.time()
+
+    # Run clustering for each k value with caching
+    results = {f"k_{k}": perform_kmeans_single(data, k) for k in k_values}
+
+    total_time = time.time() - start_time
+    logger.info(f"Completed all clustering in {total_time:.2f} seconds")
+    return results
 
 
 @st.cache_data
@@ -171,6 +223,12 @@ def main():
         st.session_state.numeric_columns = st.session_state.data.select_dtypes(
             include=[np.number]
         ).columns.tolist()
+
+    if "clustering_results" not in st.session_state:
+        st.session_state.clustering_results = None
+
+    if "selected_k" not in st.session_state:
+        st.session_state.selected_k = None
 
     if "feature_groups" not in st.session_state:
         st.session_state.feature_groups = [
@@ -239,7 +297,7 @@ def main():
     # )
 
     # Tabs for different analyses
-    tab_data, tab_pca, tab2 = st.tabs(["Data", "PCA", "Clustering"])
+    tab_data, tab_pca, tab_kmeans = st.tabs(["Data", "PCA", "K-Means"])
 
     # Cache PCA results
     @st.cache_data
@@ -388,6 +446,7 @@ def main():
 
         # Create scatter plot function
         def create_scatter_plot(data, x_col, y_col, log_x=False, log_y=False):
+            """Create scatter plot for raw data visualization."""
             fig = px.scatter(
                 data,
                 x=x_col,
@@ -487,45 +546,63 @@ def main():
 
             # Color options
             color_options = ["None", "Predicted Complexity", "Year Published"]
-            color_by = st.selectbox("Color By", color_options, index=0)
 
-            # Scatter Plot
-            if color_by == "None":
-                fig_scatter = px.scatter(
-                    viz_data,
-                    opacity=0.4,
-                    x=x_component,
-                    y=y_component,
-                    hover_data=["game_id", "name", "year_published"],
-                    title=f"PCA Scatter Plot: {x_component} vs {y_component}",
-                )
-            else:
-                fig_scatter = px.scatter(
-                    viz_data,
-                    x=x_component,
-                    y=y_component,
-                    opacity=0.4,
-                    color=color_by,
-                    color_continuous_scale="viridis",
-                    hover_data=["game_id", "name", "year_published"],
-                    title=f"PCA Scatter Plot: {x_component} vs {y_component}",
-                )
+            def create_pca_scatter(
+                data, x_comp, y_comp, color=None, cluster_labels=None
+            ):
+                """Create scatter plot for PCA visualization with optional clustering."""
+                if cluster_labels is not None:
+                    fig = px.scatter(
+                        data,
+                        x=x_comp,
+                        y=y_comp,
+                        color=cluster_labels.astype(str),
+                        hover_data=["game_id", "name", "year_published"],
+                        title=f"PCA Scatter Plot with Clustering: {x_comp} vs {y_comp}",
+                        color_discrete_sequence=px.colors.qualitative.Vivid,
+                        labels={"color": "Cluster"},
+                    )
+                elif color == "None":
+                    fig = px.scatter(
+                        data,
+                        x=x_comp,
+                        y=y_comp,
+                        hover_data=["game_id", "name", "year_published"],
+                        title=f"PCA Scatter Plot: {x_comp} vs {y_comp}",
+                    )
+                else:
+                    fig = px.scatter(
+                        data,
+                        x=x_comp,
+                        y=y_comp,
+                        opacity=0.4,
+                        color=color,
+                        color_continuous_scale="viridis",
+                        hover_data=["game_id", "name", "year_published"],
+                        title=f"PCA Scatter Plot: {x_comp} vs {y_comp}",
+                    )
 
-            fig_scatter.update_layout(
-                height=600,
-                xaxis=dict(
-                    zeroline=True,
-                    zerolinewidth=2,
-                    showgrid=False,
-                ),
-                yaxis=dict(
-                    zeroline=True,
-                    zerolinewidth=2,
-                    showgrid=False,
-                ),
+                fig.update_layout(
+                    height=600,
+                    xaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=False,
+                    ),
+                    yaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=False,
+                    ),
+                )
+                return fig
+
+            # Create and display PCA scatter plot
+            fig_scatter_pca = create_pca_scatter(
+                viz_data, x_component, y_component, color=None
             )
+            st.plotly_chart(fig_scatter_pca, use_container_width=True)
 
-            st.plotly_chart(fig_scatter, use_container_width=True)
         else:
             st.warning(
                 "PCA results are not available. Please check the error message above."
@@ -629,9 +706,12 @@ def main():
 
             # Loadings Charts
             st.subheader("Feature Loadings")
+            loadings_component = st.selectbox(
+                "Component", available_components, index=0
+            )
 
             # Create separate charts for each component
-            for component in [x_component]:
+            for component in [loadings_component]:
                 # Get absolute loadings for this component
                 component_loadings = loadings.copy()
                 component_loadings["AbsLoading"] = np.abs(component_loadings[component])
@@ -642,14 +722,17 @@ def main():
                 # Sort features by loading value for better visualization
                 top_features = top_features.sort_values(component)
 
-                # Create horizontal bar chart
+                # Create horizontal bar chart with conditional colors
                 fig_loadings = go.Figure(
                     data=[
                         go.Bar(
                             y=top_features["feature"],  # Features on y-axis
                             x=top_features[component],  # Loadings on x-axis
                             orientation="h",  # Horizontal bars
-                            marker_color="blue" if component == x_component else "red",
+                            marker_color=[
+                                "aliceblue" if x >= 0 else "lightcoral"
+                                for x in top_features[component]
+                            ],
                             hovertemplate="Feature: %{y}<br>Loading: %{x:.4f}<extra></extra>",
                         )
                     ]
@@ -700,7 +783,7 @@ def main():
                     y=cumulative_variance,
                     mode="lines",
                     name="Cumulative Variance",
-                    marker_color="red",
+                    marker_color="darkorchid",
                     hovertemplate="Components: %{x}<br>Cumulative Variance: %{y:.2f}%<extra></extra>",
                 )
             )
@@ -717,8 +800,352 @@ def main():
             # Display the plot
             st.plotly_chart(fig, use_container_width=True)
 
-        # # Clustering Tab
-        # with tab2:
+    # K-Means Tab
+    with tab_kmeans:
+        st.header("K-Means Clustering")
+
+        if pca_results is not None and viz_data is not None:
+            # Input for k values
+            k_values_input = st.text_input(
+                "Enter k values to test (comma-separated numbers)",
+                value="3, 5, 7, 10",
+                help="Enter numbers separated by commas, e.g. '3, 5, 7, 13'",
+            )
+
+            # Parse and validate k values
+            try:
+                k_values = [int(k.strip()) for k in k_values_input.split(",")]
+                k_values = [k for k in k_values if k >= 2]  # Filter valid k values
+                if not k_values:
+                    st.error("Please enter valid k values (numbers >= 2)")
+                elif len(k_values) > 15:
+                    st.warning("Large number of k values may increase computation time")
+            except ValueError:
+                st.error("Invalid input. Please enter numbers separated by commas.")
+                k_values = None
+
+            # Button to run clustering
+            if st.button("Run K-Means Clustering"):
+                if k_values:
+                    logger.info(
+                        f"Starting K-Means clustering analysis with k values: {k_values}"
+                    )
+                    with st.spinner(
+                        "Running K-Means clustering for multiple k values..."
+                    ):
+                        # Get PCA transformed data for clustering
+                        clustering_data = viz_data[
+                            [col for col in viz_data.columns if col.startswith("PC")]
+                        ]
+
+                        # Run clustering with user-specified k values
+                        st.session_state.clustering_results = perform_multi_k_means(
+                            clustering_data, k_values=k_values
+                        )
+                        logger.info("K-Means clustering completed")
+
+                        # Set initial selected k to the one with highest silhouette score
+                        silhouette_scores = {
+                            k: results["silhouette"]
+                            for k, results in st.session_state.clustering_results.items()
+                        }
+                        optimal_k = max(silhouette_scores.items(), key=lambda x: x[1])[
+                            0
+                        ]
+                        st.session_state.selected_k = optimal_k
+                        st.success(
+                            f"Selected optimal k={optimal_k.split('_')[1]} based on highest silhouette score: {silhouette_scores[optimal_k]:.4f}"
+                        )
+
+                # Show clustering results if available
+                if st.session_state.clustering_results is not None:
+                    # Create tabs for different metrics
+                    metrics_tab1, metrics_tab2 = st.tabs(
+                        ["Clustering Metrics", "Elbow Plot"]
+                    )
+
+                    with metrics_tab1:
+                        # Get all scores
+                        silhouette_scores = {
+                            k: results["silhouette"]
+                            for k, results in st.session_state.clustering_results.items()
+                        }
+                        calinski_scores = {
+                            k: results["calinski_harabasz"]
+                            for k, results in st.session_state.clustering_results.items()
+                        }
+                        davies_scores = {
+                            k: results["davies_bouldin"]
+                            for k, results in st.session_state.clustering_results.items()
+                        }
+
+                        k_values = [
+                            int(k.split("_")[1]) for k in silhouette_scores.keys()
+                        ]
+
+                        # Create combined metrics plot
+                        fig_metrics = go.Figure()
+
+                        # Add traces for each metric
+                        fig_metrics.add_trace(
+                            go.Scatter(
+                                x=k_values,
+                                y=list(silhouette_scores.values()),
+                                mode="lines+markers",
+                                name="Silhouette Score",
+                                hovertemplate="k=%{x}<br>Score=%{y:.4f}<extra></extra>",
+                            )
+                        )
+
+                        # Normalize Calinski-Harabasz scores for plotting
+                        ch_scores = list(calinski_scores.values())
+                        ch_norm = [
+                            (x - min(ch_scores)) / (max(ch_scores) - min(ch_scores))
+                            for x in ch_scores
+                        ]
+                        fig_metrics.add_trace(
+                            go.Scatter(
+                                x=k_values,
+                                y=ch_norm,
+                                mode="lines+markers",
+                                name="Calinski-Harabasz (normalized)",
+                                hovertemplate="k=%{x}<br>Score=%{y:.4f}<extra></extra>",
+                            )
+                        )
+
+                        # Davies-Bouldin score (lower is better, so we invert it)
+                        db_scores = list(davies_scores.values())
+                        db_norm = [
+                            1 - (x - min(db_scores)) / (max(db_scores) - min(db_scores))
+                            for x in db_scores
+                        ]
+                        fig_metrics.add_trace(
+                            go.Scatter(
+                                x=k_values,
+                                y=db_norm,
+                                mode="lines+markers",
+                                name="Davies-Bouldin (inverted, normalized)",
+                                hovertemplate="k=%{x}<br>Score=%{y:.4f}<extra></extra>",
+                            )
+                        )
+
+                        fig_metrics.update_layout(
+                            title="Clustering Metrics Comparison",
+                            xaxis_title="Number of Clusters (k)",
+                            yaxis_title="Score",
+                            showlegend=True,
+                        )
+
+                        st.plotly_chart(fig_metrics, use_container_width=True)
+
+                        # Display raw scores in a table
+                        metrics_df = pd.DataFrame(
+                            {
+                                "k": k_values,
+                                "Silhouette Score": list(silhouette_scores.values()),
+                                "Calinski-Harabasz Score": list(
+                                    calinski_scores.values()
+                                ),
+                                "Davies-Bouldin Score": list(davies_scores.values()),
+                            }
+                        ).set_index("k")
+
+                        st.write("Raw Clustering Metrics:")
+                        st.dataframe(metrics_df.round(4), use_container_width=True)
+
+                    with metrics_tab2:
+                        # Create elbow plot
+                        inertias = {
+                            k: results["inertia"]
+                            for k, results in st.session_state.clustering_results.items()
+                        }
+
+                        fig_elbow = go.Figure()
+                        fig_elbow.add_trace(
+                            go.Scatter(
+                                x=k_values,
+                                y=list(inertias.values()),
+                                mode="lines+markers",
+                                name="Inertia",
+                                hovertemplate="k=%{x}<br>Inertia=%{y:.0f}<extra></extra>",
+                            )
+                        )
+
+                        fig_elbow.update_layout(
+                            title="Elbow Plot (Within-Cluster Sum of Squares)",
+                            xaxis_title="Number of Clusters (k)",
+                            yaxis_title="Inertia",
+                            showlegend=False,
+                        )
+
+                        st.plotly_chart(fig_elbow, use_container_width=True)
+
+                # Dropdown to select k
+                k_options = list(st.session_state.clustering_results.keys())
+                selected_k = st.selectbox(
+                    "Select number of clusters (k)",
+                    k_options,
+                    index=k_options.index(st.session_state.selected_k),
+                    format_func=lambda x: f"k={x.split('_')[1]} (silhouette={silhouette_scores[x]:.4f})",
+                )
+
+                if selected_k != st.session_state.selected_k:
+                    st.session_state.selected_k = selected_k
+                    logger.info(f"Selected clustering k changed to {selected_k}")
+
+                # Update scatter plot with cluster colors
+                st.subheader("Cluster Visualization")
+
+                # Get PCA components for visualization
+                col1, col2 = st.columns(2)
+                with col1:
+                    x_component = st.selectbox(
+                        "X-axis Component",
+                        [f"PC{i+1}" for i in range(viz_data.shape[1] - 3)],
+                        key="kmeans_x",
+                    )
+                with col2:
+                    y_component = st.selectbox(
+                        "Y-axis Component",
+                        [f"PC{i+1}" for i in range(viz_data.shape[1] - 3)],
+                        index=1,
+                        key="kmeans_y",
+                    )
+
+                # Get cluster labels
+                cluster_labels = st.session_state.clustering_results[selected_k][
+                    "labels"
+                ]
+
+                # Create and display clustering scatter plot
+                fig_scatter_kmeans = create_pca_scatter(
+                    viz_data, x_component, y_component, cluster_labels=cluster_labels
+                )
+                st.plotly_chart(fig_scatter_kmeans, use_container_width=True)
+
+                # Show cluster analysis
+                cluster_analysis_tab1, cluster_analysis_tab2 = st.tabs(
+                    ["Cluster Sizes", "Feature Importance"]
+                )
+
+                with cluster_analysis_tab1:
+                    # Show cluster sizes
+                    cluster_sizes = (
+                        pd.Series(cluster_labels).value_counts().sort_index()
+                    )
+                    fig_sizes = px.bar(
+                        x=cluster_sizes.index.astype(str),
+                        y=cluster_sizes.values,
+                        labels={"x": "Cluster", "y": "Number of Games"},
+                        title=f"Distribution of Games Across {selected_k} Clusters",
+                        color=cluster_sizes.index.astype(str),
+                        color_discrete_sequence=px.colors.qualitative.Vivid,
+                    )
+                    st.plotly_chart(fig_sizes, use_container_width=True)
+
+                with cluster_analysis_tab2:
+                    # Show feature importance per cluster
+                    feature_importance = st.session_state.clustering_results[
+                        selected_k
+                    ]["feature_importance"]
+
+                    # Create feature importance visualization
+                    selected_cluster = st.selectbox(
+                        "Select Cluster for Feature Analysis",
+                        sorted(list(feature_importance.keys())),
+                        key="feature_importance_cluster",
+                    )
+
+                    # Get feature importance for selected cluster
+                    cluster_importance = feature_importance[selected_cluster]
+                    importance_df = pd.DataFrame(
+                        {
+                            "Feature": cluster_importance.index,
+                            "Importance": cluster_importance.values,
+                        }
+                    ).sort_values("Importance", ascending=True)
+
+                    # Show top 15 most important features
+                    fig_importance = go.Figure()
+                    fig_importance.add_trace(
+                        go.Bar(
+                            y=importance_df["Feature"].tail(15),
+                            x=importance_df["Importance"].tail(15),
+                            orientation="h",
+                        )
+                    )
+
+                    fig_importance.update_layout(
+                        title=f"Top 15 Most Important Features for Cluster {selected_cluster}",
+                        xaxis_title="Feature Importance (Z-score)",
+                        yaxis_title="Feature",
+                        height=600,
+                    )
+
+                    st.plotly_chart(fig_importance, use_container_width=True)
+
+                # Add cluster exploration section
+                st.subheader("Explore Clusters")
+
+                # Select cluster to explore
+                selected_cluster = st.selectbox(
+                    "Select Cluster to Explore",
+                    sorted(list(cluster_sizes.index.astype(str))),
+                    key="cluster_explorer",
+                )
+
+                # Get games in selected cluster
+                cluster_mask = cluster_labels.astype(str) == selected_cluster
+                cluster_games = st.session_state.data[cluster_mask].copy()
+
+                # Select columns to display
+                all_columns = st.session_state.data.columns.tolist()
+                default_columns = [
+                    "game_id",
+                    "name",
+                    "year_published",
+                    "geek_rating",
+                    "users_rated",
+                    "average_rating",
+                    "predicted_complexity",
+                    "min_players",
+                    "max_players",
+                    "min_playtime",
+                    "max_playtime",
+                    "min_age",
+                    "description",
+                    "categories",
+                    "mechanics",
+                ]
+                default_columns = [col for col in default_columns if col in all_columns]
+
+                # Display games in selected cluster with matching color
+                if not cluster_games.empty and selected_columns:
+                    # Get color for this cluster from Plotly's Vivid color sequence
+                    cluster_colors = px.colors.qualitative.Vivid
+                    cluster_idx = int(selected_cluster)
+                    cluster_color = cluster_colors[cluster_idx % len(cluster_colors)]
+
+                    # Apply cluster color styling only to game_id and name columns
+                    styled_df = cluster_games[selected_columns]
+
+                    st.dataframe(
+                        styled_df,
+                        use_container_width=True,
+                        height=400,
+                    )
+                    st.markdown(
+                        f'<p style="color: {cluster_color}">Showing {len(cluster_games)} games in cluster {selected_cluster}</p>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.warning(
+                        "No games found in selected cluster or no columns selected."
+                    )
+        else:
+            st.warning(
+                "PCA results are not available. Please compute PCA first in the PCA tab."
+            )
         #     # Define hover columns for clustering visualization
         #     hover_columns = ["game_id", "name", "year_published"]
 
