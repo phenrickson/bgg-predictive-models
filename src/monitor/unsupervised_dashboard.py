@@ -38,7 +38,7 @@ def load_bgg_data(end_train_year=2024, min_ratings=25):
         try:
             st.info(f"Loading data from cache: {cache_file}")
             cached_data = pd.read_parquet(cache_file)
-            st.info(f"Cached data loaded successfully. Shape: {cached_data.shape}")
+            # st.info(f"Cached data loaded successfully. Shape: {cached_data.shape}")
             return cached_data
         except Exception as e:
             st.warning(f"Could not load cached data: {e}")
@@ -129,6 +129,33 @@ def clustering(X, method="KMeans", n_clusters=5, eps=0.5, min_samples=5):
     return labels
 
 
+@st.cache_data
+def load_and_preprocess_data(
+    feature_flags,
+    end_train_year=2024,
+    min_ratings=25,
+):
+    """Load and preprocess data with caching."""
+    # Load data
+    data = load_bgg_data(end_train_year, min_ratings)
+
+    # Create preprocessor
+    preprocessor = create_preprocessor(
+        create_designer_features=feature_flags["designer"],
+        create_publisher_features=feature_flags["publisher"],
+        create_artist_features=feature_flags["artist"],
+        create_family_features=feature_flags["family"],
+        create_category_features=feature_flags["category"],
+        create_mechanic_features=feature_flags["mechanic"],
+        include_base_numeric=feature_flags["base_numeric"],
+    )
+
+    # Preprocess data
+    X = preprocessor.fit_transform(data)
+
+    return data, X, preprocessor
+
+
 def main():
     st.set_page_config(page_title="BGG Unsupervised Learning Dashboard", layout="wide")
     st.title("Board Game Unsupervised Learning Dashboard")
@@ -136,7 +163,7 @@ def main():
     # Sidebar for preprocessing options
     st.sidebar.header("Preprocessing Options")
 
-    # Feature group toggles
+    # Feature group options
     feature_groups = [
         "Designer",
         "Publisher",
@@ -146,11 +173,69 @@ def main():
         "Mechanic",
         "Base Numeric",
     ]
-    feature_flags = {}
-    for group in feature_groups:
-        feature_flags[group.lower().replace(" ", "_")] = st.sidebar.checkbox(
-            f"Include {group} Features", value=True
+
+    # Multiselect for feature groups
+    selected_features = st.sidebar.multiselect(
+        "Select Feature Groups", feature_groups, default=feature_groups
+    )
+
+    # Create feature flags dictionary
+    feature_flags = {
+        group.lower().replace(" ", "_"): group in selected_features
+        for group in feature_groups
+    }
+
+    # Apply button
+    apply_preprocessing = st.sidebar.button("Apply Preprocessing")
+
+    # Initialize session state for data
+    if "data" not in st.session_state:
+        # Load and cache data
+        with st.spinner("Loading and preprocessing data..."):
+            st.session_state.data = load_bgg_data()
+
+    # Ensure initial preprocessing exists
+    if not hasattr(st.session_state, "initial_preprocessor"):
+        st.session_state.initial_preprocessor = create_preprocessor()
+        st.session_state.initial_X = (
+            st.session_state.initial_preprocessor.fit_transform(st.session_state.data)
         )
+        # Store the current feature flags
+        st.session_state.current_feature_flags = {
+            group: True for group in feature_groups
+        }
+
+    # Determine which X and preprocessor to use
+    if not hasattr(st.session_state, "preprocessor") or not apply_preprocessing:
+        # Use initial preprocessing by default
+        current_X = st.session_state.initial_X
+        current_preprocessor = st.session_state.initial_preprocessor
+    else:
+        # Use updated preprocessing
+        current_X = st.session_state.X
+        current_preprocessor = st.session_state.preprocessor
+
+    # Preprocess data when Apply button is clicked
+    if apply_preprocessing:
+        with st.spinner("Updating preprocessing..."):
+            st.session_state.preprocessor = create_preprocessor(
+                create_designer_features=feature_flags["designer"],
+                create_publisher_features=feature_flags["publisher"],
+                create_artist_features=feature_flags["artist"],
+                create_family_features=feature_flags["family"],
+                create_category_features=feature_flags["category"],
+                create_mechanic_features=feature_flags["mechanic"],
+                include_base_numeric=feature_flags["base_numeric"],
+            )
+            st.session_state.X = st.session_state.preprocessor.fit_transform(
+                st.session_state.data
+            )
+            # Update current feature flags
+            st.session_state.current_feature_flags = feature_flags
+            st.sidebar.success("Preprocessing updated successfully!")
+            # Use the newly processed data
+            current_X = st.session_state.X
+            current_preprocessor = st.session_state.preprocessor
 
     # Dimension reduction options
     st.sidebar.header("Dimension Reduction")
@@ -161,110 +246,138 @@ def main():
         "Number of Components", min_value=2, max_value=10, value=2
     )
 
-    # Clustering options
-    st.sidebar.header("Clustering")
-    clustering_method = st.sidebar.selectbox(
-        "Clustering Method", ["KMeans", "DBSCAN"], index=0
-    )
-
-    if clustering_method == "KMeans":
-        n_clusters = st.sidebar.slider(
-            "Number of Clusters", min_value=2, max_value=10, value=5
-        )
-        eps = 0.5
-        min_samples = 5
-    else:
-        eps = st.sidebar.slider(
-            "EPS", min_value=0.1, max_value=2.0, value=0.5, step=0.1
-        )
-        min_samples = st.sidebar.slider(
-            "Min Samples", min_value=2, max_value=20, value=5
-        )
-
     # Color by options
     st.sidebar.header("Visualization")
-    color_by = st.sidebar.selectbox(
-        "Color By", ["Cluster", "Predicted Complexity", "Year Published"], index=0
-    )
+    color_by_options = ["Predicted Complexity", "Year Published"]
+    color_by = st.sidebar.selectbox("Color By", color_by_options, index=0)
 
-    # Load and preprocess data
-    with st.spinner("Loading and preprocessing data..."):
-        data = load_bgg_data()
-        preprocessor = create_preprocessor(
-            create_designer_features=feature_flags["designer"],
-            create_publisher_features=feature_flags["publisher"],
-            create_artist_features=feature_flags["artist"],
-            create_family_features=feature_flags["family"],
-            create_category_features=feature_flags["category"],
-            create_mechanic_features=feature_flags["mechanic"],
-            include_base_numeric=feature_flags["base_numeric"],
-        )
-
-        X = preprocessor.fit_transform(data)
+    # Tabs for different analyses
+    tab1, tab2 = st.tabs(["Dimension Reduction", "Clustering"])
 
     # Dimension reduction
     with st.spinner(f"Performing {dim_reduction_method} dimension reduction..."):
         X_reduced = dimension_reduction(
-            X, method=dim_reduction_method, n_components=n_components
-        )
-
-    # Clustering
-    with st.spinner(f"Performing {clustering_method} clustering..."):
-        labels = clustering(
-            X,
-            method=clustering_method,
-            n_clusters=n_clusters if clustering_method == "KMeans" else None,
-            eps=eps if clustering_method == "DBSCAN" else None,
-            min_samples=min_samples if clustering_method == "DBSCAN" else None,
+            st.session_state.X, method=dim_reduction_method, n_components=n_components
         )
 
     # Prepare visualization data
     viz_data = pd.DataFrame(
         X_reduced, columns=[f"Component {i+1}" for i in range(n_components)]
     )
-    viz_data["Cluster"] = labels
-    viz_data["Predicted Complexity"] = data["predicted_complexity"]
-    viz_data["Year Published"] = data["year_published"]
+    viz_data["Predicted Complexity"] = st.session_state.data["predicted_complexity"]
+    viz_data["Year Published"] = st.session_state.data["year_published"]
 
-    # Add original data columns to viz_data for hover information
-    for col in data.columns:
-        if col not in viz_data.columns:
-            viz_data[col] = data[col]
+    # Add specific columns for hover
+    for col in ["game_id", "name", "year_published"]:
+        if col in st.session_state.data.columns:
+            viz_data[col] = st.session_state.data[col]
 
-    # Plotting
-    st.header(f"{dim_reduction_method} Visualization")
+    # Dimension Reduction Tab
+    with tab1:
+        st.header(f"{dim_reduction_method} Visualization")
 
-    if n_components == 2:
-        # 2D Plot
-        fig = px.scatter(
-            viz_data,
-            x="Component 1",
-            y="Component 2",
-            color=color_by,
-            hover_data=viz_data.columns.tolist(),
-            title=f"{dim_reduction_method} Visualization",
+        # Prepare hover columns dynamically
+        hover_columns = [
+            col
+            for col in ["game_id", "name", "year_published", color_by]
+            if col in viz_data.columns
+        ]
+
+        if n_components == 2:
+            # 2D Plot
+            fig = px.scatter(
+                viz_data,
+                x="Component 1",
+                y="Component 2",
+                color=color_by,
+                hover_data=hover_columns,
+                title=f"{dim_reduction_method} Visualization",
+            )
+        else:
+            # 3D Plot
+            fig = px.scatter_3d(
+                viz_data,
+                x="Component 1",
+                y="Component 2",
+                z="Component 3",
+                color=color_by,
+                hover_data=hover_columns,
+                title=f"{dim_reduction_method} 3D Visualization",
+            )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Clustering options
+    with tab2:
+        st.sidebar.header("Clustering")
+        clustering_method = st.sidebar.selectbox(
+            "Clustering Method", ["KMeans", "DBSCAN"], index=0
         )
-    else:
-        # 3D Plot
-        fig = px.scatter_3d(
-            viz_data,
-            x="Component 1",
-            y="Component 2",
-            z="Component 3",
-            color=color_by,
-            hover_data=viz_data.columns.tolist(),
-            title=f"{dim_reduction_method} 3D Visualization",
+
+        if clustering_method == "KMeans":
+            n_clusters = st.sidebar.slider(
+                "Number of Clusters", min_value=2, max_value=10, value=5
+            )
+            eps = 0.5
+            min_samples = 5
+        else:
+            eps = st.sidebar.slider(
+                "EPS", min_value=0.1, max_value=2.0, value=0.5, step=0.1
+            )
+            min_samples = st.sidebar.slider(
+                "Min Samples", min_value=2, max_value=20, value=5
+            )
+
+        # Clustering
+        with st.spinner(f"Performing {clustering_method} clustering..."):
+            labels = clustering(
+                st.session_state.X,
+                method=clustering_method,
+                n_clusters=n_clusters if clustering_method == "KMeans" else None,
+                eps=eps if clustering_method == "DBSCAN" else None,
+                min_samples=min_samples if clustering_method == "DBSCAN" else None,
+            )
+
+        # Add cluster labels to visualization data
+        viz_data["Cluster"] = labels
+
+        # Color by options for clustering
+        color_by_cluster = st.selectbox(
+            "Color By", ["Cluster", "Predicted Complexity", "Year Published"], index=0
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+        # Clustering Visualization
+        if n_components == 2:
+            # 2D Plot
+            fig_clustering = px.scatter(
+                viz_data,
+                x="Component 1",
+                y="Component 2",
+                color=color_by_cluster,
+                hover_data=hover_columns + ["Cluster"],
+                title=f"{clustering_method} Clustering Visualization",
+            )
+        else:
+            # 3D Plot
+            fig_clustering = px.scatter_3d(
+                viz_data,
+                x="Component 1",
+                y="Component 2",
+                z="Component 3",
+                color=color_by_cluster,
+                hover_data=hover_columns + ["Cluster"],
+                title=f"{clustering_method} 3D Clustering Visualization",
+            )
 
-    # Clustering metrics
-    st.header("Clustering Metrics")
-    try:
-        silhouette = silhouette_score(X, labels)
-        st.metric("Silhouette Score", f"{silhouette:.4f}")
-    except Exception as e:
-        st.warning(f"Could not compute silhouette score: {e}")
+        st.plotly_chart(fig_clustering, use_container_width=True)
+
+        # Clustering metrics
+        st.header("Clustering Metrics")
+        try:
+            silhouette = silhouette_score(st.session_state.X, labels)
+            st.metric("Silhouette Score", f"{silhouette:.4f}")
+        except Exception as e:
+            st.warning(f"Could not compute silhouette score: {e}")
 
 
 if __name__ == "__main__":
