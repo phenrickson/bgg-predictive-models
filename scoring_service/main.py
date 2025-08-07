@@ -11,6 +11,7 @@ import pandas as pd
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from google.cloud import storage
 
 from registered_model import RegisteredModel
 from src.data.loader import BGGDataLoader
@@ -97,49 +98,31 @@ def predict_game_characteristics(
     complexity_model: Any,
     rating_model: Any,
     users_rated_model: Any,
-    likely_games_mask: pd.Series,
+    likely_games_mask: pd.Series,  # Kept for compatibility but not used
 ) -> pd.DataFrame:
     """
-    Predict game complexity, rating, and users rated.
+    Predict game complexity, rating, and users rated for all games.
     """
     results = pd.DataFrame(index=features.index)
 
-    # Default values for all games
-    results["predicted_complexity"] = 1.0
-    results["predicted_rating"] = 5.5
-    results["predicted_users_rated"] = 25
+    # Predict complexity for all games
+    results["predicted_complexity"] = complexity_model.predict(features)
 
-    # Predict for likely games
-    if likely_games_mask.any():
-        likely_features = features[likely_games_mask]
+    # Add predicted complexity to features
+    features_with_complexity = features.copy()
+    features_with_complexity["predicted_complexity"] = results["predicted_complexity"]
 
-        # Predict complexity
-        results.loc[likely_games_mask, "predicted_complexity"] = (
-            complexity_model.predict(likely_features)
-        )
+    # Predict rating and users rated for all games
+    results["predicted_rating"] = rating_model.predict(features_with_complexity)
+    results["predicted_users_rated"] = users_rated_model.predict(
+        features_with_complexity
+    )
 
-        # Add predicted complexity to features
-        likely_features_with_complexity = likely_features.copy()
-        likely_features_with_complexity["predicted_complexity"] = results.loc[
-            likely_games_mask, "predicted_complexity"
-        ]
-
-        # Predict rating and users rated
-        results.loc[likely_games_mask, "predicted_rating"] = rating_model.predict(
-            likely_features_with_complexity
-        )
-        results.loc[likely_games_mask, "predicted_users_rated"] = (
-            users_rated_model.predict(likely_features_with_complexity)
-        )
-
-        # Ensure users is at least minimum threshold
-        results.loc[likely_games_mask, "predicted_users_rated"] = np.maximum(
-            np.round(
-                np.expm1(results.loc[likely_games_mask, "predicted_users_rated"]) / 50
-            )
-            * 50,
-            25,
-        )
+    # Ensure users is at least minimum threshold
+    results["predicted_users_rated"] = np.maximum(
+        np.round(np.expm1(results["predicted_users_rated"]) / 50) * 50,
+        25,
+    )
 
     return results
 
@@ -252,9 +235,21 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         # Add timestamp of scoring
         results["score_ts"] = datetime.now(timezone.utc).isoformat()
 
-        # Save predictions
-        output_path = request.output_path or f"/tmp/{job_id}_predictions.parquet"
-        results.to_parquet(output_path, index=False)
+        # Save predictions locally
+        local_output_path = request.output_path or f"/tmp/{job_id}_predictions.parquet"
+        results.to_parquet(local_output_path, index=False)
+
+        # Upload predictions to Google Cloud Storage
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+
+        # Construct GCS path for predictions
+        gcs_output_path = f"predictions/{job_id}_predictions.parquet"
+        blob = bucket.blob(gcs_output_path)
+        blob.upload_from_filename(local_output_path)
+
+        # Use GCS path as output location
+        output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
 
         # Prepare model details
         model_details = {
