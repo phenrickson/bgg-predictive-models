@@ -2555,7 +2555,6 @@ def main():
             available_k_values = list(st.session_state.clustering_results.keys())
 
             # Cluster count selection
-            st.subheader("Neighbor Search Configuration")
             col1, col2 = st.columns(2)
 
             with col1:
@@ -2597,8 +2596,7 @@ def main():
                 ].iloc[0]
                 selected_game_id = selected_game_row["game_id"]
                 selected_game_cluster = selected_game_row["cluster"]
-
-                st.write(f"Cluster: {selected_game_cluster}")
+                st.info(f"Cluster: {selected_game_cluster}")
 
                 # Import distance functions
                 from scipy.spatial.distance import euclidean, cityblock, cosine
@@ -2693,7 +2691,7 @@ def main():
                 # Limit the number of rows displayed
                 max_display_rows = 150
                 if len(results_table) > max_display_rows:
-                    st.warning(
+                    st.info(
                         f"Showing first {max_display_rows} of {len(results_table)} games in the same cluster."
                     )
                     results_table = results_table.head(max_display_rows)
