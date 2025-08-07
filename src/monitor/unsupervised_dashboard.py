@@ -611,7 +611,7 @@ def main():
 
     # Data Sample Tab
     with tab_data:
-        st.title("Data")
+        st.header("Data")
         # Allow user to control sample size
         sample_size = st.slider(
             "Sample Size", min_value=50, max_value=25000, step=50, value=10000
@@ -2074,18 +2074,30 @@ def main():
                 color_map = get_cluster_colors(n_components)
 
                 # Determine which components to plot based on the selected cluster
-                selected_cluster_idx = int(st.session_state.selected_cluster_explore)
+                selected_cluster_idx = (
+                    int(st.session_state.selected_cluster_explore.split()[-1]) - 1
+                )
+
+                # Ensure the selected cluster index is within the range of available components
+                n_components = len(means)
+                selected_cluster_idx = min(selected_cluster_idx, n_components - 1)
                 components_to_plot = [selected_cluster_idx]
 
                 for i in components_to_plot:
                     if covariance_type == "full":
-                        cov = covariances[i]
+                        cov = (
+                            covariances[i] if i < len(covariances) else covariances[-1]
+                        )
                     elif covariance_type == "tied":
                         cov = covariances
                     elif covariance_type == "diag":
-                        cov = np.diag(covariances[i])
+                        cov = np.diag(
+                            covariances[i] if i < len(covariances) else covariances[-1]
+                        )
                     else:  # spherical
-                        cov = np.eye(2) * covariances[i]
+                        cov = np.eye(2) * (
+                            covariances[i] if i < len(covariances) else covariances[-1]
+                        )
 
                     v, w = np.linalg.eigh(cov[:2, :2])
                     v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
@@ -2579,15 +2591,27 @@ def main():
             st.subheader("Select a Game")
 
             # Prepare game selection data
-            game_selection_data = st.session_state.data[["game_id", "name"]].copy()
+            game_selection_data = st.session_state.data[
+                ["game_id", "name", "year_published"]
+            ].copy()
             game_selection_data["cluster"] = cluster_labels
 
-            # Game search
-            selected_game = st.selectbox(
+            # Game search with game_id and year_published in parentheses
+            game_selection_data["display_name"] = game_selection_data.apply(
+                lambda row: f"{row['name']} (ID: {row['game_id']}, Year: {row['year_published']})",
+                axis=1,
+            )
+
+            selected_game_display = st.selectbox(
                 "Search for a game",
-                options=game_selection_data["name"].tolist(),
+                options=game_selection_data["display_name"].tolist(),
                 key="game_neighbor_search",
             )
+
+            # Find the original game name
+            selected_game = game_selection_data[
+                game_selection_data["display_name"] == selected_game_display
+            ]["name"].iloc[0]
 
             if selected_game:
                 # Find the selected game's details
