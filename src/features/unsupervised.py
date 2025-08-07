@@ -4,12 +4,18 @@ import polars as pl
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotnine as pn
+import time
+import logging
 
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.metrics import (
+    silhouette_score,
+    davies_bouldin_score,
+    calinski_harabasz_score,
+)
 from sklearn.pipeline import Pipeline
 
 from .preprocessor import create_bgg_preprocessor
@@ -220,6 +226,7 @@ def perform_kmeans(
     verbose: bool = True,
     early_stopping_threshold: float = 0.01,
     use_mini_batch: bool = False,
+    is_pca_transformed: bool = False,
 ) -> dict:
     """
     Perform K-Means clustering with advanced optimization and logging.
@@ -260,9 +267,10 @@ def perform_kmeans(
     )
     logger = logging.getLogger(__name__)
 
-    # Standardize the data
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Standardize the data if not already PCA-transformed
+    if not is_pca_transformed:
+        scaler = StandardScaler()
+        X = scaler.fit_transform(X)
 
     # Compute metrics for different cluster numbers
     metrics = {
@@ -284,7 +292,7 @@ def perform_kmeans(
                 n_clusters=n_clusters,
                 random_state=random_state,
                 n_init="auto",
-                batch_size=min(1024, X_scaled.shape[0] // 10),
+                batch_size=min(1024, X.shape[0] // 10),
                 max_iter=100,
             )
         else:
@@ -297,11 +305,11 @@ def perform_kmeans(
             )
 
         # Fit the model
-        clusterer.fit(X_scaled)
+        clusterer.fit(X)
 
         # Compute metrics
-        current_silhouette = silhouette_score(X_scaled, clusterer.labels_)
-        current_davies = davies_bouldin_score(X_scaled, clusterer.labels_)
+        current_silhouette = silhouette_score(X, clusterer.labels_)
+        current_davies = davies_bouldin_score(X, clusterer.labels_)
 
         metrics["n_clusters"].append(n_clusters)
         metrics["inertia"].append(clusterer.inertia_)
@@ -327,7 +335,7 @@ def perform_kmeans(
             n_clusters=best_n_clusters,
             random_state=random_state,
             n_init="auto",
-            batch_size=min(1024, X_scaled.shape[0] // 10),
+            batch_size=min(1024, X.shape[0] // 10),
             max_iter=100,
         )
     else:
@@ -339,7 +347,7 @@ def perform_kmeans(
             n_jobs=n_jobs,
         )
 
-    best_kmeans.fit(X_scaled)
+    best_kmeans.fit(X)
 
     logger.info(f"Best number of clusters: {best_n_clusters}")
 
@@ -352,7 +360,11 @@ def perform_kmeans(
 
 
 def perform_gmm(
-    X: pd.DataFrame, n_components_range: list = range(2, 11), random_state: int = 42
+    X: pd.DataFrame,
+    n_components_range: list = range(2, 11),
+    random_state: int = 42,
+    verbose: bool = True,
+    is_pca_transformed: bool = False,
 ) -> dict:
     """
     Perform Gaussian Mixture Model clustering with evaluation metrics.
@@ -360,7 +372,9 @@ def perform_gmm(
     Parameters
     ----------
     X : pd.DataFrame
-        Input data for clustering.
+        Input data for clustering. If is_pca_transformed is True, this should be
+        PCA-transformed data. Otherwise, it will be treated as original data that
+        needs preprocessing.
 
     n_components_range : list, optional
         Range of component numbers to evaluate.
@@ -368,14 +382,22 @@ def perform_gmm(
     random_state : int, optional
         Random seed for reproducibility.
 
+    verbose : bool, optional (default=True)
+        Whether to print detailed logging information.
+
+    is_pca_transformed : bool, optional (default=False)
+        Whether the input data is already PCA-transformed.
+
     Returns
     -------
     dict
         GMM clustering results including best model, metrics, and visualizations.
     """
-    # Standardize the data
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s - %(levelname)s: %(message)s",
+    )
+    logger = logging.getLogger(__name__)
 
     # Compute metrics for different component numbers
     metrics = {"n_components": [], "bic": [], "aic": [], "silhouette_score": []}
@@ -384,30 +406,156 @@ def perform_gmm(
     best_bic = np.inf
 
     for n_components in n_components_range:
+        logger.info(f"Processing GMM with {n_components} components...")
+
         gmm = GaussianMixture(
             n_components=n_components, random_state=random_state, n_init=10
         )
-        gmm.fit(X_scaled)
+        gmm.fit(X)
 
         metrics["n_components"].append(n_components)
-        metrics["bic"].append(gmm.bic(X_scaled))
-        metrics["aic"].append(gmm.aic(X_scaled))
+        metrics["bic"].append(gmm.bic(X))
+        metrics["aic"].append(gmm.aic(X))
 
         # Predict labels for silhouette score
-        labels = gmm.predict(X_scaled)
-        metrics["silhouette_score"].append(silhouette_score(X_scaled, labels))
+        labels = gmm.predict(X)
+        silhouette = silhouette_score(X, labels)
+        metrics["silhouette_score"].append(silhouette)
+
+        logger.info(
+            f"Components: {n_components}, Silhouette Score: {silhouette:.4f}, BIC: {gmm.bic(X):.4f}, AIC: {gmm.aic(X):.4f}"
+        )
 
         # Track the best model based on BIC
-        if gmm.bic(X_scaled) < best_bic:
-            best_bic = gmm.bic(X_scaled)
+        if gmm.bic(X) < best_bic:
+            best_bic = gmm.bic(X)
             best_gmm = gmm
+            logger.info(f"Found better model with {n_components} components")
 
     return {
         "best_model": best_gmm,
         "metrics": metrics,
-        "labels": best_gmm.predict(X_scaled),
+        "labels": best_gmm.predict(X),
         "best_n_components": best_gmm.n_components_,
     }
+
+
+def perform_gmm_single(
+    data,
+    n_components,
+    covariance_type="full",
+    verbose: bool = True,
+    is_pca_transformed: bool = False,
+):
+    """
+    Run Gaussian Mixture Model clustering for a single n_components value.
+
+    Parameters
+    ----------
+    data : array-like or pd.DataFrame
+        Input data. If is_pca_transformed is True, this should be PCA-transformed data.
+        Otherwise, it will be treated as original data that needs preprocessing.
+
+    n_components : int
+        Number of mixture components.
+
+    covariance_type : str, optional (default='full')
+        Type of covariance parameters to use.
+
+    verbose : bool, optional (default=True)
+        Whether to print detailed logging information.
+
+    is_pca_transformed : bool, optional (default=False)
+        Whether the input data is already PCA-transformed.
+    """
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s - %(levelname)s: %(message)s",
+    )
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"Running GMM with n_components={n_components}")
+    gmm_start = time.time()
+
+    # Convert to numpy array if needed
+    if isinstance(data, pd.DataFrame):
+        data = data.values
+
+    # Only clean data if it's not PCA-transformed
+    if not is_pca_transformed:
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Run clustering
+    clusterer = GaussianMixture(
+        n_components=n_components,
+        covariance_type=covariance_type,
+        random_state=42,
+        n_init=10,  # Multiple initializations to find best fit
+        reg_covar=1e-6,  # Small regularization to prevent singularities
+    )
+    clusterer.fit(data)
+
+    # Get cluster assignments and probabilities
+    labels = clusterer.predict(data)
+    responsibilities = clusterer.predict_proba(data)
+
+    # Calculate clustering metrics
+    silhouette = silhouette_score(data, labels)
+    calinski = calinski_harabasz_score(data, labels)
+    davies = davies_bouldin_score(data, labels)
+
+    # Calculate silhouette scores for each sample
+    sample_silhouette_values = silhouette_samples(data, labels)
+
+    logger.info(
+        f"n_components={n_components} metrics - Silhouette: {silhouette:.4f}, CH: {calinski:.4f}, DB: {davies:.4f}"
+    )
+
+    # Calculate feature importance for each component
+    feature_importance = {}
+    for i in range(n_components):
+        # Get samples with high responsibility to this component
+        resp_weights = responsibilities[:, i]
+
+        # Calculate weighted mean
+        weighted_mean = np.average(data, weights=resp_weights, axis=0)
+
+        # Calculate weighted standard deviation
+        weighted_var = np.average(
+            (data - weighted_mean) ** 2, weights=resp_weights, axis=0
+        )
+        weighted_std = np.sqrt(weighted_var)
+
+        # Calculate overall mean and std for comparison
+        overall_mean = np.mean(data, axis=0)
+        overall_std = np.std(data, axis=0)
+
+        # Calculate feature importance as normalized difference between component and overall statistics
+        importance = np.abs(weighted_mean - overall_mean) / (overall_std + 1e-10)
+        feature_importance[i] = pd.Series(
+            importance, index=data.columns if isinstance(data, pd.DataFrame) else None
+        )
+
+    # Store results
+    result = {
+        "labels": labels,
+        "silhouette": silhouette,
+        "calinski_harabasz": calinski,
+        "davies_bouldin": davies,
+        "means": clusterer.means_,
+        "covariances": clusterer.covariances_,
+        "weights": clusterer.weights_,
+        "bic": clusterer.bic(data),
+        "aic": clusterer.aic(data),
+        "feature_importance": feature_importance,
+        "sample_silhouette_values": sample_silhouette_values,
+        "responsibilities": responsibilities,
+    }
+
+    logger.info(
+        f"Completed n_components={n_components} in {time.time() - gmm_start:.2f} seconds"
+    )
+    return result
 
 
 def plot_pca_variance(pca_results: dict, save_path: str = None):
@@ -509,7 +657,11 @@ def plot_clustering_metrics(
 
 
 def visualize_clustering(
-    X: pd.DataFrame, labels: np.ndarray, method: str = "pca", save_path: str = None
+    X: pd.DataFrame,
+    labels: np.ndarray,
+    method: str = "pca",
+    save_path: str = None,
+    is_pca_transformed: bool = False,
 ):
     """
     Visualize clustering results using dimensionality reduction.
@@ -517,7 +669,8 @@ def visualize_clustering(
     Parameters
     ----------
     X : pd.DataFrame
-        Original input data.
+        Input data. If is_pca_transformed is True, this should be PCA-transformed data.
+        Otherwise, it will be treated as original data that needs preprocessing.
 
     labels : np.ndarray
         Cluster labels.
@@ -527,25 +680,36 @@ def visualize_clustering(
 
     save_path : str, optional
         Path to save the plot.
+
+    is_pca_transformed : bool, optional (default=False)
+        Whether the input data is already PCA-transformed.
     """
-    # Standardize the data
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    if not is_pca_transformed:
+        # Standardize the data if it's not already PCA-transformed
+        scaler = StandardScaler()
+        X = scaler.fit_transform(X)
 
     # Dimensionality reduction
     if method == "pca":
-        reducer = PCA(n_components=2)
-        X_reduced = reducer.fit_transform(X_scaled)
+        if is_pca_transformed:
+            # If data is already PCA-transformed, just use first two components
+            X_reduced = X.iloc[:, :2] if isinstance(X, pd.DataFrame) else X[:, :2]
+        else:
+            reducer = PCA(n_components=2)
+            X_reduced = reducer.fit_transform(X)
     elif method == "umap":
         try:
             import umap
 
             reducer = umap.UMAP(n_components=2)
-            X_reduced = reducer.fit_transform(X_scaled)
+            X_reduced = reducer.fit_transform(X)
         except ImportError:
             print("UMAP not installed. Falling back to PCA.")
-            reducer = PCA(n_components=2)
-            X_reduced = reducer.fit_transform(X_scaled)
+            if is_pca_transformed:
+                X_reduced = X.iloc[:, :2] if isinstance(X, pd.DataFrame) else X[:, :2]
+            else:
+                reducer = PCA(n_components=2)
+                X_reduced = reducer.fit_transform(X)
 
     # Plot
     plt.figure(figsize=(10, 8))
