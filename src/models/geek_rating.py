@@ -10,11 +10,11 @@ from typing import Dict, Optional, Union
 
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config
-from src.models.score import load_model, load_scoring_data, save_and_display_results
+from src.models.score import load_model
+from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 
 def load_all_models(
@@ -35,7 +35,7 @@ def load_all_models(
     Returns:
         Dict of loaded models
     """
-    logger.info(f"Loading models from experiments:")
+    logger.info("Loading models from experiments:")
     logger.info(f"Hurdle: {hurdle_experiment}")
     logger.info(f"Complexity: {complexity_experiment}")
     logger.info(f"Rating: {rating_experiment}")
@@ -413,7 +413,7 @@ def main():
     # Add output directory argument
     parser.add_argument(
         "--output-dir",
-        default="./models/experiments",
+        default="./data/predictions",
         help="Base directory for output files",
     )
 
@@ -429,8 +429,6 @@ def main():
     args = parser.parse_args()
 
     # Create experiment tracker
-    from src.models.experiments import ExperimentTracker
-
     tracker = ExperimentTracker(model_type="geek_rating")
 
     # Function to get experiment years
@@ -516,25 +514,25 @@ def main():
     )
     os.makedirs(predictions_dir, exist_ok=True)
 
-    # # Construct output filename
-    # output_filename = "predictions.parquet"
-    # output_path = os.path.join(predictions_dir, output_filename)
+    # Construct output filename
+    output_filename = "predictions.parquet"
+    output_path = os.path.join(predictions_dir, output_filename)
 
-    # # Log detailed file saving information
-    # logger.info(f"Saving predictions to: {output_path}")
+    # Log detailed file saving information
+    logger.info(f"Saving predictions to: {output_path}")
 
-    # # Verify directory exists and is writable
-    # if not os.access(predictions_dir, os.W_OK):
-    #     logger.error(f"Cannot write to directory: {predictions_dir}")
-    #     raise PermissionError(f"No write permission for directory: {predictions_dir}")
+    # Verify directory exists and is writable
+    if not os.access(predictions_dir, os.W_OK):
+        logger.error(f"Cannot write to directory: {predictions_dir}")
+        raise PermissionError(f"No write permission for directory: {predictions_dir}")
 
-    # # Save predictions
-    # results.write_parquet(output_path)
+    # Save predictions
+    results.write_parquet(output_path)
 
-    # # Verify file was created
-    # if not os.path.exists(output_path):
-    #     logger.error(f"Failed to save predictions to: {output_path}")
-    #     raise IOError(f"Could not save predictions file: {output_path}")
+    # Verify file was created
+    if not os.path.exists(output_path):
+        logger.error(f"Failed to save predictions to: {output_path}")
+        raise IOError(f"Could not save predictions file: {output_path}")
 
     # Determine actual values
     if "geek_rating" in df.columns:
@@ -555,9 +553,9 @@ def main():
         dataset="test",  # Changed to "test" to match the filename
     )
 
-    logger.info(f"Experiment tracked:")
+    logger.info("Experiment tracked:")
     logger.info(f"  Name: {args.experiment}")
-    logger.info(f"  Experiments used:")
+    logger.info("  Experiments used:")
     logger.info(f"    Hurdle: {args.hurdle}")
     logger.info(f"    Complexity: {args.complexity}")
     logger.info(f"    Rating: {args.rating}")

@@ -2,31 +2,24 @@
 
 import logging
 import argparse
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
-
-# Project imports
-from src.models.experiments import (
-    ExperimentTracker,
-    log_experiment,
-    mean_absolute_percentage_error,
-)
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 import polars as pl
-import matplotlib.pyplot as plt
-from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.base import clone
-from sklearn.base import BaseEstimator, clone
-from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Project imports
+# Project imports
+from src.utils.logging import setup_logging
+from src.models.experiments import (
+    ExperimentTracker,
+    log_experiment,
+)
 from src.data.config import load_config
 from src.data.loader import BGGDataLoader
-from src.models.splitting import time_based_split
 from src.models.training import (
     load_data,
     create_data_splits,
@@ -37,23 +30,6 @@ from src.models.training import (
     calculate_sample_weights,
     configure_model,
 )
-
-
-def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
-    """Configure logging for the training process."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(__name__)
-
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-        )
-        logger.addHandler(file_handler)
-
-    return logger
 
 
 def constrain_predictions(predictions: np.ndarray) -> np.ndarray:

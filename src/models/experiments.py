@@ -6,31 +6,18 @@ import hashlib
 import pickle
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Union, Tuple, Type
+from typing import Dict, Any, Optional, List, Union
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Import visualization modules
 from src.visualizations import regression_diagnostics, classification_diagnostics
 
-from sklearn.base import BaseEstimator, clone
+from sklearn.base import clone
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import (
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score,
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    log_loss,
-    matthews_corrcoef,
-)
 
 
 def compute_hash(data: Dict[str, Any]) -> str:
@@ -497,7 +484,7 @@ class Experiment:
 
         pipeline_path = finalized_dir / "pipeline.pkl"
         if not pipeline_path.exists():
-            raise ValueError(f"Pipeline not found in finalized directory")
+            raise ValueError("Pipeline not found in finalized directory")
 
         with open(pipeline_path, "rb") as f:
             return pickle.load(f)
@@ -701,18 +688,17 @@ def extract_feature_importance(
         try:
             # Try getting from the entire preprocessor
             feature_names = preprocessor.get_feature_names_out()
-        except:
+        except (AttributeError, TypeError) as e:
             # Last resort: check for feature_names_ attribute
             if hasattr(preprocessor, "feature_names_"):
                 feature_names = preprocessor.feature_names_
             else:
                 raise ValueError(
-                    "Could not get feature names from any preprocessing step"
+                    f"Could not get feature names from any preprocessing step: {e}"
                 )
 
     # Handle different model types for feature importance extraction
     from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
-    from sklearn.base import ClassifierMixin, RegressorMixin
 
     # Determine feature importance extraction method based on model type
     if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso)):
@@ -965,7 +951,7 @@ def log_experiment(
                 total = (
                     true_negatives + false_positives + false_negatives + true_positives
                 )
-                logger.info(f"  Prediction Breakdown:")
+                logger.info("  Prediction Breakdown:")
                 logger.info(
                     f"    Negative Predictions: {true_negatives + false_positives} ({(true_negatives + false_positives)/total*100:.2f}%)"
                 )
@@ -989,7 +975,6 @@ def log_experiment(
             if "coefficient" in importance_df.columns
             else "feature_importance"
         )
-        abs_importance_column = f"abs_{importance_column}"
 
         logger.info(
             f"Top 10 most important features (by absolute {importance_column}):"

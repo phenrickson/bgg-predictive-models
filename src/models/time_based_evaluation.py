@@ -9,11 +9,7 @@ import numpy as np
 import pandas as pd
 import sklearn.metrics as metrics
 
-from src.data.config import load_config
-from src.data.loader import BGGDataLoader
-from src.models.experiments import ExperimentTracker
-from src.models.training import load_data, create_data_splits, select_X_y
-from src.models.geek_rating import predict_geek_rating, calculate_geek_rating
+from src.models.training import load_data, create_data_splits
 from src.models.finalize_model import finalize_model
 
 import subprocess
@@ -214,7 +210,6 @@ def run_time_based_evaluation(
             ("users_rated", "src/models/users_rated.py"),
         ]
 
-        experiments = {}
         complexity_local_path = None
         for model_name, script_path in model_scripts:
             # Convert script path to module path

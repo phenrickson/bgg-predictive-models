@@ -76,3 +76,6 @@ $RECYCLE.BIN/
 
 # ignore catboost output
 /catboost_info/
+
+.act
+act

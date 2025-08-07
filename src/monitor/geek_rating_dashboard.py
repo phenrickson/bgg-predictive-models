@@ -5,7 +5,6 @@ Streamlit dashboard for exploring geek rating predictions.
 import streamlit as st
 import polars as pl
 import plotly.express as px
-import plotly.graph_objects as go
 from pathlib import Path
 import os
 import sys
