@@ -94,7 +94,7 @@ jobs:
           --max-instances 10 \
           --memory 8Gi \
           --cpu 4 \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
+          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
 
     - name: Verify Deployment
       env:

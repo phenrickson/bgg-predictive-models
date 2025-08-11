@@ -9,6 +9,11 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Define build arguments
+ARG GCP_PROJECT_ID
+ARG GCS_BUCKET_NAME
+ARG GOOGLE_APPLICATION_CREDENTIALS
+
 # Set working directory
 WORKDIR /app
 
@@ -24,14 +29,12 @@ RUN uv venv
 # Install dependencies in the virtual environment
 RUN uv sync
 
-# Set environment variables with defaults that can be overridden
+# Set environment variables from build arguments
 ENV PYTHONPATH=/app
 ENV PATH="/venv/bin:$PATH"
-
-# GCP and Development Environment Variables
-ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
-ENV GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
-ENV GOOGLE_APPLICATION_CREDENTIALS=${SERVICE_ACCOUNT_CREDENTIALS}
+ENV GCP_PROJECT_ID=$GCP_PROJECT_ID
+ENV GCS_BUCKET_NAME=$GCS_BUCKET_NAME
+ENV GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS
 
 # No default CMD - allows flexible usage
 CMD ["/bin/bash"]

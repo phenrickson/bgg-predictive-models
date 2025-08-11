@@ -44,7 +44,7 @@ jobs:
         
         cat << EOF > .env
         GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-        GCS_BUCKET=${{ vars.GCS_BUCKET_NAME}}
+        GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
         GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
         EOF
         
