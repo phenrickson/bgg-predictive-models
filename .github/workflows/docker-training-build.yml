@@ -51,8 +51,8 @@ jobs:
         file: Dockerfile.training
         push: true
         tags: |
-          us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/bgg-predictive-models/training:latest
-          us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/bgg-predictive-models/training:${{ github.sha }}
+          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest
+          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}
         build-args: |
           GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
           GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
