@@ -32,6 +32,7 @@ from src.features.preprocessor import create_bgg_preprocessor  # noqa: E402
 from src.features.unsupervised import perform_pca  # noqa: E402
 from src.utils.logging import setup_logging  # noqa: E402
 
+
 # Set up logging
 logger = setup_logging()
 
