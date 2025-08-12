@@ -373,3 +373,14 @@ make docker-scoring:
 	-p 8080:8080 \
 	--env-file .env \
 	bgg-scoring:test
+
+make scoring-service:
+	uv run -m scoring_service.score \
+    --service-url http://localhost:8080 \
+    --start-year 2024 \
+    --end-year 2029 \
+    --hurdle-model hurdle-v2025 \
+    --complexity-model complexity-v2025 \
+    --rating-model rating-v2025 \
+    --users-rated-model users_rated-v2025 \
+    --download
