@@ -1,8 +1,8 @@
 """Train/Tune/Test Hurdle Model for Board Game Ratings Prediction"""
 
 import argparse
-from pathlib import Path
-from typing import Dict, Any, Optional
+import logging
+from typing import Dict, Any
 import numpy as np
 import pandas as pd
 
@@ -27,6 +27,7 @@ from sklearn.metrics import (
 )
 
 # project imports
+from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker, log_experiment
 from src.models.training import (
     load_data,
@@ -36,7 +37,6 @@ from src.models.training import (
     tune_model,
     evaluate_model,
 )
-from src.utils.logging import setup_logging
 
 
 # functions for hurdle

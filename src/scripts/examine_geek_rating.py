@@ -8,17 +8,14 @@ the relationship between average rating and Bayesian average rating.
 import numpy as np
 import polars as pl
 import matplotlib.pyplot as plt
-import seaborn as sns
 import logging
 from sklearn.metrics import (
     root_mean_squared_error,
     mean_absolute_error,
     r2_score,
-    mean_squared_error,
 )
 
 from src.data.config import load_config
-from src.data.loader import BGGDataLoader
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +27,6 @@ logger = logging.getLogger(__name__)
 def load_games_data():
     """Load games data from BigQuery."""
     config = load_config()
-    loader = BGGDataLoader(config)
 
     # Custom query to get necessary columns
     query = f"""

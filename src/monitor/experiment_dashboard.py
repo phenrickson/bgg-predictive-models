@@ -12,8 +12,7 @@ from datetime import datetime
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
-
-from src.models.experiments import ExperimentTracker
+from src.models.experiments import ExperimentTracker  # noqa: E402
 
 
 def format_timestamp(timestamp: str) -> str:

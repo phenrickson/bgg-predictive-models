@@ -1,6 +1,5 @@
 """Functions for predicting geek ratings by combining multiple model predictions."""
 
-import logging
 import numpy as np
 import pandas as pd
 import polars as pl

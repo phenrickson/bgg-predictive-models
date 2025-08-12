@@ -8,14 +8,12 @@ import polars as pl
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 
 # Ensure pandas is imported early and available globally
-import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans, DBSCAN
+from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (
     silhouette_score,
@@ -28,11 +26,11 @@ from sklearn.metrics import (
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
-from src.data.loader import BGGDataLoader
-from src.data.config import load_config
-from src.features.preprocessor import create_bgg_preprocessor
-from src.features.unsupervised import perform_pca, perform_kmeans
-from src.utils.logging import setup_logging
+from src.data.loader import BGGDataLoader  # noqa: E402
+from src.data.config import load_config  # noqa: E402
+from src.features.preprocessor import create_bgg_preprocessor  # noqa: E402
+from src.features.unsupervised import perform_pca  # noqa: E402
+from src.utils.logging import setup_logging  # noqa: E402
 
 # Set up logging
 logger = setup_logging()
@@ -48,7 +46,7 @@ def get_cluster_colors(n_clusters):
 
 def load_bgg_data(end_train_year=2024, min_ratings=25):
     """Load board game data for unsupervised analysis with caching."""
-    logger.info(f"Starting data loading process for unsupervised analysis")
+    logger.info("Starting data loading process for unsupervised analysis")
     logger.debug(
         f"Parameters: end_train_year={end_train_year}, min_ratings={min_ratings}"
     )
@@ -204,7 +202,6 @@ def perform_kmeans_single(data, k):
     for i in range(k):
         cluster_mask = labels == i
         cluster_mean = data[cluster_mask].mean()
-        cluster_std = data[cluster_mask].std()
         # Z-score of cluster mean relative to overall distribution
         importance = np.abs((cluster_mean - data.mean()) / data.std())
         feature_importance[i] = importance
@@ -341,12 +338,6 @@ def perform_gmm_single(
 
         # Calculate weighted mean
         weighted_mean = np.average(data, weights=resp_weights, axis=0)
-
-        # Calculate weighted standard deviation
-        weighted_var = np.average(
-            (data - weighted_mean) ** 2, weights=resp_weights, axis=0
-        )
-        weighted_std = np.sqrt(weighted_var)
 
         # Calculate overall mean and std for comparison
         overall_mean = np.mean(data, axis=0)
@@ -843,9 +834,6 @@ def main():
                     if available_components
                     else st.write("Not enough components for visualization")
                 )
-
-            # Color options
-            color_options = ["None", "Predicted Complexity", "Year Published"]
 
             def create_pca_scatter(
                 data, x_comp, y_comp, color=None, cluster_labels=None
