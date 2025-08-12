@@ -26,10 +26,9 @@ requirements:
 	uv sync
 
 format: 
-	uv run black --check .
+	uv run ruff format .
 
 lint:
-	uv run black .
 	uv run ruff check .
 
 # Target for features file - this is what keeps track of freshness
