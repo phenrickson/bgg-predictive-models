@@ -40,7 +40,7 @@ def register_model(
     """
     # Get bucket name from environment if not provided
     if bucket_name is None:
-        bucket_name = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+        bucket_name = os.getenv("GCS_BUCKET_NAME", "bgg-predictive-models")
 
     # Load experiment
     tracker = ExperimentTracker(model_type)

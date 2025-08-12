@@ -29,23 +29,6 @@ python -m scoring_service.register_model \
     --bucket bgg-models
 ```
 
-Default validation metrics for each model type:
-
-- Hurdle Models:
-  - min_auc: 0.7
-  - min_accuracy: 0.7
-
-- Rating Models:
-  - min_r2: 0.5
-  - max_rmse: 1.0
-
-- Complexity Models:
-  - min_r2: 0.4
-  - max_rmse: 0.8
-
-- Users Rated Models:
-  - min_r2: 0.5
-  - max_rmse: 1.0
 
 ## Scoring Service
 

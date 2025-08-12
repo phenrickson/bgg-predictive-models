@@ -13,6 +13,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from google.cloud import storage
 
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
 from registered_model import RegisteredModel
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config

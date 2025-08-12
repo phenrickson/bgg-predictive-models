@@ -39,6 +39,7 @@ dependencies = [
     "umap-learn>=0.5.9.post2",
     "plotnine>=0.15.0",
     "nbformat>=5.10.4",
+    "requests>=2.32.4",
 ]
 
 [dependency-groups]
