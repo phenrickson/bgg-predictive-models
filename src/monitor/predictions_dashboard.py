@@ -355,11 +355,11 @@ def main():
     ### 📊 Prediction File Details
     - **Filename**: {os.path.basename(latest_file)}
     - **File Size**: {file_info.st_size / 1024:.2f} KB
-    - **Last Modified**: {pd.to_datetime(file_info.st_mtime, unit='s').strftime('%Y-%m-%d %H:%M:%S')}
+    - **Last Modified**: {pd.to_datetime(file_info.st_mtime, unit="s").strftime("%Y-%m-%d %H:%M:%S")}
     
     #### Prediction Metadata
     - **Total Predictions**: {len(df)}
-    - **Prediction Columns**: {', '.join(df.columns)}
+    - **Prediction Columns**: {", ".join(df.columns)}
     """
     )
 

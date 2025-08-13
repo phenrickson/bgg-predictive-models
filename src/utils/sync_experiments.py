@@ -172,9 +172,9 @@ def sync_experiments_to_gcs(
     skipped_files = 0
 
     # Determine which files need transfer
-    files_to_transfer: List[Tuple[str, str, bool]] = (
-        []
-    )  # [(relative_path, hash, is_new)]
+    files_to_transfer: List[
+        Tuple[str, str, bool]
+    ] = []  # [(relative_path, hash, is_new)]
 
     if download:
         # Find files that need downloading

@@ -102,9 +102,9 @@ def test_games_features_view_structure(bigquery_config):
         "families",
     ]
     for col in array_columns:
-        assert isinstance(
-            result[col][0].to_list(), list
-        ), f"Column {col} is not an array"
+        assert isinstance(result[col][0].to_list(), list), (
+            f"Column {col} is not an array"
+        )
 
 
 def test_data_loader_training_data(data_loader):
@@ -123,12 +123,12 @@ def test_data_loader_training_data(data_loader):
         assert target in targets, f"Target {target} missing from targets"
 
     # Check that features include one-hot encoded categories and mechanics
-    assert any(
-        col.startswith("category_") for col in features.columns
-    ), "No category features found"
-    assert any(
-        col.startswith("mechanic_") for col in features.columns
-    ), "No mechanic features found"
+    assert any(col.startswith("category_") for col in features.columns), (
+        "No category features found"
+    )
+    assert any(col.startswith("mechanic_") for col in features.columns), (
+        "No mechanic features found"
+    )
 
 
 def test_data_loader_prediction_data(data_loader):
@@ -141,6 +141,6 @@ def test_data_loader_prediction_data(data_loader):
 
     # Check that features include derived features
     assert "player_range" in features.columns, "Derived feature 'player_range' missing"
-    assert (
-        "playtime_range" in features.columns
-    ), "Derived feature 'playtime_range' missing"
+    assert "playtime_range" in features.columns, (
+        "Derived feature 'playtime_range' missing"
+    )

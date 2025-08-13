@@ -98,13 +98,13 @@ def perform_pca(
 
     # Create transformed data DataFrame
     transformed_df = pd.DataFrame(
-        X_pca, columns=[f"PC{i+1}" for i in range(pca.n_components_)], index=X.index
+        X_pca, columns=[f"PC{i + 1}" for i in range(pca.n_components_)], index=X.index
     )
 
     # Create loadings DataFrame
     loadings = pd.DataFrame(
         pca.components_.T,
-        columns=[f"PC{i+1}" for i in range(pca.n_components_)],
+        columns=[f"PC{i + 1}" for i in range(pca.n_components_)],
         index=X.columns,
     ).reset_index(names="feature")
 
@@ -170,7 +170,7 @@ def plot_pca_loadings(
 
     # Limit n_components to available components
     n_components = min(n_components, loadings_pl.width - 1)
-    pc_columns = [f"PC{i+1}" for i in range(n_components)]
+    pc_columns = [f"PC{i + 1}" for i in range(n_components)]
 
     # Prepare data for plotting
     plot_data_list = []
