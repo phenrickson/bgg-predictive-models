@@ -2714,7 +2714,6 @@ def main():
                 ].iloc[0]
                 selected_game_id = selected_game_row["game_id"]
                 selected_game_cluster = selected_game_row["cluster"]
-                st.info(f"Cluster: {selected_game_cluster}")
 
                 # Import distance functions
                 from scipy.spatial.distance import euclidean, cityblock, cosine
