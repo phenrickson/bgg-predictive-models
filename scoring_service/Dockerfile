@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.10-slim
 
 # Set working directory
 WORKDIR /app
@@ -14,25 +14,18 @@ RUN apt-get update && apt-get install -y \
 # Install UV
 RUN pip install uv
 
-# Copy required files
+# Copy project files
 COPY pyproject.toml .
-COPY scoring_service/main.py .
-COPY scoring_service/cloud_experiment_tracker.py .
-COPY scoring_service/registered_model.py .
-COPY src/ /app/src/
+COPY src /app/src
+COPY main.py .
 
 # Create virtual environment and install dependencies
-RUN uv venv
-RUN . .venv/bin/activate && uv pip install -e .
+RUN uv venv /venv
+RUN /venv/bin/uv pip install -e .
 
 # Set environment variables
 ENV PYTHONPATH=/app
-ENV PATH="/app/.venv/bin:$PATH"
-
-# pass along environment variables
-ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
-ENV GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
-ENV GOOGLE_APPLICATION_CREDENTIALS=${SERVICE_ACCOUNT_CREDENTIALS}
+ENV PATH="/venv/bin:$PATH"
 
 # Expose port for FastAPI
 EXPOSE 8080

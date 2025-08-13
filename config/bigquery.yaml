@@ -19,7 +19,7 @@ datasets:
   monitoring: bgg_monitoring_dev
 
 storage:
-  bucket: bgg-predictive-models
+  bucket: bgg-data-warehouse
 
 # Raw data tables
 raw_tables:
