@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+import logging
 
 import polars as pl
 import numpy as np
@@ -13,21 +14,41 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from google.cloud import storage
 
+import sys
+import os
+
+# Configure logging first
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
 from registered_model import RegisteredModel
 from src.data.loader import BGGDataLoader
 from src.data.config import load_config
 from src.models.geek_rating import calculate_geek_rating
 from src.models.score import load_model
 
+
 load_dotenv()
 
 # Get environment variables
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+
+# Debug logging for environment and paths
+logger.info(f"Current Working Directory: {os.getcwd()}")
+logger.info(f"Project Root: {project_root}")
+logger.info(f"GCP Project ID: {GCP_PROJECT_ID}")
+logger.info(f"Bucket Name: {BUCKET_NAME}")
+
+# Check credentials file existence
 if not GCP_PROJECT_ID:
     raise ValueError("GCP_PROJECT_ID environment variable must be set")
-
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
-CREDENTIALS_PATH = os.getenv("GOOGLE_ACCOUNT_CREDENTIALS")
 
 
 class PredictGamesRequest(BaseModel):
@@ -292,6 +313,10 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         return response
 
     except Exception as e:
+        import traceback
+
+        logger.error(f"Error during prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from google.cloud import storage
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
 from src.models.experiments import Experiment, ExperimentTracker
 
 

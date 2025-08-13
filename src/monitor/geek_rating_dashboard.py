@@ -15,7 +15,7 @@ from datetime import datetime
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
-from src.models.experiments import ExperimentTracker
+from src.models.experiments import ExperimentTracker  # noqa: E402
 
 
 def load_predictions(
@@ -131,7 +131,7 @@ def main():
         version = None
 
     # Load predictions for selected experiment
-    predictions = load_predictions(selected_experiment)
+    predictions = load_predictions(selected_experiment, version)
 
     if predictions is None:
         st.error("Could not load predictions. Please select another experiment.")

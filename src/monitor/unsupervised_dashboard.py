@@ -8,14 +8,12 @@ import polars as pl
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 
 # Ensure pandas is imported early and available globally
-import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans, DBSCAN
+from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (
     silhouette_score,
@@ -28,11 +26,12 @@ from sklearn.metrics import (
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
-from src.data.loader import BGGDataLoader
-from src.data.config import load_config
-from src.features.preprocessor import create_bgg_preprocessor
-from src.features.unsupervised import perform_pca, perform_kmeans
-from src.utils.logging import setup_logging
+from src.data.loader import BGGDataLoader  # noqa: E402
+from src.data.config import load_config  # noqa: E402
+from src.features.preprocessor import create_bgg_preprocessor  # noqa: E402
+from src.features.unsupervised import perform_pca  # noqa: E402
+from src.utils.logging import setup_logging  # noqa: E402
+
 
 # Set up logging
 logger = setup_logging()
@@ -48,7 +47,7 @@ def get_cluster_colors(n_clusters):
 
 def load_bgg_data(end_train_year=2024, min_ratings=25):
     """Load board game data for unsupervised analysis with caching."""
-    logger.info(f"Starting data loading process for unsupervised analysis")
+    logger.info("Starting data loading process for unsupervised analysis")
     logger.debug(
         f"Parameters: end_train_year={end_train_year}, min_ratings={min_ratings}"
     )
@@ -204,7 +203,6 @@ def perform_kmeans_single(data, k):
     for i in range(k):
         cluster_mask = labels == i
         cluster_mean = data[cluster_mask].mean()
-        cluster_std = data[cluster_mask].std()
         # Z-score of cluster mean relative to overall distribution
         importance = np.abs((cluster_mean - data.mean()) / data.std())
         feature_importance[i] = importance
@@ -341,12 +339,6 @@ def perform_gmm_single(
 
         # Calculate weighted mean
         weighted_mean = np.average(data, weights=resp_weights, axis=0)
-
-        # Calculate weighted standard deviation
-        weighted_var = np.average(
-            (data - weighted_mean) ** 2, weights=resp_weights, axis=0
-        )
-        weighted_std = np.sqrt(weighted_var)
 
         # Calculate overall mean and std for comparison
         overall_mean = np.mean(data, axis=0)
@@ -843,9 +835,6 @@ def main():
                     if available_components
                     else st.write("Not enough components for visualization")
                 )
-
-            # Color options
-            color_options = ["None", "Predicted Complexity", "Year Published"]
 
             def create_pca_scatter(
                 data, x_comp, y_comp, color=None, cluster_labels=None
@@ -1405,6 +1394,111 @@ def main():
                     cluster_labels=cluster_labels,
                 )
                 st.plotly_chart(fig_scatter_kmeans, use_container_width=True)
+
+                # New PCA Embeddings Visualization
+                st.subheader("PCA Embeddings Visualization")
+
+                # Add sample size slider
+                sample_size = st.slider(
+                    "Number of Games to Sample",
+                    min_value=100,
+                    max_value=5000,
+                    value=500,
+                    step=100,
+                    help="Select how many games to display in the embeddings plot",
+                )
+
+                # Sample random games
+                sample_indices = np.random.choice(
+                    len(viz_data), sample_size, replace=False
+                )
+                sample_data = viz_data.iloc[sample_indices]
+                sample_labels = cluster_labels[sample_indices]
+
+                # Prepare data for line plot
+                pc_columns = [
+                    col for col in sample_data.columns if col.startswith("PC")
+                ]
+
+                # Color mapping
+                n_clusters = int(st.session_state.selected_k.split("_")[1])
+                color_map = get_cluster_colors(n_clusters)
+
+                # Prepare data for color mapping
+                cluster_colors = [color_map[str(cluster)] for cluster in sample_labels]
+
+                # Create line plot
+                fig_embeddings = go.Figure()
+
+                # Create traces for each cluster
+                for cluster in range(n_clusters):
+                    # Get games for this cluster
+                    cluster_mask = sample_labels == cluster
+                    cluster_data = sample_data[cluster_mask]
+
+                    # Add traces for games in this cluster
+                    for _, game_row in cluster_data.iterrows():
+                        fig_embeddings.add_trace(
+                            go.Scatter(
+                                x=pc_columns,
+                                y=game_row[pc_columns],
+                                mode="lines",
+                                name=f"Cluster {cluster + 1}",
+                                line=dict(color=color_map[str(cluster)], width=1),
+                                opacity=0.3,
+                                hovertemplate=(
+                                    "Game: "
+                                    + str(
+                                        st.session_state.data.loc[game_row.name, "name"]
+                                    )
+                                    + "<br>Cluster: "
+                                    + str(cluster + 1)
+                                    + "<br>PC Values: %{y:.4f}<extra></extra>"
+                                ),
+                                legendgroup=f"Cluster {cluster + 1}",
+                                showlegend=False,
+                            )
+                        )
+
+                    # Add a single legend entry for this cluster
+                    if len(cluster_data) > 0:
+                        fig_embeddings.add_trace(
+                            go.Scatter(
+                                x=[None],
+                                y=[None],
+                                mode="lines",
+                                name=f"Cluster {cluster + 1}",
+                                line=dict(color=color_map[str(cluster)], width=2),
+                                legendgroup=f"Cluster {cluster + 1}",
+                                showlegend=True,
+                            )
+                        )
+
+                # Customize layout
+                fig_embeddings.update_layout(
+                    title=f"PCA Embeddings for {sample_size} Sampled Games",
+                    xaxis_title="Principal Components",
+                    yaxis_title="Loading Value",
+                    height=600,
+                    xaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor="rgba(128, 128, 128, 0.2)",
+                    ),
+                    yaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor="rgba(128, 128, 128, 0.2)",
+                    ),
+                    plot_bgcolor="rgba(0, 0, 0, 0)",
+                )
+
+                # Display the plot
+                st.plotly_chart(fig_embeddings, use_container_width=True)
 
                 # Show cluster analysis
                 (
@@ -2620,7 +2714,6 @@ def main():
                 ].iloc[0]
                 selected_game_id = selected_game_row["game_id"]
                 selected_game_cluster = selected_game_row["cluster"]
-                st.info(f"Cluster: {selected_game_cluster}")
 
                 # Import distance functions
                 from scipy.spatial.distance import euclidean, cityblock, cosine

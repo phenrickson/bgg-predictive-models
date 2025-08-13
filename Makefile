@@ -26,10 +26,9 @@ requirements:
 	uv sync
 
 format: 
-	uv run black --check .
+	uv run ruff format .
 
 lint:
-	uv run black .
 	uv run ruff check .
 
 # Target for features file - this is what keeps track of freshness
@@ -268,33 +267,30 @@ register_complexity:
 	--model-type complexity \
 	--experiment catboost-complexity \
 	--name complexity-v2025 \
-	--description "Production (v2025) model for predicting game complexity" \
-	--bucket bgg-predictive-models-dev
+	--description "Production (v2025) model for predicting game complexity"
 
 register_rating:
 	uv run -m scoring_service.register_model \
 	--model-type rating \
 	--experiment catboost-rating \
 	--name rating-v2025 \
-	--description "Production (v2025) model for predicting game rating" \
-	--bucket bgg-predictive-models-dev
+	--description "Production (v2025) model for predicting game rating"
 
 register_users_rated:
 	uv run -m scoring_service.register_model \
 	--model-type users_rated \
 	--experiment lightgbm-users_rated \
 	--name users_rated-v2025 \
-	--description "Production (v2025) model for predicting users_rated" \
-	--bucket bgg-predictive-models-dev
+	--description "Production (v2025) model for predicting users_rated"
 
 register_hurdle:
 	uv run -m scoring_service.register_model \
 	--model-type hurdle \
 	--experiment lightgbm-hurdle \
 	--name hurdle-v2025 \
-	--description "Production (v2025) model for predicting whether games will achieve ratings (hurdle)" \
-	--bucket bgg-predictive-models-dev
+	--description "Production (v2025) model for predicting whether games will achieve ratings (hurdle)"
 
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register
 register: register_complexity register_rating register_users_rated register_hurdle
 
 ## train finalize and register models
@@ -362,3 +358,29 @@ upload_experiments:
 .PHONY: download_experiments
 download_experiments:
 	uv run -m src.utils.sync_experiments --download
+
+# dockerfile training locally
+make docker-training:
+	docker build -f Dockerfile.training -t bgg-training:test . \
+	&& docker run -it \
+	--env-file .env \
+	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); \print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
+
+# dockerfile scoring locally
+make docker-scoring:
+	docker build -f Dockerfile.scoring -t bgg-scoring:test . \
+	&& docker run -it \
+	-p 8080:8080 \
+	--env-file .env \
+	bgg-scoring:test
+
+make scoring-service:
+	uv run -m scoring_service.score \
+    --service-url http://localhost:8080 \
+    --start-year 2024 \
+    --end-year 2029 \
+    --hurdle-model hurdle-v2025 \
+    --complexity-model complexity-v2025 \
+    --rating-model rating-v2025 \
+    --users-rated-model users_rated-v2025 \
+    --download
