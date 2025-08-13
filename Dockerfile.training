@@ -25,15 +25,19 @@ RUN uv venv
 # Install dependencies in the virtual environment
 RUN uv sync
 
+# Declare build arguments
+ARG GCP_PROJECT_ID
+ARG GCS_BUCKET_NAME
+
 # Set environment variables with defaults that can be overridden
 ENV PYTHONPATH=/app
-ENV PATH="/venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH"
 
 # GCP and Development Environment Variables
-
 ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
 ENV GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
-ENV GOOGLE_APPLICATION_CREDENTIALS=${SERVICE_ACCOUNT_CREDENTIALS}
+# Credentials will be mounted at runtime
+ENV GOOGLE_APPLICATION_CREDENTIALS=/credentials/service-account-key.json
 
 # No default CMD - allows flexible usage
 CMD ["/bin/bash"]
