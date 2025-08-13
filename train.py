@@ -75,7 +75,7 @@ def main():
     parser.add_argument(
         "--start-year",
         type=int,
-        default=2017,
+        default=2020,
         help="First year for evaluation",
     )
     parser.add_argument(

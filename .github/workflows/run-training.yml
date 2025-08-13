@@ -1,0 +1,62 @@
+name: Run Model Training
+
+on:
+  push:
+    branches:
+      - 'model/*'
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: 'Start year for evaluation'
+        required: false
+        default: '2020'
+        type: string
+      end_year:
+        description: 'End year for evaluation'
+        required: false
+        default: '2021'
+        type: string
+      output_dir:
+        description: 'Output directory path (default: models/experiments)'
+        required: false
+        default: 'models/experiments'
+        type: string
+      model_args:
+        description: 'Model arguments (space-separated list of model.key=value)'
+        required: false
+        type: string
+
+jobs:
+  run-training:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+
+    - name: Configure Google Cloud Docker Auth
+      run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+    - name: Run Training
+      run: |
+        # Construct GCS output path
+        GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
+        
+        docker run \
+          -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
+          -v ${{ secrets.SERVICE_ACCOUNT_KEY }}:/app/credentials/service-account-key.json \
+          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
+          uv run train.py \
+            --start-year ${{ inputs.start_year }} \
+            --end-year ${{ inputs.end_year }} \
+            --output-dir "${GCS_OUTPUT_PATH}" \
+            ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}
