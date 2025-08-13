@@ -26,12 +26,6 @@ jobs:
       run: |
         mkdir -p credentials 
         echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
-        
-        cat << EOF > .env
-        GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-        GCS_BUCKET=${{ vars.GCS_BUCKET_NAME}}
-        GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
-        EOF
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
@@ -55,7 +49,9 @@ jobs:
           us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}
         build-args: |
           GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-          GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
+          GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
           GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
+        secrets: |
+          SERVICE_ACCOUNT_KEY=${{ secrets.SERVICE_ACCOUNT_KEY }}
         cache-from: type=gha
         cache-to: type=gha,mode=max

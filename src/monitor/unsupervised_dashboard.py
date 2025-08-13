@@ -1395,6 +1395,111 @@ def main():
                 )
                 st.plotly_chart(fig_scatter_kmeans, use_container_width=True)
 
+                # New PCA Embeddings Visualization
+                st.subheader("PCA Embeddings Visualization")
+
+                # Add sample size slider
+                sample_size = st.slider(
+                    "Number of Games to Sample",
+                    min_value=100,
+                    max_value=5000,
+                    value=500,
+                    step=100,
+                    help="Select how many games to display in the embeddings plot",
+                )
+
+                # Sample random games
+                sample_indices = np.random.choice(
+                    len(viz_data), sample_size, replace=False
+                )
+                sample_data = viz_data.iloc[sample_indices]
+                sample_labels = cluster_labels[sample_indices]
+
+                # Prepare data for line plot
+                pc_columns = [
+                    col for col in sample_data.columns if col.startswith("PC")
+                ]
+
+                # Color mapping
+                n_clusters = int(st.session_state.selected_k.split("_")[1])
+                color_map = get_cluster_colors(n_clusters)
+
+                # Prepare data for color mapping
+                cluster_colors = [color_map[str(cluster)] for cluster in sample_labels]
+
+                # Create line plot
+                fig_embeddings = go.Figure()
+
+                # Create traces for each cluster
+                for cluster in range(n_clusters):
+                    # Get games for this cluster
+                    cluster_mask = sample_labels == cluster
+                    cluster_data = sample_data[cluster_mask]
+
+                    # Add traces for games in this cluster
+                    for _, game_row in cluster_data.iterrows():
+                        fig_embeddings.add_trace(
+                            go.Scatter(
+                                x=pc_columns,
+                                y=game_row[pc_columns],
+                                mode="lines",
+                                name=f"Cluster {cluster + 1}",
+                                line=dict(color=color_map[str(cluster)], width=1),
+                                opacity=0.3,
+                                hovertemplate=(
+                                    "Game: "
+                                    + str(
+                                        st.session_state.data.loc[game_row.name, "name"]
+                                    )
+                                    + "<br>Cluster: "
+                                    + str(cluster + 1)
+                                    + "<br>PC Values: %{y:.4f}<extra></extra>"
+                                ),
+                                legendgroup=f"Cluster {cluster + 1}",
+                                showlegend=False,
+                            )
+                        )
+
+                    # Add a single legend entry for this cluster
+                    if len(cluster_data) > 0:
+                        fig_embeddings.add_trace(
+                            go.Scatter(
+                                x=[None],
+                                y=[None],
+                                mode="lines",
+                                name=f"Cluster {cluster + 1}",
+                                line=dict(color=color_map[str(cluster)], width=2),
+                                legendgroup=f"Cluster {cluster + 1}",
+                                showlegend=True,
+                            )
+                        )
+
+                # Customize layout
+                fig_embeddings.update_layout(
+                    title=f"PCA Embeddings for {sample_size} Sampled Games",
+                    xaxis_title="Principal Components",
+                    yaxis_title="Loading Value",
+                    height=600,
+                    xaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor="rgba(128, 128, 128, 0.2)",
+                    ),
+                    yaxis=dict(
+                        zeroline=True,
+                        zerolinewidth=2,
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor="rgba(128, 128, 128, 0.2)",
+                    ),
+                    plot_bgcolor="rgba(0, 0, 0, 0)",
+                )
+
+                # Display the plot
+                st.plotly_chart(fig_embeddings, use_container_width=True)
+
                 # Show cluster analysis
                 (
                     cluster_analysis_tab1,
@@ -2609,7 +2714,6 @@ def main():
                 ].iloc[0]
                 selected_game_id = selected_game_row["game_id"]
                 selected_game_cluster = selected_game_row["cluster"]
-                st.info(f"Cluster: {selected_game_cluster}")
 
                 # Import distance functions
                 from scipy.spatial.distance import euclidean, cityblock, cosine
