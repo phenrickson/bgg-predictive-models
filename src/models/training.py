@@ -518,7 +518,7 @@ def tune_model(
         for i, params in enumerate(
             tqdm(param_combinations, desc="Tuning hyperparameters")
         ):
-            logger.info(f"Evaluating combination {i+1}/{n_combinations}: {params}")
+            logger.info(f"Evaluating combination {i + 1}/{n_combinations}: {params}")
 
             try:
                 # Create and configure model for this iteration

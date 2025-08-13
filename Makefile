@@ -360,21 +360,22 @@ download_experiments:
 	uv run -m src.utils.sync_experiments --download
 
 # dockerfile training locally
-make docker-training:
+.PHONY: docker-training docker-scoring scoring-service
+docker-training:
 	docker build -f Dockerfile.training -t bgg-training:test . \
 	&& docker run -it \
 	--env-file .env \
 	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); \print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
 
 # dockerfile scoring locally
-make docker-scoring:
+docker-scoring:
 	docker build -f Dockerfile.scoring -t bgg-scoring:test . \
 	&& docker run -it \
 	-p 8080:8080 \
 	--env-file .env \
 	bgg-scoring:test
 
-make scoring-service:
+scoring-service:
 	uv run -m scoring_service.score \
     --service-url http://localhost:8080 \
     --start-year 2024 \

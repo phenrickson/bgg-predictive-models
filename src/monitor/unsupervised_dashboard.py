@@ -796,7 +796,9 @@ def main():
                 st.session_state.kmeans_y_component = (
                     available_components[1]
                     if len(available_components) > 1
-                    else available_components[0] if available_components else None
+                    else available_components[0]
+                    if available_components
+                    else None
                 )
 
             # Component selection for scatter plot
@@ -844,9 +846,9 @@ def main():
                     n_clusters = len(np.unique(cluster_labels))
                     color_map = get_cluster_colors(n_clusters)
                     # Convert cluster labels to "Cluster X" format
-                    cluster_names = [f"Cluster {i+1}" for i in range(n_clusters)]
+                    cluster_names = [f"Cluster {i + 1}" for i in range(n_clusters)]
                     cluster_labels_str = np.array(
-                        [f"Cluster {i+1}" for i in cluster_labels]
+                        [f"Cluster {i + 1}" for i in cluster_labels]
                     )
 
                     fig = px.scatter(
@@ -1343,7 +1345,7 @@ def main():
                 # Get PCA components for visualization
                 col1, col2 = st.columns(2)
                 with col1:
-                    components = [f"PC{i+1}" for i in range(viz_data.shape[1] - 3)]
+                    components = [f"PC{i + 1}" for i in range(viz_data.shape[1] - 3)]
 
                     # Ensure selected x component is valid
                     if st.session_state.kmeans_x_component not in components:
@@ -1519,7 +1521,7 @@ def main():
                     # Show cluster sizes
                     # Convert cluster labels to "Cluster X" format
                     cluster_sizes = (
-                        pd.Series([f"Cluster {i+1}" for i in cluster_labels])
+                        pd.Series([f"Cluster {i + 1}" for i in cluster_labels])
                         .value_counts()
                         .sort_index()
                     )
@@ -1535,7 +1537,7 @@ def main():
                             color_map[str(i)] for i in range(n_clusters)
                         ],
                         category_orders={
-                            "color": [f"Cluster {i+1}" for i in range(n_clusters)]
+                            "color": [f"Cluster {i + 1}" for i in range(n_clusters)]
                         },
                     )
                     st.plotly_chart(fig_sizes, use_container_width=True)
@@ -1553,7 +1555,7 @@ def main():
                             - 1
                         )
 
-                    cluster_names = [f"Cluster {i+1}" for i in range(n_clusters)]
+                    cluster_names = [f"Cluster {i + 1}" for i in range(n_clusters)]
                     selected_cluster_name = st.selectbox(
                         "Select Cluster for Feature Analysis",
                         cluster_names,
@@ -1607,7 +1609,7 @@ def main():
                         {
                             "game_id": st.session_state.data["game_id"],
                             "name": st.session_state.data["name"],
-                            "cluster": [f"Cluster {i+1}" for i in cluster_labels],
+                            "cluster": [f"Cluster {i + 1}" for i in cluster_labels],
                             "silhouette_score": silhouette_values,
                         }
                     )
@@ -1625,7 +1627,7 @@ def main():
 
                     # Add box plots for each cluster
                     for i in range(n_clusters):
-                        cluster_name = f"Cluster {i+1}"
+                        cluster_name = f"Cluster {i + 1}"
                         cluster_data = silhouette_df[
                             silhouette_df["cluster"] == cluster_name
                         ]
@@ -1692,7 +1694,7 @@ def main():
                     selected_cluster = st.selectbox(
                         "Filter by Cluster",
                         ["All Clusters"]
-                        + [f"Cluster {i+1}" for i in range(n_clusters)],
+                        + [f"Cluster {i + 1}" for i in range(n_clusters)],
                     )
 
                     # Filter data based on selection
@@ -1733,7 +1735,7 @@ def main():
                         cluster_silhouette = silhouette_values[cluster_labels == i]
                         stats.append(
                             {
-                                "Cluster": f"Cluster {i+1}",
+                                "Cluster": f"Cluster {i + 1}",
                                 "Mean": np.mean(cluster_silhouette),
                                 "Median": np.median(cluster_silhouette),
                                 "Std": np.std(cluster_silhouette),
@@ -1761,7 +1763,7 @@ def main():
 
                 # Ensure n_clusters is defined
                 n_clusters = len(np.unique(cluster_labels))
-                cluster_names = [f"Cluster {i+1}" for i in range(n_clusters)]
+                cluster_names = [f"Cluster {i + 1}" for i in range(n_clusters)]
 
                 # Validate the current selected cluster
                 if st.session_state.selected_cluster_explore not in cluster_names:
@@ -2103,7 +2105,9 @@ def main():
                         st.session_state.gmm_y_component = (
                             components[1]
                             if len(components) > 1
-                            else components[0] if components else None
+                            else components[0]
+                            if components
+                            else None
                         )
 
                     def on_x_component_change():
@@ -2238,7 +2242,7 @@ def main():
                 with cluster_analysis_tab1:
                     # Show cluster sizes and mixing weights
                     cluster_sizes = (
-                        pd.Series([f"Component {i+1}" for i in cluster_labels])
+                        pd.Series([f"Component {i + 1}" for i in cluster_labels])
                         .value_counts()
                         .sort_index()
                     )
@@ -2315,7 +2319,9 @@ def main():
                             - 1
                         )
 
-                    component_names = [f"Component {i+1}" for i in range(n_components)]
+                    component_names = [
+                        f"Component {i + 1}" for i in range(n_components)
+                    ]
                     selected_component_name = st.selectbox(
                         "Select Component for Feature Analysis",
                         component_names,
@@ -2366,7 +2372,7 @@ def main():
                         "game_id": st.session_state.data["game_id"],
                         "name": st.session_state.data["name"],
                         "Primary Component": [
-                            f"Component {i+1}" for i in cluster_labels
+                            f"Component {i + 1}" for i in cluster_labels
                         ],
                     }
 
@@ -2384,7 +2390,7 @@ def main():
 
                     # Add probability columns
                     for i in range(n_components):
-                        prob_data[f"P(Component {i+1})"] = responsibilities[:, i]
+                        prob_data[f"P(Component {i + 1})"] = responsibilities[:, i]
 
                     prob_df = pd.DataFrame(prob_data)
 
@@ -2415,7 +2421,7 @@ def main():
                             fig_prob.add_trace(
                                 go.Violin(
                                     y=responsibilities[:, i],
-                                    name=f"Component {i+1}",
+                                    name=f"Component {i + 1}",
                                     box_visible=True,
                                     meanline_visible=True,
                                     points="outliers",
@@ -2508,7 +2514,7 @@ def main():
                                     "Max Probability",
                                     "Assignment Entropy",
                                 ]
-                                + [f"P(Component {i+1})" for i in range(n_components)]
+                                + [f"P(Component {i + 1})" for i in range(n_components)]
                             ],
                             use_container_width=True,
                             height=400,
@@ -2525,7 +2531,7 @@ def main():
                         {
                             "game_id": st.session_state.data["game_id"],
                             "name": st.session_state.data["name"],
-                            "component": [f"Component {i+1}" for i in cluster_labels],
+                            "component": [f"Component {i + 1}" for i in cluster_labels],
                             "silhouette_score": silhouette_values,
                             "max_responsibility": responsibilities.max(axis=1),
                         }
@@ -2544,7 +2550,7 @@ def main():
 
                     # Add box plots for each component
                     for i in range(n_components):
-                        component_name = f"Component {i+1}"
+                        component_name = f"Component {i + 1}"
                         component_data = silhouette_df[
                             silhouette_df["component"] == component_name
                         ]
@@ -2618,7 +2624,7 @@ def main():
                     selected_component = st.selectbox(
                         "Filter by Component",
                         ["All Components"]
-                        + [f"Component {i+1}" for i in range(n_components)],
+                        + [f"Component {i + 1}" for i in range(n_components)],
                     )
 
                     # Filter data based on selection

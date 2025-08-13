@@ -1,0 +1,62 @@
+name: Deploy Scoring Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scoring_service/**'
+      - 'Dockerfile.scoring'
+      - '.github/workflows/deploy_scoring_service.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      id: auth
+      run: |
+        gcloud auth activate-service-account --key-file=<(echo '${{ secrets.SERVICE_ACCOUNT_KEY }}')
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker
+      run: |
+        gcloud auth configure-docker gcr.io
+
+    - name: Build Docker Image
+      run: |
+        docker build -f Dockerfile.scoring -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} .
+
+    - name: Push Docker Image
+      run: |
+        docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy bgg-model-scoring \
+          --image gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} \
+          --platform managed \
+          --region us-central1 \
+          --allow-unauthenticated \
+          --max-instances 10 \
+          --memory 8Gi \
+          --cpu 4 \
+          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
+
+    - name: Verify Deployment
+      run: |
+        gcloud run services describe bgg-model-scoring \
+          --region us-central1 \
+          --format 'value(status.url)'

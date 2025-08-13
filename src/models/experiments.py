@@ -953,13 +953,13 @@ def log_experiment(
                 )
                 logger.info("  Prediction Breakdown:")
                 logger.info(
-                    f"    Negative Predictions: {true_negatives + false_positives} ({(true_negatives + false_positives)/total*100:.2f}%)"
+                    f"    Negative Predictions: {true_negatives + false_positives} ({(true_negatives + false_positives) / total * 100:.2f}%)"
                 )
                 logger.info(
-                    f"    Positive Predictions: {false_negatives + true_positives} ({(false_negatives + true_positives)/total*100:.2f}%)"
+                    f"    Positive Predictions: {false_negatives + true_positives} ({(false_negatives + true_positives) / total * 100:.2f}%)"
                 )
                 logger.info(
-                    f"    Accuracy: {(true_negatives + true_positives)/total*100:.2f}%"
+                    f"    Accuracy: {(true_negatives + true_positives) / total * 100:.2f}%"
                 )
 
     # Extract and save feature importance

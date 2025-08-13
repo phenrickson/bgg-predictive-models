@@ -710,13 +710,13 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                 if zero_count > 0:
                     if self.verbose:
                         logger.info(
-                            f"  {col}: replacing {zero_count} zeros with NaN ({(zero_count/len(df))*100:.2f}% of values)"
+                            f"  {col}: replacing {zero_count} zeros with NaN ({(zero_count / len(df)) * 100:.2f}% of values)"
                         )
                 df[col] = df[col].replace(0, np.nan)
                 nan_count = df[col].isna().sum()
                 if nan_count > 0 and self.verbose:
                     logger.info(
-                        f"  {col}: now has {nan_count} NaN values ({(nan_count/len(df))*100:.2f}% of values)"
+                        f"  {col}: now has {nan_count} NaN values ({(nan_count / len(df)) * 100:.2f}% of values)"
                     )
 
         return df
@@ -1341,7 +1341,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
                 if not nan_columns.empty:
                     for col, count in nan_columns.items():
                         logger.info(
-                            f"  {col}: {count} NaN values ({(count/len(result))*100:.2f}%)"
+                            f"  {col}: {count} NaN values ({(count / len(result)) * 100:.2f}%)"
                         )
                 else:
                     logger.info("  No NaN values found in transformed features")

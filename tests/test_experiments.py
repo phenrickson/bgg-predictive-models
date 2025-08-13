@@ -82,27 +82,27 @@ def test_log_experiment_confusion_matrix_logging():
         log_calls = [call.args[0] for call in mock_logger.info.call_args_list]
 
         # Check for specific log messages
-        assert any(
-            "Confusion Matrix" in call for call in log_calls
-        ), "Should log confusion matrix header"
-        assert any(
-            "True Negatives" in call for call in log_calls
-        ), "Should log true negatives"
-        assert any(
-            "False Positives" in call for call in log_calls
-        ), "Should log false positives"
-        assert any(
-            "False Negatives" in call for call in log_calls
-        ), "Should log false negatives"
-        assert any(
-            "True Positives" in call for call in log_calls
-        ), "Should log true positives"
-        assert any(
-            "Total Predictions" in call for call in log_calls
-        ), "Should log total predictions"
-        assert any(
-            "Prediction Breakdown" in call for call in log_calls
-        ), "Should log prediction breakdown"
+        assert any("Confusion Matrix" in call for call in log_calls), (
+            "Should log confusion matrix header"
+        )
+        assert any("True Negatives" in call for call in log_calls), (
+            "Should log true negatives"
+        )
+        assert any("False Positives" in call for call in log_calls), (
+            "Should log false positives"
+        )
+        assert any("False Negatives" in call for call in log_calls), (
+            "Should log false negatives"
+        )
+        assert any("True Positives" in call for call in log_calls), (
+            "Should log true positives"
+        )
+        assert any("Total Predictions" in call for call in log_calls), (
+            "Should log total predictions"
+        )
+        assert any("Prediction Breakdown" in call for call in log_calls), (
+            "Should log prediction breakdown"
+        )
         assert any("Accuracy" in call for call in log_calls), "Should log accuracy"
 
 
@@ -157,9 +157,9 @@ def test_log_experiment_confusion_matrix_no_metrics():
         log_calls = [call.args[0] for call in mock_logger.info.call_args_list]
 
         # Ensure no confusion matrix related logs are present
-        assert not any(
-            "Confusion Matrix" in call for call in log_calls
-        ), "Should not log confusion matrix"
-        assert not any(
-            "True Negatives" in call for call in log_calls
-        ), "Should not log true negatives"
+        assert not any("Confusion Matrix" in call for call in log_calls), (
+            "Should not log confusion matrix"
+        )
+        assert not any("True Negatives" in call for call in log_calls), (
+            "Should not log true negatives"
+        )

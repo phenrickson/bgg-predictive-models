@@ -52,9 +52,9 @@ def test_time_per_player(sample_dataframe):
         if pd.isna(expected):
             assert pd.isna(actual), f"Expected NaN for index {idx}"
         else:
-            assert np.isclose(
-                actual, expected, equal_nan=True
-            ), f"Mismatch for index {idx}: expected {expected}, got {actual}"
+            assert np.isclose(actual, expected, equal_nan=True), (
+                f"Mismatch for index {idx}: expected {expected}, got {actual}"
+            )
 
 
 def test_description_word_count(sample_dataframe):
@@ -208,9 +208,9 @@ def test_handle_missing_values(sample_dataframe):
     assert transformed.loc[df_with_missing.index[1], "description_word_count"] == 0
 
     # Specifically check that zeros in min_age are converted to NaN
-    assert pd.isna(
-        transformed.loc[df_with_missing.index[2], "min_age"]
-    ), "Zero values in min_age should be converted to NaN"
+    assert pd.isna(transformed.loc[df_with_missing.index[2], "min_age"]), (
+        "Zero values in min_age should be converted to NaN"
+    )
 
 
 def test_categorical_feature_generation(sample_dataframe):
@@ -227,25 +227,25 @@ def test_categorical_feature_generation(sample_dataframe):
     designer_columns = [
         col for col in transformed_all.columns if col.startswith("designer_")
     ]
-    assert (
-        len(designer_columns) > 0
-    ), "No designer features generated when create_designer_features=True"
+    assert len(designer_columns) > 0, (
+        "No designer features generated when create_designer_features=True"
+    )
 
     # Check that artist features are generated
     artist_columns = [
         col for col in transformed_all.columns if col.startswith("artist_")
     ]
-    assert (
-        len(artist_columns) > 0
-    ), "No artist features generated when create_artist_features=True"
+    assert len(artist_columns) > 0, (
+        "No artist features generated when create_artist_features=True"
+    )
 
     # Check that publisher features are generated
     publisher_columns = [
         col for col in transformed_all.columns if col.startswith("publisher_")
     ]
-    assert (
-        len(publisher_columns) > 0
-    ), "No publisher features generated when create_publisher_features=True"
+    assert len(publisher_columns) > 0, (
+        "No publisher features generated when create_publisher_features=True"
+    )
 
     # Test with categorical features disabled
     transformer_none = BaseBGGTransformer(
@@ -266,27 +266,27 @@ def test_categorical_feature_generation(sample_dataframe):
         col for col in transformed_none.columns if col.startswith("publisher_")
     ]
 
-    assert (
-        len(designer_columns) == 0
-    ), "Designer features present when create_designer_features=False"
-    assert (
-        len(artist_columns) == 0
-    ), "Artist features present when create_artist_features=False"
-    assert (
-        len(publisher_columns) == 0
-    ), "Publisher features present when create_publisher_features=False"
+    assert len(designer_columns) == 0, (
+        "Designer features present when create_designer_features=False"
+    )
+    assert len(artist_columns) == 0, (
+        "Artist features present when create_artist_features=False"
+    )
+    assert len(publisher_columns) == 0, (
+        "Publisher features present when create_publisher_features=False"
+    )
 
     # Test feature names generation
     transformer_all.fit(sample_dataframe)
     feature_names = transformer_all.get_feature_names_out()
 
     # Verify that feature names include categorical features when enabled
-    assert any(
-        name.startswith("designer_") for name in feature_names
-    ), "No designer feature names generated"
-    assert any(
-        name.startswith("artist_") for name in feature_names
-    ), "No artist feature names generated"
-    assert any(
-        name.startswith("publisher_") for name in feature_names
-    ), "No publisher feature names generated"
+    assert any(name.startswith("designer_") for name in feature_names), (
+        "No designer feature names generated"
+    )
+    assert any(name.startswith("artist_") for name in feature_names), (
+        "No artist feature names generated"
+    )
+    assert any(name.startswith("publisher_") for name in feature_names), (
+        "No publisher feature names generated"
+    )
