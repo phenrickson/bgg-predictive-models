@@ -1,4 +1,4 @@
-name: BGG Model Predictions
+name: Run Scoring Service
 
 on:
   workflow_dispatch:
@@ -57,8 +57,13 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Install dependencies
+    - name: Install UV and dependencies
       run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        uv venv
+        source .venv/bin/activate
+        uv pip install requests google-cloud-storage python-dotenv
+        
         sudo apt-get update
         sudo apt-get install -y jq
         gcloud config set core/disable_usage_reporting true
@@ -67,30 +72,22 @@ jobs:
     - name: Get Latest Registered Models
       id: get-models
       run: |
-        # Function to get latest model name
-        get_latest_model() {
-          local model_type=$1
-          gcloud run services invoke bgg-model-scoring \
-            --region us-central1 \
-            --method GET \
-            --uri="/models" | \
-            jq -r --arg type "$model_type" '.[$type] | 
-              sort_by(.version) | 
-              last | 
-              .name'
-        }
+        source .venv/bin/activate
+        
+        # Get service URL
+        SERVICE_URL=$(gcloud run services describe bgg-model-scoring \
+          --region us-central1 \
+          --format 'value(status.url)')
+        
+        # Use Python with requests to get models
+        MODELS_JSON=$(uv run python -c "import requests, json; response = requests.get('${SERVICE_URL}/models'); models = response.json(); latest_models = {}; [latest_models.update({t: sorted(models[t], key=lambda x: x['version'])[-1]['name']}) for t in ['hurdle', 'complexity', 'rating', 'users_rated'] if t in models and models[t]]; print(json.dumps(latest_models))")
+        
+        # Extract and set outputs
+        echo "hurdle_model=$(echo $MODELS_JSON | jq -r '.hurdle')" >> $GITHUB_OUTPUT
+        echo "complexity_model=$(echo $MODELS_JSON | jq -r '.complexity')" >> $GITHUB_OUTPUT
+        echo "rating_model=$(echo $MODELS_JSON | jq -r '.rating')" >> $GITHUB_OUTPUT
+        echo "users_rated_model=$(echo $MODELS_JSON | jq -r '.users_rated')" >> $GITHUB_OUTPUT
 
-        # Get latest models for each type
-        HURDLE_MODEL=$(get_latest_model "hurdle")
-        COMPLEXITY_MODEL=$(get_latest_model "complexity")
-        RATING_MODEL=$(get_latest_model "rating")
-        USERS_RATED_MODEL=$(get_latest_model "users_rated")
-
-        # Output models for subsequent jobs
-        echo "hurdle_model=$HURDLE_MODEL" >> $GITHUB_OUTPUT
-        echo "complexity_model=$COMPLEXITY_MODEL" >> $GITHUB_OUTPUT
-        echo "rating_model=$RATING_MODEL" >> $GITHUB_OUTPUT
-        echo "users_rated_model=$USERS_RATED_MODEL" >> $GITHUB_OUTPUT
   trigger-predictions:
     needs: get-latest-models
     runs-on: ubuntu-latest
@@ -112,20 +109,36 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Trigger Cloud Run Prediction
+    - name: Install UV
       run: |
-        gcloud run services invoke bgg-model-scoring \
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Setup Python with UV
+      run: |
+        uv venv
+        source .venv/bin/activate
+        uv pip install requests google-cloud-storage python-dotenv
+
+    - name: Get Service URL
+      id: get-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe bgg-model-scoring \
           --region us-central1 \
-          --method POST \
-          --body '{
-            "hurdle_model_name": "${{ needs.get-latest-models.outputs.hurdle_model }}",
-            "complexity_model_name": "${{ needs.get-latest-models.outputs.complexity_model }}",
-            "rating_model_name": "${{ needs.get-latest-models.outputs.rating_model }}",
-            "users_rated_model_name": "${{ needs.get-latest-models.outputs.users_rated_model }}",
-            "start_year": ${{ github.event.inputs.start_year || 2024 }},
-            "end_year": ${{ github.event.inputs.end_year || 2029 }},
-            "output_path": "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
-          }'
+          --format 'value(status.url)')
+        echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Trigger Predictions using score.py
+      run: |
+        source .venv/bin/activate
+        uv run python scoring_service/score.py \
+          --service-url "${{ steps.get-url.outputs.service_url }}" \
+          --hurdle-model "${{ needs.get-latest-models.outputs.hurdle_model }}" \
+          --complexity-model "${{ needs.get-latest-models.outputs.complexity_model }}" \
+          --rating-model "${{ needs.get-latest-models.outputs.rating_model }}" \
+          --users-rated-model "${{ needs.get-latest-models.outputs.users_rated_model }}" \
+          --start-year ${{ github.event.inputs.start_year || 2024 }} \
+          --end-year ${{ github.event.inputs.end_year || 2029 }} \
+          --output-path "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
 
     - name: Log Prediction Metadata
       run: |
