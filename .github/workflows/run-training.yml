@@ -11,10 +11,6 @@ on:
         required: false
         default: 'models/experiments'
         type: string
-      model_args:
-        description: 'Model arguments (space-separated list of model.key=value)'
-        required: false
-        type: string
 
 jobs:
   run-training:
@@ -40,12 +36,18 @@ jobs:
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
+    - name: Create secret in Secret Manager
+      run: |
+        # Create or update the secret with the service account key
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' | gcloud secrets create service-account-key --data-file=- --project=${{ vars.GCP_PROJECT_ID }} || \
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' | gcloud secrets versions add service-account-key --data-file=- --project=${{ vars.GCP_PROJECT_ID }}
+
     - name: Run training job
       run: |
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
-        # Create Cloud Run job with secure credential handling
+        # Create Cloud Run job with secret mounted as file
         gcloud run jobs create bgg-training-${{ github.run_id }} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
@@ -53,10 +55,12 @@ jobs:
           --cpu 4 \
           --max-retries 0 \
           --task-timeout 3600 \
-          --set-env-vars="GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json" \
-          --set-env-vars="GOOGLE_APPLICATION_CREDENTIALS_CONTENT=${{ secrets.SERVICE_ACCOUNT_KEY }}" \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --set-env-vars GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
+          --set-secrets /app/credentials/service-account-key.json=projects/${{ vars.GCP_PROJECT_ID }}/secrets/service-account-key:latest \
           --command="sh" \
-          --args="-c,mkdir -p /app/credentials && printf '%s' \"\$GOOGLE_APPLICATION_CREDENTIALS_CONTENT\" > /app/credentials/service-account-key.json && uv run train.py --output-dir ${GCS_OUTPUT_PATH} ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}"
+          --args="-c,uv run train.py --output-dir ${GCS_OUTPUT_PATH}"
 
         # Execute the job and capture details
         echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
