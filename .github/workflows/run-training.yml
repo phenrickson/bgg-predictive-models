@@ -45,7 +45,7 @@ jobs:
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
-        # Create Cloud Run job
+        # Create Cloud Run job with secure credential handling
         gcloud run jobs create bgg-training-${{ github.run_id }} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
@@ -54,9 +54,9 @@ jobs:
           --max-retries 0 \
           --task-timeout 3600 \
           --set-env-vars="GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json" \
-          --set-env-vars-from-file="GOOGLE_APPLICATION_CREDENTIALS_CONTENT=${{ secrets.SERVICE_ACCOUNT_KEY }}" \
+          --set-env-vars="GOOGLE_APPLICATION_CREDENTIALS_CONTENT=${{ secrets.SERVICE_ACCOUNT_KEY }}" \
           --command="sh" \
-          --args="-c,mkdir -p /app/credentials && echo \"$GOOGLE_APPLICATION_CREDENTIALS_CONTENT\" > /app/credentials/service-account-key.json && uv run train.py --output-dir ${GCS_OUTPUT_PATH} ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}"
+          --args="-c,mkdir -p /app/credentials && printf '%s' \"\$GOOGLE_APPLICATION_CREDENTIALS_CONTENT\" > /app/credentials/service-account-key.json && uv run train.py --output-dir ${GCS_OUTPUT_PATH} ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}"
 
         # Execute the job and capture details
         echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
