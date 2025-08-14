@@ -59,11 +59,23 @@ jobs:
 
         # Execute the job and capture details
         echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
-        gcloud run jobs execute bgg-training-${{ github.run_id }} \
-          --region us-central1
+        EXECUTION_OUTPUT=$(gcloud run jobs execute bgg-training-${{ github.run_id }} \
+          --region us-central1 2>&1)
+        echo "$EXECUTION_OUTPUT"
+        
+        # Extract execution ID from output
+        EXECUTION_ID=$(echo "$EXECUTION_OUTPUT" | grep -o 'bgg-training-[0-9a-z\-]*')
+        
+        if [ -n "$EXECUTION_ID" ]; then
+          # Capture logs before potential failure
+          echo "Fetching logs for execution $EXECUTION_ID"
+          gcloud beta run jobs executions logs read $EXECUTION_ID \
+            --region us-central1 \
+            --project ${{ vars.GCP_PROJECT_ID }}
+        fi
         
         # Log job URL for tracking
-        echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/bgg-training-${{ github.run_id }}/tasks?project=${{ vars.GCP_PROJECT_ID }}"
+        echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
         echo "Monitor job progress at the URL above"
 
     # Commenting out cleanup to allow job inspection
