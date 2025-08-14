@@ -242,23 +242,25 @@ predictions:
 	--users-rated lightgbm-users_rated
 
 # evaluate
-evaluation:
+OUTPUT_DIR ?= ./models/experiments
+train:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2016 \
+	--start-year 2020 \
 	--end-year 2021 \
+	--output-dir $(OUTPUT_DIR) \
     --model-args \
         hurdle.preprocessor-type=linear \
         hurdle.model=logistic \
         complexity.preprocessor-type=tree \
         complexity.model=catboost \
-		complexty.model=use-sample-weights \
+        complexity.use-sample-weights=true \
         rating.preprocessor-type=tree \
         rating.model=catboost \
-		rating.min-ratings=5 \
-		rating.use-sample-weights \
-		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm \
-		users_rated.min-ratings=0
+        rating.min-ratings=5 \
+        rating.use-sample-weights=true \
+        users_rated.preprocessor-type=tree \
+        users_rated.model=lightgbm \
+        users_rated.min-ratings=0
 
 ### register model candidates
 # register models

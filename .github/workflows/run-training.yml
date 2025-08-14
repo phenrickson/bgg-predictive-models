@@ -38,49 +38,64 @@ jobs:
 
     - name: Run training job
       run: |
-        # Construct GCS output path
-        GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
+        # Set output directory - use input if provided, otherwise default
+        OUTPUT_DIR="${{ inputs.output_dir || 'models/experiments' }}"
         
-        # Create Cloud Run job with built-in service account authentication
-        # Note: This uses the default Compute Engine service account
-        # To use a specific service account, add: --service-account=YOUR-SA@PROJECT.iam.gserviceaccount.com
-        gcloud run jobs create bgg-training-${{ github.run_id }} \
+        # Construct GCS output path
+        GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${OUTPUT_DIR}"
+        
+        # Create unique job name
+        JOB_NAME="bgg-training-${{ github.run_id }}"
+        
+        echo "Creating Cloud Run job: ${JOB_NAME}"
+        echo "Output path: ${GCS_OUTPUT_PATH}"
+        
+        # Create Cloud Run job
+        gcloud run jobs create ${JOB_NAME} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 16Gi \
           --cpu 4 \
           --max-retries 0 \
           --task-timeout 3600 \
+          --service-account=bgg-data-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
           --command="sh" \
-          --args="-c,uv run train.py --output-dir ${GCS_OUTPUT_PATH}"
+          --args="-c,make train OUTPUT_DIR=${GCS_OUTPUT_PATH}"
 
         # Execute the job and capture details
-        echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
-        EXECUTION_OUTPUT=$(gcloud run jobs execute bgg-training-${{ github.run_id }} \
+        echo "Starting Cloud Run job execution..."
+        EXECUTION_OUTPUT=$(gcloud run jobs execute ${JOB_NAME} \
           --region us-central1 2>&1)
         echo "$EXECUTION_OUTPUT"
         
         # Extract execution ID from output
-        EXECUTION_ID=$(echo "$EXECUTION_OUTPUT" | grep -o 'bgg-training-[0-9a-z\-]*')
+        EXECUTION_ID=$(echo "$EXECUTION_OUTPUT" | grep -o "${JOB_NAME}-[0-9a-z\-]*" | head -1)
         
         if [ -n "$EXECUTION_ID" ]; then
-          # Capture logs before potential failure
+          echo "Execution ID: $EXECUTION_ID"
+          
+          # Wait a moment for logs to be available
+          sleep 10
+          
+          # Capture logs
           echo "Fetching logs for execution $EXECUTION_ID"
-          gcloud beta run jobs executions logs read $EXECUTION_ID \
+          gcloud run jobs executions logs read $EXECUTION_ID \
             --region us-central1 \
-            --project ${{ vars.GCP_PROJECT_ID }}
+            --project ${{ vars.GCP_PROJECT_ID }} || echo "Logs not yet available"
+          
+          # Log job URL for tracking
+          echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
+        else
+          echo "Failed to extract execution ID from output"
+          exit 1
         fi
         
-        # Log job URL for tracking
-        echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
-        echo "Monitor job progress at the URL above"
+        # Clean up the job after execution
+        echo "Cleaning up job ${JOB_NAME}"
+        gcloud run jobs delete ${JOB_NAME} \
+          --region us-central1 \
+          --quiet || echo "Failed to delete job, may need manual cleanup"
         
-    # Commenting out cleanup to allow job inspection
-    # - name: Cleanup
-    #   if: always()
-    #   run: |
-    #     gcloud run jobs delete bgg-training-${{ github.run_id }} \
-    #       --region us-central1 \
-    #       --quiet
+        echo "Training job completed. Check the logs above for results."
