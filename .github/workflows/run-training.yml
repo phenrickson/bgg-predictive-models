@@ -15,7 +15,7 @@ on:
 jobs:
   run-training:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
     
     permissions:
       contents: read
@@ -62,12 +62,13 @@ jobs:
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
           --command="sh" \
-          --args="-c,make train OUTPUT_DIR=${GCS_OUTPUT_PATH}"
+          --args="-c,make train && make upload_experiments"
 
-        # Execute the job and capture details
+        # Execute the job and wait for completion
         echo "Starting Cloud Run job execution..."
         EXECUTION_OUTPUT=$(gcloud run jobs execute ${JOB_NAME} \
-          --region us-central1 2>&1)
+          --region us-central1 \
+          --wait 2>&1)
         echo "$EXECUTION_OUTPUT"
         
         # Extract execution ID from output
@@ -76,26 +77,33 @@ jobs:
         if [ -n "$EXECUTION_ID" ]; then
           echo "Execution ID: $EXECUTION_ID"
           
-          # Wait a moment for logs to be available
-          sleep 10
-          
-          # Capture logs
-          echo "Fetching logs for execution $EXECUTION_ID"
+          # Get all logs from the execution
+          echo "Fetching complete logs for execution $EXECUTION_ID"
           gcloud run jobs executions logs read $EXECUTION_ID \
             --region us-central1 \
-            --project ${{ vars.GCP_PROJECT_ID }} || echo "Logs not yet available"
+            --project ${{ vars.GCP_PROJECT_ID }}
           
-          # Log job URL for tracking
+          # Log job URL for reference
           echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
+          
+          # Check if job succeeded
+          STATUS=$(gcloud run jobs executions describe $EXECUTION_ID \
+            --region us-central1 \
+            --format='get(condition.type)')
+          
+          # Clean up the job
+          echo "Cleaning up job ${JOB_NAME}"
+          gcloud run jobs delete ${JOB_NAME} \
+            --region us-central1 \
+            --quiet || echo "Failed to delete job, may need manual cleanup"
+          
+          if [ "$STATUS" != "COMPLETED" ]; then
+            echo "Job failed with status: $STATUS"
+            exit 1
+          fi
         else
           echo "Failed to extract execution ID from output"
           exit 1
         fi
-        
-        # Clean up the job after execution
-        echo "Cleaning up job ${JOB_NAME}"
-        gcloud run jobs delete ${JOB_NAME} \
-          --region us-central1 \
-          --quiet || echo "Failed to delete job, may need manual cleanup"
         
         echo "Training job completed. Check the logs above for results."
