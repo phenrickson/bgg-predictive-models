@@ -36,18 +36,14 @@ jobs:
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
-    - name: Create secret in Secret Manager
-      run: |
-        # Create or update the secret with the service account key
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' | gcloud secrets create service-account-key --data-file=- --project=${{ vars.GCP_PROJECT_ID }} || \
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' | gcloud secrets versions add service-account-key --data-file=- --project=${{ vars.GCP_PROJECT_ID }}
-
     - name: Run training job
       run: |
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
-        # Create Cloud Run job with secret mounted as file
+        # Create Cloud Run job with built-in service account authentication
+        # Note: This uses the default Compute Engine service account
+        # To use a specific service account, add: --service-account=YOUR-SA@PROJECT.iam.gserviceaccount.com
         gcloud run jobs create bgg-training-${{ github.run_id }} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
@@ -57,8 +53,6 @@ jobs:
           --task-timeout 3600 \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
-          --set-env-vars GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-          --set-secrets /app/credentials/service-account-key.json=projects/${{ vars.GCP_PROJECT_ID }}/secrets/service-account-key:latest \
           --command="sh" \
           --args="-c,uv run train.py --output-dir ${GCS_OUTPUT_PATH}"
 

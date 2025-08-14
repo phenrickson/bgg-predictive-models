@@ -29,8 +29,5 @@ RUN uv sync
 ENV PYTHONPATH=/app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Credentials will be mounted at runtime
-ENV GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
-
 # No default CMD - allows flexible usage
 CMD ["/bin/bash"]
