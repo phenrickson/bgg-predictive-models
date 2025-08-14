@@ -5,12 +5,6 @@ on:
     branches:
       - 'model/*'
   workflow_dispatch:
-    inputs:
-      output_dir:
-        description: 'Output directory path (default: models/experiments)'
-        required: false
-        default: 'models/experiments'
-        type: string
 
 jobs:
   run-training:
@@ -38,17 +32,10 @@ jobs:
 
     - name: Run training job
       run: |
-        # Set output directory - use input if provided, otherwise default
-        OUTPUT_DIR="${{ inputs.output_dir || 'models/experiments' }}"
-        
-        # Construct GCS output path
-        GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${OUTPUT_DIR}"
-        
         # Create unique job name
         JOB_NAME="bgg-training-${{ github.run_id }}"
         
         echo "Creating Cloud Run job: ${JOB_NAME}"
-        echo "Output path: ${GCS_OUTPUT_PATH}"
         
         # Create Cloud Run job
         gcloud run jobs create ${JOB_NAME} \
@@ -61,8 +48,8 @@ jobs:
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
-          --command="sh" \
-          --args="-c,make train && make upload_experiments"
+          --command="bash" \
+          --args="-c,ls -la && pwd && make train && make upload_experiments"
 
         # Execute the job and wait for completion
         echo "Starting Cloud Run job execution..."
