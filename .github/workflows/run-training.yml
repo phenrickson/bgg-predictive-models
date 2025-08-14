@@ -45,11 +45,6 @@ jobs:
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
-        # Create secrets in Secret Manager for both GCS and BigQuery access
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' | gcloud secrets create bgg-training-sa-key-${{ github.run_id }} \
-          --data-file=- \
-          --replication-policy="automatic"
-
         # Create Cloud Run job
         gcloud run jobs create bgg-training-${{ github.run_id }} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
@@ -58,10 +53,10 @@ jobs:
           --cpu 4 \
           --max-retries 0 \
           --task-timeout 3600 \
-          --set-env-vars="GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}" \
-          --set-secrets="/app/credentials/service-account-key.json=bgg-training-sa-key-${{ github.run_id }}" \
-          --command="uv" \
-          --args="run,train.py,--output-dir,${GCS_OUTPUT_PATH},${{ inputs.model_args != '' && format('--model-args,{0}', inputs.model_args) || '' }}"
+          --set-env-vars="GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json" \
+          --set-env-vars-from-file="GOOGLE_APPLICATION_CREDENTIALS_CONTENT=${{ secrets.SERVICE_ACCOUNT_KEY }}" \
+          --command="sh" \
+          --args="-c,mkdir -p /app/credentials && echo \"$GOOGLE_APPLICATION_CREDENTIALS_CONTENT\" > /app/credentials/service-account-key.json && uv run train.py --output-dir ${GCS_OUTPUT_PATH} ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}"
 
         # Execute the job and capture details
         echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
@@ -84,9 +79,6 @@ jobs:
         echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
         echo "Monitor job progress at the URL above"
         
-        # Clean up the secret
-        gcloud secrets delete bgg-training-sa-key-${{ github.run_id }} --quiet
-
     # Commenting out cleanup to allow job inspection
     # - name: Cleanup
     #   if: always()
