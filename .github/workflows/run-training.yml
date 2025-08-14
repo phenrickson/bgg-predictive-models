@@ -63,12 +63,13 @@ jobs:
           --region us-central1
         
         # Log job URL for tracking
-        echo "Job URL: https://console.cloud.google.com/run/jobs/bgg-training-${{ github.run_id }}/executions?project=${{ vars.GCP_PROJECT_ID }}"
+        echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/bgg-training-${{ github.run_id }}/tasks?project=${{ vars.GCP_PROJECT_ID }}"
         echo "Monitor job progress at the URL above"
 
-    - name: Cleanup
-      if: always()
-      run: |
-        gcloud run jobs delete bgg-training-${{ github.run_id }} \
-          --region us-central1 \
-          --quiet
+    # Commenting out cleanup to allow job inspection
+    # - name: Cleanup
+    #   if: always()
+    #   run: |
+    #     gcloud run jobs delete bgg-training-${{ github.run_id }} \
+    #       --region us-central1 \
+    #       --quiet
