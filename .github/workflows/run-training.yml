@@ -6,16 +6,6 @@ on:
       - 'model/*'
   workflow_dispatch:
     inputs:
-      start_year:
-        description: 'Start year for evaluation'
-        required: false
-        default: '2020'
-        type: string
-      end_year:
-        description: 'End year for evaluation'
-        required: false
-        default: '2021'
-        type: string
       output_dir:
         description: 'Output directory path (default: models/experiments)'
         required: false
@@ -50,25 +40,31 @@ jobs:
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
-    - name: Setup for training
-      run: |
-        # Create credentials directory and save service account key
-        mkdir -p credentials
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
-
-    - name: Run Training
+    - name: Run training job
       run: |
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
-        docker run \
-          -e GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          -e GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
-          -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-          -v ./credentials:/app/credentials \
-          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
-          uv run train.py \
-            --start-year ${{ inputs.start_year }} \
-            --end-year ${{ inputs.end_year }} \
-            --output-dir "${GCS_OUTPUT_PATH}" \
-            ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}
+        # Create Cloud Run job
+        gcloud run jobs create bgg-training-${{ github.run_id }} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
+          --region us-central1 \
+          --memory 16Gi \
+          --cpu 4 \
+          --max-retries 0 \
+          --task-timeout 3600 \
+          --set-env-vars="GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}" \
+          --command="uv" \
+          --args="run,train.py,--output-dir,${GCS_OUTPUT_PATH},${{ inputs.model_args != '' && format('--model-args,{0}', inputs.model_args) || '' }}"
+
+        # Execute the job
+        gcloud run jobs execute bgg-training-${{ github.run_id }} \
+          --region us-central1 \
+          --wait
+
+    - name: Cleanup
+      if: always()
+      run: |
+        gcloud run jobs delete bgg-training-${{ github.run_id }} \
+          --region us-central1 \
+          --quiet
