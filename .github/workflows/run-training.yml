@@ -46,14 +46,21 @@ jobs:
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
+    - name: Setup credentials
+      run: |
+        mkdir -p credentials
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
+
     - name: Run Training
       run: |
         # Construct GCS output path
         GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
         
         docker run \
+          -e GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          -e GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
           -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-          -v ${{ secrets.SERVICE_ACCOUNT_KEY }}:/app/credentials/service-account-key.json \
+          -v ./credentials:/app/credentials \
           us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           uv run train.py \
             --start-year ${{ inputs.start_year }} \
