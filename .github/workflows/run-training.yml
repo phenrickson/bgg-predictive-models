@@ -57,10 +57,14 @@ jobs:
           --command="uv" \
           --args="run,train.py,--output-dir,${GCS_OUTPUT_PATH},${{ inputs.model_args != '' && format('--model-args,{0}', inputs.model_args) || '' }}"
 
-        # Execute the job
+        # Execute the job and capture details
+        echo "Starting Cloud Run job bgg-training-${{ github.run_id }}"
         gcloud run jobs execute bgg-training-${{ github.run_id }} \
-          --region us-central1 \
-          --wait
+          --region us-central1
+        
+        # Log job URL for tracking
+        echo "Job URL: https://console.cloud.google.com/run/jobs/bgg-training-${{ github.run_id }}/executions?project=${{ vars.GCP_PROJECT_ID }}"
+        echo "Monitor job progress at the URL above"
 
     - name: Cleanup
       if: always()
