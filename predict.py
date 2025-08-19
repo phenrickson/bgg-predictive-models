@@ -1,7 +1,7 @@
 import argparse
 import pandas as pd
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from datetime import datetime, timezone
 
 from src.data.loader import BGGDataLoader
