@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (
     silhouette_score,
@@ -21,6 +21,7 @@ from sklearn.metrics import (
     calinski_harabasz_score,
     davies_bouldin_score,
 )
+from scipy.cluster.hierarchy import dendrogram, linkage
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -40,9 +41,14 @@ logger = setup_logging()
 def get_cluster_colors(n_clusters):
     """Get a consistent color mapping for clusters."""
     colors = px.colors.qualitative.Vivid
-    # Create a mapping of cluster index to color
+    # Create a mapping of cluster index to color, starting from '0'
     color_map = {str(i): colors[i % len(colors)] for i in range(n_clusters)}
     return color_map
+
+
+def display_cluster_name(cluster_index):
+    """Convert zero-based cluster index to 1-based display name."""
+    return f"Cluster {cluster_index + 1}"
 
 
 def load_bgg_data(end_train_year=2024, min_ratings=25):
@@ -381,6 +387,268 @@ def run_gmm_wrapper(args):
 
 
 @st.cache_data(show_spinner=False)
+def perform_hierarchical_clustering(data, n_clusters, linkage_method="ward"):
+    """Perform hierarchical clustering with the specified number of clusters."""
+    logger.info(f"Running hierarchical clustering with n_clusters={n_clusters}")
+    start_time = time.time()
+
+    # Run clustering
+    clusterer = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage_method)
+    labels = clusterer.fit_predict(data)
+
+    # Calculate clustering metrics
+    silhouette = silhouette_score(data, labels)
+    calinski = calinski_harabasz_score(data, labels)
+    davies = davies_bouldin_score(data, labels)
+
+    # Calculate silhouette scores for each sample
+    sample_silhouette_values = silhouette_samples(data, labels)
+
+    logger.info(
+        f"n_clusters={n_clusters} metrics - Silhouette: {silhouette:.4f}, CH: {calinski:.4f}, DB: {davies:.4f}"
+    )
+
+    # Calculate feature importance per cluster
+    feature_importance = {}
+    for i in range(n_clusters):
+        cluster_mask = labels == i
+        cluster_mean = data[cluster_mask].mean()
+        # Z-score of cluster mean relative to overall distribution
+        importance = np.abs((cluster_mean - data.mean()) / data.std())
+        feature_importance[i] = importance
+
+    # Store results
+    result = {
+        "labels": labels,
+        "silhouette": silhouette,
+        "calinski_harabasz": calinski,
+        "davies_bouldin": davies,
+        "feature_importance": feature_importance,
+        "sample_silhouette_values": sample_silhouette_values,
+    }
+
+    total_time = time.time() - start_time
+    logger.info(f"Completed hierarchical clustering in {total_time:.2f} seconds")
+    return result
+
+
+def create_dendrogram(
+    data, method="ward", max_d=None, truncate_mode="level", p=8, color_map=None
+):
+    """Create linkage matrix and plot dendrogram.
+
+    Args:
+        data: Input data matrix
+        method: Linkage method ('ward', 'complete', 'average', 'single')
+        max_d: Maximum distance for horizontal cut line
+        truncate_mode: Dendrogram truncation mode ('lastp', 'level', or None)
+        p: Number of levels to show in truncated dendrogram (int)
+        color_map: Optional dictionary mapping cluster indices to colors
+
+    Returns:
+        fig: Plotly figure object
+        Z: Linkage matrix
+
+    Note:
+        - 'ward' minimizes the variance within clusters
+        - 'complete' uses the maximum distances between all observations of two clusters
+        - 'average' uses the average distances between all observations of two clusters
+        - 'single' uses the minimum distances between all observations of two clusters
+    """
+    # Convert data to numpy array if needed
+    if isinstance(data, pd.DataFrame):
+        data = data.values
+
+    # Compute linkage matrix
+    try:
+        # Standardize the data
+        scaler = StandardScaler()
+        data_scaled = scaler.fit_transform(data)
+
+        # Compute linkage matrix
+        Z = linkage(data_scaled, method=method)
+    except Exception as e:
+        logger.error(f"Error computing linkage matrix: {e}")
+        raise
+
+    # Create dendrogram figure with improved styling
+    fig = go.Figure()
+
+    # Prepare dendrogram parameters with better defaults
+    dendro_params = {
+        "Z": Z,
+        "no_plot": True,
+        "orientation": "left",  # Show dendrogram vertically for better readability
+        "leaf_rotation": 0,  # Rotate leaf labels for clarity
+        "show_leaf_counts": True,  # Show the number of samples in each leaf
+    }
+
+    # Add optional parameters if specified
+    if truncate_mode is not None:
+        if truncate_mode not in ["lastp", "level"]:
+            logger.warning(f"Invalid truncate_mode '{truncate_mode}'. Using default.")
+        else:
+            dendro_params["truncate_mode"] = truncate_mode
+            if p is not None and isinstance(p, (int, float)):
+                dendro_params["p"] = int(p)
+            else:
+                logger.warning("Invalid p value for truncation. Using default.")
+
+    # Get dendrogram data
+    try:
+        # Add game names to the dendrogram parameters if data is a DataFrame
+        if isinstance(data, pd.DataFrame):
+            dendro_params["labels"] = (
+                data["name"].values if "name" in data.columns else None
+            )
+
+        dendro = dendrogram(**dendro_params)
+    except Exception as e:
+        logger.error(f"Error creating dendrogram: {e}")
+        raise
+
+    # Extract x and y coordinates for plotting
+    x = []
+    y = []
+    hover_text = []
+
+    # Add the lines that make up the dendrogram
+    for i, d in enumerate(dendro["dcoord"]):
+        # Add coordinates for the line segment
+        x.extend([dendro["icoord"][i][j] for j in [0, 1, 2, 3]])
+        x.append(None)  # Add None to create a break between segments
+        y.extend([d[j] for j in [0, 1, 1, 0]])
+        y.append(None)  # Add None to create a break between segments
+
+        # Add hover text for each segment
+        hover_text.extend(
+            [
+                f"Distance: {d[0]:.2f}<br>Leaf Count: {dendro['ivl'][i] if 'ivl' in dendro else 'N/A'}"
+            ]
+            * 4
+        )
+        hover_text.append(None)
+
+    # Determine color mapping
+    if color_map is None:
+        # Use a default color palette if no color map is provided
+        color_map = get_cluster_colors(10)  # Default to 10 colors
+
+    # Determine the number of clusters based on the truncation
+    if truncate_mode == "level":
+        n_clusters = min(p, 10)  # Limit to 10 colors
+    else:
+        n_clusters = 10  # Default to 10 colors
+
+    # Plot the dendrogram lines with cluster-based coloring
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode="lines",
+            line=dict(
+                color="rgb(70, 130, 180)",  # Default steel blue color
+                width=2.5,  # Even thicker lines
+            ),
+            hovertemplate="Distance: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    # Add colored segments to represent cluster structure
+    segment_length = len(x) // n_clusters
+    for i in range(n_clusters):
+        start = i * segment_length
+        end = (i + 1) * segment_length if i < n_clusters - 1 else len(x)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x[start:end],
+                y=y[start:end],
+                mode="lines",
+                line=dict(
+                    color=color_map[str(i)],
+                    width=2.5,  # Even thicker lines
+                ),
+                hovertemplate="Distance: %{y:.2f}<extra></extra>",
+                showlegend=False,
+            )
+        )
+
+    # Add horizontal line for cut height if specified
+    if max_d is not None and isinstance(max_d, (int, float)):
+        fig.add_shape(
+            type="line",
+            x0=min(x),
+            y0=max_d,
+            x1=max(x),
+            y1=max_d,
+            line=dict(
+                color="rgba(255, 0, 0, 0.8)",  # Semi-transparent red
+                width=3,  # Thicker line
+                dash="dash",
+            ),
+        )
+
+        # Add annotation for cut line
+        fig.add_annotation(
+            x=max(x),
+            y=max_d,
+            text=f"Cut height: {max_d:.2f}",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=2,
+            arrowcolor="rgba(255, 0, 0, 0.8)",
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=14, color="rgba(255, 0, 0, 0.8)"),
+            bgcolor="rgba(255, 255, 255, 0.8)",
+            bordercolor="rgba(255, 0, 0, 0.8)",
+            borderwidth=1,
+            borderpad=4,
+        )
+
+    # Update layout with improved styling and visibility
+    fig.update_layout(
+        title=dict(
+            text="Hierarchical Clustering Dendrogram",
+            font=dict(size=24),
+            y=0.95,
+        ),
+        xaxis_title="Sample Index",
+        yaxis_title="Distance",
+        showlegend=False,
+        xaxis=dict(
+            showticklabels=False,
+            showgrid=True,
+            gridwidth=1,
+            gridcolor="rgba(128, 128, 128, 0.1)",
+            zeroline=True,
+            zerolinewidth=2,
+            zerolinecolor="rgba(128, 128, 128, 0.5)",
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor="rgba(128, 128, 128, 0.1)",
+            zeroline=True,
+            zerolinewidth=2,
+            zerolinecolor="rgba(128, 128, 128, 0.5)",
+            title=dict(
+                font=dict(size=16),  # Larger axis title
+            ),
+        ),
+        height=1000,  # Further increased height for better visibility
+        width=1200,  # Increased width
+        hovermode="closest",
+        plot_bgcolor="rgba(0, 0, 0, 0)",  # Transparent background
+        margin=dict(l=150, r=100, t=100, b=50),  # Increased margins
+        paper_bgcolor="rgba(0, 0, 0, 0)",  # Transparent paper background
+    )
+
+    return fig, Z
+
+
 def perform_multi_gmm(
     data,
     n_components_values,
@@ -548,8 +816,8 @@ def main():
     # )
 
     # Tabs for different analyses
-    tab_data, tab_pca, tab_kmeans, tab_gmm, tab_neighbor = st.tabs(
-        ["Data", "PCA", "K-Means", "GMM", "Find a Neighbor"]
+    tab_data, tab_pca, tab_kmeans, tab_hierarchical, tab_gmm, tab_neighbor = st.tabs(
+        ["Data", "PCA", "K-Means", "Hierarchical", "GMM", "Find a Neighbor"]
     )
 
     # Cache PCA results
@@ -796,9 +1064,7 @@ def main():
                 st.session_state.kmeans_y_component = (
                     available_components[1]
                     if len(available_components) > 1
-                    else available_components[0]
-                    if available_components
-                    else None
+                    else available_components[0] if available_components else None
                 )
 
             # Component selection for scatter plot
@@ -1521,7 +1787,7 @@ def main():
                     # Show cluster sizes
                     # Convert cluster labels to "Cluster X" format
                     cluster_sizes = (
-                        pd.Series([f"Cluster {i + 1}" for i in cluster_labels])
+                        pd.Series([display_cluster_name(i) for i in cluster_labels])
                         .value_counts()
                         .sort_index()
                     )
@@ -1839,6 +2105,196 @@ def main():
                 "PCA results are not available. Please compute PCA first in the PCA tab."
             )
 
+    # Hierarchical Clustering Tab
+    with tab_hierarchical:
+        st.header("Hierarchical Clustering")
+
+        if pca_results is not None and viz_data is not None:
+            # Get PCA transformed data for clustering
+            clustering_data = viz_data[
+                [col for col in viz_data.columns if col.startswith("PC")]
+            ]
+
+            # Input for number of clusters
+            n_clusters = st.slider(
+                "Number of Clusters", min_value=2, max_value=20, value=5
+            )
+
+            # Linkage method selection
+            linkage_method = st.selectbox(
+                "Linkage Method",
+                ["ward", "complete", "average", "single"],
+                help=(
+                    "ward: minimizes variance within clusters\n"
+                    "complete: maximizes distance between clusters (furthest neighbor)\n"
+                    "average: uses average distance between clusters\n"
+                    "single: minimizes distance between clusters (nearest neighbor)"
+                ),
+            )
+
+            # Add truncation options
+            truncate_options = st.columns(2)
+            with truncate_options[0]:
+                truncate_mode = st.selectbox(
+                    "Truncation Mode",
+                    [None, "lastp", "level"],
+                    help=(
+                        "None: Show full dendrogram\n"
+                        "lastp: Show only last p levels\n"
+                        "level: Collapse clusters below level"
+                    ),
+                )
+            with truncate_options[1]:
+                if truncate_mode:
+                    p_value = st.slider(
+                        "Truncation Level (p)",
+                        min_value=2,
+                        max_value=50,
+                        value=10,
+                        help="Number of levels to show in truncated dendrogram",
+                    )
+                else:
+                    p_value = None
+
+            # Add cut height option
+            cut_height = st.slider(
+                "Cut Height",
+                min_value=0.0,
+                max_value=100.0,
+                value=None,
+                help="Height at which to draw horizontal cut line",
+            )
+
+            # Button to run clustering
+            if st.button("Run Hierarchical Clustering"):
+                with st.spinner("Running hierarchical clustering..."):
+                    # Create dendrogram
+                    fig_dendro, linkage_matrix = create_dendrogram(
+                        clustering_data,
+                        method=linkage_method,
+                        truncate_mode=truncate_mode,
+                        p=p_value,
+                        max_d=cut_height if cut_height else None,
+                    )
+                    st.plotly_chart(fig_dendro, use_container_width=True)
+
+                    # Perform clustering with the selected number of clusters
+                    results = perform_hierarchical_clustering(
+                        clustering_data, n_clusters, linkage_method
+                    )
+
+                    # Store results in session state
+                    st.session_state.hierarchical_results = results
+
+            # Show clustering results if available
+            if "hierarchical_results" in st.session_state:
+                results = st.session_state.hierarchical_results
+                cluster_labels = results["labels"]
+
+                # Create scatter plot
+                st.subheader("Cluster Visualization")
+
+                # Get PCA components for visualization
+                col1, col2 = st.columns(2)
+                with col1:
+                    x_component = st.selectbox(
+                        "X-axis Component",
+                        [f"PC{i+1}" for i in range(clustering_data.shape[1])],
+                        index=0,
+                        key="hierarchical_x_select",
+                    )
+                with col2:
+                    y_component = st.selectbox(
+                        "Y-axis Component",
+                        [f"PC{i+1}" for i in range(clustering_data.shape[1])],
+                        index=1,
+                        key="hierarchical_y_select",
+                    )
+
+                # Create and display clustering scatter plot
+                fig_scatter = create_pca_scatter(
+                    viz_data,
+                    x_component,
+                    y_component,
+                    cluster_labels=cluster_labels,
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+
+                # Show cluster analysis
+                cluster_analysis_tab1, cluster_analysis_tab2 = st.tabs(
+                    ["Cluster Sizes", "Feature Importance"]
+                )
+
+                with cluster_analysis_tab1:
+                    # Show cluster sizes
+                    cluster_sizes = (
+                        pd.Series([f"Cluster {i + 1}" for i in cluster_labels])
+                        .value_counts()
+                        .sort_index()
+                    )
+                    n_clusters = len(cluster_sizes)
+                    color_map = get_cluster_colors(n_clusters)
+                    fig_sizes = px.bar(
+                        x=cluster_sizes.index,
+                        y=cluster_sizes.values,
+                        labels={"x": "Cluster", "y": "Number of Games"},
+                        title=f"Distribution of Games Across {n_clusters} Clusters",
+                        color=cluster_sizes.index,
+                        color_discrete_sequence=[
+                            color_map[str(i)] for i in range(n_clusters)
+                        ],
+                        category_orders={
+                            "color": [f"Cluster {i + 1}" for i in range(n_clusters)]
+                        },
+                    )
+                    st.plotly_chart(fig_sizes, use_container_width=True)
+
+                with cluster_analysis_tab2:
+                    # Show feature importance per cluster
+                    feature_importance = results["feature_importance"]
+
+                    # Create feature importance visualization
+                    selected_cluster = st.selectbox(
+                        "Select Cluster for Feature Analysis",
+                        [f"Cluster {i + 1}" for i in range(n_clusters)],
+                        key="hierarchical_importance_select",
+                    )
+                    selected_cluster_idx = int(selected_cluster.split()[-1]) - 1
+
+                    # Get feature importance for selected cluster
+                    cluster_importance = feature_importance[selected_cluster_idx]
+                    importance_df = pd.DataFrame(
+                        {
+                            "Feature": cluster_importance.index,
+                            "Importance": cluster_importance.values,
+                        }
+                    ).sort_values("Importance", ascending=True)
+
+                    # Show top 15 most important features
+                    cluster_color = color_map[str(selected_cluster_idx)]
+                    fig_importance = go.Figure()
+                    fig_importance.add_trace(
+                        go.Bar(
+                            y=importance_df["Feature"].tail(15),
+                            x=importance_df["Importance"].tail(15),
+                            orientation="h",
+                            marker_color=cluster_color,
+                        )
+                    )
+
+                    fig_importance.update_layout(
+                        title=f"Top 15 Most Important Features for {selected_cluster}",
+                        xaxis_title="Feature Importance (Z-score)",
+                        yaxis_title="Feature",
+                        height=600,
+                    )
+
+                    st.plotly_chart(fig_importance, use_container_width=True)
+        else:
+            st.warning(
+                "PCA results are not available. Please compute PCA first in the PCA tab."
+            )
+
     # GMM Tab
     with tab_gmm:
         st.header("Gaussian Mixture Model Clustering")
@@ -2105,9 +2561,7 @@ def main():
                         st.session_state.gmm_y_component = (
                             components[1]
                             if len(components) > 1
-                            else components[0]
-                            if components
-                            else None
+                            else components[0] if components else None
                         )
 
                     def on_x_component_change():
@@ -2670,12 +3124,21 @@ def main():
             col1, col2 = st.columns(2)
 
             with col1:
-                # Dropdown to select number of clusters
+                # Dropdown to select number of clusters with state management
+                def on_neighbor_k_change():
+                    st.session_state.selected_k = st.session_state.neighbor_k_select
+
                 selected_k = st.selectbox(
                     "Select Number of Clusters",
                     available_k_values,
+                    index=(
+                        available_k_values.index(st.session_state.selected_k)
+                        if st.session_state.selected_k in available_k_values
+                        else 0
+                    ),
                     format_func=lambda x: f"k={x.split('_')[1]}",
                     key="neighbor_k_select",
+                    on_change=on_neighbor_k_change,
                 )
 
             with col2:
@@ -2859,8 +3322,8 @@ def main():
                     x=st.session_state.kmeans_x_component,
                     y=st.session_state.kmeans_y_component,
                     color_discrete_map={
-                        "Selected Cluster": "lightblue",
-                        "Nearest Neighbors": "blue",
+                        f"Cluster {selected_game_cluster + 1}": "lightblue",
+                        f"Nearest Neighbors in Cluster {selected_game_cluster + 1}": "blue",
                         "Other Clusters": "lightgrey",
                     },
                     title=f"Cluster {selected_game_cluster + 1} Visualization",
