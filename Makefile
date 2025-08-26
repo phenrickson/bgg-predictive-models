@@ -69,6 +69,7 @@ years:
 
 
 # model types
+LINEAR ?= linear
 CATBOOST ?= catboost
 LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
@@ -85,11 +86,22 @@ COMPLEXITY_PREPROCESSOR ?= tree
 RATING_PREPROCESSOR ?= tree
 USERS_RATED_PREPROCESSOR ?= tree
 
-### train all model candidates
+## train all model candidates
 .PHONY: models
 models: hurdle complexity rating users_rated
 
-## train hurdle moodel
+## register models
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register
+register: register_complexity register_rating register_users_rated register_hurdle
+
+# train models
+hurdle: train_hurdle finalize_hurdle score_hurdle
+complexity: train_complexity finalize_complexity score_complexity
+rating: train_rating finalize_rating score_rating
+users_rated: train_users_rated finalize_users_rated score_users_rated
+
+## train individual models
+# hurdle model
 HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
 train_hurdle:
 	uv run -m src.models.hurdle \
@@ -112,12 +124,9 @@ score_hurdle:
 	--model-type hurdle \
 	--experiment $(HURDLE_CANDIDATE)
 
-hurdle: train_hurdle finalize_hurdle score_hurdle
-
-
 ## complexity model
 COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
-COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/catboost-complexity.parquet
+COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/?(COMPLEXITY_CANDIDATE).parquet
 train_complexity:
 	uv run -m src.models.complexity \
 	--preprocessor-type $(COMPLEXITY_PREPROCESSOR) \
@@ -140,9 +149,7 @@ score_complexity:
 	--model-type complexity \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
-complexity: train_complexity finalize_complexity score_complexity
-
-## rating model
+# rating model
 RATING_CANDIDATE ?= $(RATING_MODEL)-rating
 train_rating:
 	uv run -m src.models.rating \
@@ -169,10 +176,9 @@ score_rating:
 	--experiment $(RATING_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
-rating: train_rating finalize_rating score_rating
-
 ## users rated
 USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
+
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--preprocessor-type tree \
@@ -198,8 +204,6 @@ score_users_rated:
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
-users_rated: train_users_rated finalize_users_rated score_users_rated
-
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
@@ -211,14 +215,13 @@ geek_rating:
 	--users-rated $(USERS_RATED_CANDIDATE)
 	--experiment estimated-geek-rating
 
-# evaluate
-OUTPUT_DIR ?= ./models/experiments
-.PHONY: train
-train:
+# evaluate over time
+.PHONY: evaluate
+evaluate:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2021 \
+	--start-year 2016
 	--end-year 2022 \
-	--output-dir $(OUTPUT_DIR) \
+	--output-dir ./models/experiments
     --model-args \
         hurdle.preprocessor-type=tree \
         hurdle.model=lightgbm \
@@ -273,8 +276,6 @@ register_hurdle:
 	--name hurdle-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
 
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register
-register: register_complexity register_rating register_users_rated register_hurdle
 
 ## view experiments
 experiment_dashboard:
@@ -295,6 +296,18 @@ clean_experiments:
 	@read -p "Are you sure? (y/n) " confirm; \
 	if [ "$$confirm" = "y" ]; then \
 		rm -rf models/experiments/*/; \
+		echo "Subfolders deleted."; \
+	else \
+		echo "Aborted."; \
+	fi
+
+# remove local predictions
+.PHONY: clean_predictions
+clean_predictions:
+	@echo "This will delete all subfolders in data/predictions/"
+	@read -p "Are you sure? (y/n) " confirm; \
+	if [ "$$confirm" = "y" ]; then \
+		rm -rf data/predictions/*/; \
 		echo "Subfolders deleted."; \
 	else \
 		echo "Aborted."; \

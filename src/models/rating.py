@@ -141,9 +141,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--preprocessor-type",
         type=str,
-        default="linear",
-        choices=["linear", "tree"],
-        help="Type of preprocessor to use",
+        default="auto",
+        choices=["auto", "linear", "tree"],
+        help="Type of preprocessor to use (auto: automatically select based on model type)",
     )
 
     args = parser.parse_args()
@@ -316,6 +316,7 @@ def main():
     model, param_grid = configure_model(args.model)
     preprocessor = create_preprocessing_pipeline(
         model_type=args.preprocessor_type,
+        model_name=args.model,
         preserve_columns=["year_published", "predicted_complexity"],
     )
     pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])

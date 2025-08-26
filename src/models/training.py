@@ -184,27 +184,75 @@ def select_X_y(
         return X, y
 
 
-def create_preprocessing_pipeline(model_type: str = "linear", **kwargs) -> Pipeline:
+def create_preprocessing_pipeline(
+    model_type: str = "auto", model_name: str = None, **kwargs
+) -> Pipeline:
     """
     Create a flexible preprocessing pipeline with configurable parameters.
 
     Args:
-        model_type : str, optional (default='linear')
+        model_type : str, optional (default='auto')
             Type of preprocessor to create.
             Options:
+            - 'auto': Automatically select preprocessor type based on model_name
             - 'linear': Full preprocessing with scaling and transformations
             - 'tree': Minimal preprocessing suitable for tree-based models
+        model_name : str, optional
+            Name of the model to use for automatic preprocessor selection.
+            Required when model_type='auto'.
         **kwargs: Keyword arguments to customize preprocessing
 
     Returns:
         Scikit-learn Pipeline with preprocessing steps
 
     Raises:
-        ValueError: If an unsupported model_type is provided
+        ValueError: If an unsupported model_type is provided or if model_name is required but not provided
     """
+    # Mapping of model names to their recommended preprocessor types
+    MODEL_TO_PREPROCESSOR = {
+        # Linear models - benefit from scaling and transformations
+        "linear": "linear",
+        "ridge": "linear",
+        "lasso": "linear",
+        "logistic": "linear",
+        "svc": "linear",
+        # Tree-based models - work better with minimal preprocessing
+        "lightgbm": "tree",
+        "catboost": "tree",
+        "rf": "tree",
+        "random_forest": "tree",
+        "lightgbm_linear": "tree",  # Still tree-based despite linear leaves
+    }
+
+    # Determine the actual preprocessor type to use
+    if model_type == "auto":
+        if model_name is None:
+            raise ValueError("model_name must be provided when model_type='auto'")
+
+        # Look up the preprocessor type for this model
+        if model_name not in MODEL_TO_PREPROCESSOR:
+            raise ValueError(
+                f"Unknown model name '{model_name}' for automatic preprocessor selection. "
+                f"Supported models: {list(MODEL_TO_PREPROCESSOR.keys())}. "
+                f"Use model_type='linear' or 'tree' for manual selection."
+            )
+
+        actual_model_type = MODEL_TO_PREPROCESSOR[model_name]
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Auto-selected '{actual_model_type}' preprocessor for model '{model_name}'"
+        )
+    elif model_type in ["linear", "tree"]:
+        actual_model_type = model_type
+    else:
+        raise ValueError(
+            f"Unsupported model_type: '{model_type}'. "
+            f"Choose from 'auto', 'linear', or 'tree'."
+        )
+
     # Default preprocessing configuration
     default_config = {
-        "model_type": model_type,  # Add model_type to default config
+        "model_type": actual_model_type,  # Use the determined model type
         "reference_year": 2000,
         "normalization_factor": 25,
         "log_columns": ["min_age", "min_playtime", "max_playtime"],
