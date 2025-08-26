@@ -5,11 +5,18 @@ import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock
 
+from tests.conftest import check_experiments_exist
 from src.models.geek_rating import (
     load_all_models,
     predict_game,
     calculate_geek_rating,
     predict_geek_rating,
+)
+
+# Skip entire module if experiments are not available
+pytestmark = pytest.mark.skipif(
+    not check_experiments_exist(),
+    reason="Required experiments not available (need experiments in hurdle, complexity, rating, and users_rated folders)",
 )
 
 
