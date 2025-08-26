@@ -75,7 +75,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--min-ratings",
         type=int,
-        default=25,
+        default=5,
         help="Minimum number of ratings threshold",
     )
     parser.add_argument("--output-dir", type=str, default="./models/experiments")
