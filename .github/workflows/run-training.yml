@@ -5,31 +5,11 @@ on:
     branches:
       - 'model/*'
   workflow_dispatch:
-    inputs:
-      start_year:
-        description: 'Start year for evaluation'
-        required: false
-        default: '2020'
-        type: string
-      end_year:
-        description: 'End year for evaluation'
-        required: false
-        default: '2021'
-        type: string
-      output_dir:
-        description: 'Output directory path (default: models/experiments)'
-        required: false
-        default: 'models/experiments'
-        type: string
-      model_args:
-        description: 'Model arguments (space-separated list of model.key=value)'
-        required: false
-        type: string
 
 jobs:
   run-training:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
     
     permissions:
       contents: read
@@ -38,32 +18,79 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
-    - name: Setup credentials
+    - name: Run training job
       run: |
-        mkdir -p credentials
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
-
-    - name: Run Training
-      run: |
-        # Construct GCS output path
-        GCS_OUTPUT_PATH="gs://${{ vars.GCS_BUCKET_NAME }}/${{ inputs.output_dir }}"
+        # Create unique job name
+        JOB_NAME="bgg-training-${{ github.run_id }}"
         
-        docker run \
-          -e GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          -e GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
-          -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-          -v ./credentials:/app/credentials \
-          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
-          uv run train.py \
-            --start-year ${{ inputs.start_year }} \
-            --end-year ${{ inputs.end_year }} \
-            --output-dir "${GCS_OUTPUT_PATH}" \
-            ${{ inputs.model_args != '' && format('--model-args {0}', inputs.model_args) || '' }}
+        echo "Creating Cloud Run job: ${JOB_NAME}"
+        
+        # Create Cloud Run job
+        gcloud run jobs create ${JOB_NAME} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
+          --region us-central1 \
+          --memory 16Gi \
+          --cpu 4 \
+          --max-retries 0 \
+          --task-timeout 3600 \
+          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --command="bash" \
+          --args="-c,ls -la && pwd && make help"
+
+        # Execute the job and wait for completion
+        echo "Starting Cloud Run job execution..."
+        EXECUTION_OUTPUT=$(gcloud run jobs execute ${JOB_NAME} \
+          --region us-central1 \
+          --wait 2>&1)
+        echo "$EXECUTION_OUTPUT"
+        
+        # Extract execution ID from output
+        EXECUTION_ID=$(echo "$EXECUTION_OUTPUT" | grep -o "${JOB_NAME}-[0-9a-z\-]*" | head -1)
+        
+        if [ -n "$EXECUTION_ID" ]; then
+          echo "Execution ID: $EXECUTION_ID"
+          
+          # Get all logs from the execution
+          echo "Fetching complete logs for execution $EXECUTION_ID"
+          gcloud run jobs executions logs read $EXECUTION_ID \
+            --region us-central1 \
+            --project ${{ vars.GCP_PROJECT_ID }}
+          
+          # Log job URL for reference
+          echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
+          
+          # Check if job succeeded
+          STATUS=$(gcloud run jobs executions describe $EXECUTION_ID \
+            --region us-central1 \
+            --format='get(condition.type)')
+          
+          # Clean up the job
+          echo "Cleaning up job ${JOB_NAME}"
+          gcloud run jobs delete ${JOB_NAME} \
+            --region us-central1 \
+            --quiet || echo "Failed to delete job, may need manual cleanup"
+          
+          if [ "$STATUS" != "COMPLETED" ]; then
+            echo "Job failed with status: $STATUS"
+            exit 1
+          fi
+        else
+          echo "Failed to extract execution ID from output"
+          exit 1
+        fi
+        
+        echo "Training job completed. Check the logs above for results."

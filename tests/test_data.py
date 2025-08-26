@@ -37,19 +37,19 @@ def data_loader(bigquery_config):
 
 
 def test_games_features_view_exists(bigquery_config):
-    """Test that the games_features view exists and is accessible."""
+    """Test that the games_features_materialized view exists and is accessible."""
     client = bigquery_config.get_client()
 
-    # Query to check if view exists
+    # Query to check if view exists using proper information schema
     query = f"""
     SELECT table_name
-    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.__TABLES_SUMMARY__`
-    WHERE table_name = 'games_features'
+    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.INFORMATION_SCHEMA.TABLES`
+    WHERE table_name = 'games_features_materialized'
     """
 
     # Convert pandas DataFrame to Polars DataFrame
     result = pl.from_pandas(client.query(query).to_dataframe())
-    assert len(result) == 1, "games_features view does not exist"
+    assert len(result) == 1, "games_features_materialized view does not exist"
 
 
 def test_games_features_view_structure(bigquery_config):
@@ -59,7 +59,7 @@ def test_games_features_view_structure(bigquery_config):
     # Query to get a sample row
     query = f"""
     SELECT *
-    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.games_features`
+    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.games_features_materialized`
     LIMIT 1
     """
 
@@ -102,33 +102,37 @@ def test_games_features_view_structure(bigquery_config):
         "families",
     ]
     for col in array_columns:
-        assert isinstance(result[col][0].to_list(), list), (
-            f"Column {col} is not an array"
-        )
+        assert isinstance(
+            result[col][0].to_list(), list
+        ), f"Column {col} is not an array"
 
 
 def test_data_loader_training_data(data_loader):
     """Test loading training data from the view."""
-    # Load a small sample of training data
-    features, targets = data_loader.load_training_data(
-        end_train_year=2022, min_ratings=1000
-    )
+    # Load a small sample of training data (returns single DataFrame when no preprocessor)
+    data = data_loader.load_training_data(end_train_year=2022, min_ratings=1000)
 
     # Check that we got some data
-    assert len(features) > 0, "No training data loaded"
+    assert len(data) > 0, "No training data loaded"
 
-    # Check that targets have the expected keys
+    # Check that the data has the expected target columns
     expected_targets = ["hurdle", "complexity", "rating", "users_rated"]
     for target in expected_targets:
-        assert target in targets, f"Target {target} missing from targets"
+        assert target in data.columns, f"Target {target} missing from data"
 
-    # Check that features include one-hot encoded categories and mechanics
-    assert any(col.startswith("category_") for col in features.columns), (
-        "No category features found"
-    )
-    assert any(col.startswith("mechanic_") for col in features.columns), (
-        "No mechanic features found"
-    )
+    # Check that the data has the expected feature columns
+    expected_features = [
+        "game_id",
+        "year_published",
+        "average_rating",
+        "average_weight",
+        "min_players",
+        "max_players",
+        "categories",
+        "mechanics",
+    ]
+    for feature in expected_features:
+        assert feature in data.columns, f"Feature {feature} missing from data"
 
 
 def test_data_loader_prediction_data(data_loader):
@@ -138,9 +142,3 @@ def test_data_loader_prediction_data(data_loader):
 
     # Check that we got exactly one game
     assert len(features) == 1, "Expected exactly one game in prediction data"
-
-    # Check that features include derived features
-    assert "player_range" in features.columns, "Derived feature 'player_range' missing"
-    assert "playtime_range" in features.columns, (
-        "Derived feature 'playtime_range' missing"
-    )

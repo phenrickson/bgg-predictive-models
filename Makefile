@@ -7,18 +7,26 @@ RAW_DIR := data/raw
 
 help:  ## Show this help message
 	@echo 'Usage:'
-	@echo '  make help         Show this help message'
-	@echo '  make all          Fetch all data from BigQuery'
-	@echo '  make clean        Remove generated data files'
-	@echo '  make clean_experiments  Remove all experiment subfolders'
-	@echo '  make clean_ratings      Remove rating experiment subfolders'
-	@echo
-	@echo 'Optional arguments:'
-	@echo '  OUTPUT_DIR       Directory to save data files (default: data/raw)'
-	@echo '  MIN_RATINGS      Minimum number of ratings threshold (default: 25)'
-	@echo
-	@echo 'Example:'
-	@echo '  make all OUTPUT_DIR=custom/path MIN_RATINGS=50'
+	@echo '  make help                        Show this help message'
+	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make clean_experiments           Remove all experiment subfolders'
+	@echo '  make clean_predictions           Remove data/prediction subfolders'
+	@echo '  make requirements                Install/update Python dependencies'
+	@echo '  make format                      Format code using ruff'
+	@echo '  make lint                        Lint code using ruff'
+	@echo '  make models                      Train all model candidates'
+	@echo '  make register                    Register all models to scoring service'
+	@echo '  make years                       Show year configuration for model training'
+	@echo '  make evaluate                    Evaluate models over time'
+	@echo '  make predictions                 Generate predictions using trained models'
+	@echo '  make experiment_dashboard        Launch experiment dashboard'
+	@echo '  make geek_rating_dashboard       Launch geek rating dashboard'
+	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
+	@echo '  make upload_experiments          Upload experiments to Google Cloud Storage'
+	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
+	@echo '  make docker-training             Build and run training Docker image locally'
+	@echo '  make docker-scoring              Build and run scoring Docker image locally'
+	@echo '  make scoring-service             Run scoring service locally'
 
 # requirements
 .PHONY: requirements format lint
@@ -31,22 +39,76 @@ format:
 lint:
 	uv run ruff check .
 
-# Target for features file - this is what keeps track of freshness
-$(RAW_DIR)/game_features.parquet: src/data/games_features_materialized_view.sql src/data/get_raw_data.py src/data/loader.py
-	uv run -m src.data.get_raw_data
-
 ## fetch raw data from BigQuery
 .PHONY: data
-data: $(RAW_DIR)/game_features.parquet
+data: 
+	uv run -m src.data.get_raw_data
 
-## train hurdle moodel
-HURDLE_CANDIDATE ?= linear-hurdle
+## set years for training, tuning, testing
+CURRENT_YEAR = 2025
+TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
+TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
+TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
+TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
 
+# show years
+.PHONY: years
+years: 
+	@echo "=== Year Configuration for Model Training ==="
+	@echo "Current Year: $(CURRENT_YEAR)"
+	@echo ""
+	@echo "=== Dataset Year Ranges ==="
+	@echo "Training Data:   [earliest] to $(TRAIN_END_YEAR) (exclusive)"
+	@echo "Tuning Data:     $(TRAIN_END_YEAR) to $(TUNE_END_YEAR) (inclusive)"
+	@echo "Testing Data:    $(TEST_START_YEAR) to $(TEST_END_YEAR) (inclusive)"
+	@echo ""
+	@echo "=== Usage in Model Scripts ==="
+	@echo "• Training uses all data before $(TRAIN_END_YEAR)"
+	@echo "• Tuning/validation uses data from $(TRAIN_END_YEAR) to $(TUNE_END_YEAR)"
+	@echo "• Testing uses data from $(TEST_START_YEAR) to $(TEST_END_YEAR)"
+	@echo "• Time-based evaluation uses rolling windows with these ranges"
+
+
+# model types
+LINEAR ?= linear
+RIDGE ?= ridge
+LOGISTIC ?= logistic
+CATBOOST ?= catboost
+LIGHTGBM ?= lightgbm
+LIGHTGBM_LINEAR ?= lightgbm_linear
+
+# set defaults
+HURDLE_MODEL = $(LOGISTIC)
+COMPLEXITY_MODEL = $(RIDGE)
+RATING_MODEL ?= $(RIDGE)
+USERS_RATED_MODEL ?= $(RIDGE)
+
+## train all model candidates and predict geek rating
+.PHONY: models
+models: hurdle complexity rating users_rated geek_rating
+
+## register models
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register
+register: register_complexity register_rating register_users_rated register_hurdle
+
+# train models
+hurdle: train_hurdle finalize_hurdle score_hurdle
+complexity: train_complexity finalize_complexity score_complexity
+rating: train_rating finalize_rating score_rating
+users_rated: train_users_rated finalize_users_rated score_users_rated
+
+## train individual models
+# hurdle model
+HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
 train_hurdle:
 	uv run -m src.models.hurdle \
 	--experiment $(HURDLE_CANDIDATE) \
-	--preprocessor-type linear \
-	--model logistic
+	--model $(HURDLE_MODEL) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_hurdle: 
 	uv run -m src.models.finalize_model \
@@ -58,35 +120,19 @@ score_hurdle:
 	--model-type hurdle \
 	--experiment $(HURDLE_CANDIDATE)
 
-hurdle: train_hurdle finalize_hurdle score_hurdle_tree
-
-## train hurdle moodel
-HURDLE_CANDIDATE_TREE ?= lightgbm-hurdle
-
-train_hurdle_tree:
-	uv run -m src.models.hurdle \
-	--experiment $(HURDLE_CANDIDATE_TREE) \
-	--preprocessor-type tree \
-	--model lightgbm
-
-finalize_hurdle_tree: 
-	uv run -m src.models.finalize_model \
-	--model-type hurdle \
-	--experiment $(HURDLE_CANDIDATE_TREE)
-
-score_hurdle_tree: 
-	uv run -m src.models.score \
-	--model-type hurdle
-	--experiment $(HURDLE_CANDIDATE_TREE)
-
-hurdle_tree: train_hurdle_tree finalize_hurdle_tree score_hurdle
-
 ## complexity model
-COMPLEXITY_CANDIDATE ?= test-complexity
+COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
+COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/$(COMPLEXITY_CANDIDATE).parquet
 train_complexity:
 	uv run -m src.models.complexity \
+	--model $(COMPLEXITY_MODEL) \
 	--use-sample-weights \
-	--experiment $(COMPLEXITY_CANDIDATE)
+	--experiment $(COMPLEXITY_CANDIDATE) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_complexity: 
 	uv run -m src.models.finalize_model \
@@ -98,38 +144,20 @@ score_complexity:
 	--model-type complexity \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
-complexity: train_complexity finalize_complexity score_complexity
-
-## complexity model
-COMPLEXITY_TREE_CANDIDATE ?= catboost-complexity
-train_complexity_tree:
-	uv run -m src.models.complexity \
-	--preprocessor-type tree \
-	--model catboost \
-	--use-sample-weights \
-	--experiment $(COMPLEXITY_TREE_CANDIDATE)
-
-finalize_complexity_tree: 
-	uv run -m src.models.finalize_model \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_TREE_CANDIDATE)
-
-score_complexity_tree: 
-	uv run -m src.models.score \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_TREE_CANDIDATE)
-
-complexity_tree: train_complexity_tree finalize_complexity_tree score_complexity_tree
-
-## rating model
-RATING_CANDIDATE ?= linear-rating
+# rating model
+RATING_CANDIDATE ?= $(RATING_MODEL)-rating
 train_rating:
 	uv run -m src.models.rating \
 	--use-sample-weights \
-	--min-ratings 5 \
-	--complexity-experiment test-complexity \
-	--local-complexity-path models/experiments/predictions/test-complexity.parquet \
-	--experiment $(RATING_CANDIDATE)
+	--model $(RATING_MODEL) \
+	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
+	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
+	--experiment $(RATING_CANDIDATE) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_rating: 
 	uv run -m src.models.finalize_model \
@@ -140,43 +168,23 @@ score_rating:
 	uv run -m src.models.score \
 	--model-type rating \
 	--experiment $(RATING_CANDIDATE) \
-	--complexity-predictions models/experiments/predictions/test-complexity.parquet
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
-rating: train_rating finalize_rating score_rating
+## users rated
+USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 
-## rating model
-RATING_TREE_CANDIDATE = catboost-rating
-train_rating_tree:
-	uv run -m src.models.rating \
-	--use-sample-weights \
-	--preprocessor-type tree \
-	--model catboost \
-	--min-ratings 5 \
-	--complexity-experiment catboost-complexity \
-	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
-	--experiment $(RATING_TREE_CANDIDATE)
-
-finalize_rating_tree: 
-	uv run -m src.models.finalize_model \
-	--model-type rating \
-	--experiment $(RATING_TREE_CANDIDATE)
-
-score_rating_tree:
-	uv run -m src.models.score \
-	--model-type rating \
-	--experiment $(RATING_TREE_CANDIDATE) \
-	--complexity-predictions models/experiments/predictions/catboost-complexity.parquet
-	
-rating_tree: train_rating_tree finalize_rating_tree score_rating_tree
-
-## users rated model
-USERS_RATED_CANDIDATE ?= linear-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
-	--complexity-experiment test-complexity \
-	--local-complexity-path models/experiments/predictions/test-complexity.parquet \
+	--model $(USERS_RATED_MODEL) \
+	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
+	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--min-ratings 0
+	--min-ratings 0 \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_users_rated: 
 	uv run -m src.models.finalize_model \
@@ -187,120 +195,76 @@ score_users_rated:
 	uv run -m src.models.score \
 	--model-type users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--complexity-predictions models/experiments/predictions/test-complexity.parquet
-
-users_rated: train_users_rated finalize_users_rated score_users_rated
-
-## users rated with catboost
-## users rated model
-USERS_RATED_TREE_CANDIDATE ?= lightgbm-users_rated
-train_users_rated_tree:
-	uv run -m src.models.users_rated \
-	--preprocessor-type tree \
-	--model lightgbm \
-	--complexity-experiment catboost-complexity \
-	--local-complexity-path models/experiments/predictions/catboost-complexity.parquet \
-	--experiment $(USERS_RATED_TREE_CANDIDATE) \
-	--min-ratings 0
-
-finalize_users_rated_tree: 
-	uv run -m src.models.finalize_model \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_TREE_CANDIDATE)
-
-score_users_rated_tree:
-	uv run -m src.models.score \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_TREE_CANDIDATE) \
-	--complexity-predictions models/experiments/predictions/catboost-complexity.parquet
-
-users_rated_tree: train_users_rated_tree finalize_users_rated_tree score_users_rated_tree
-
-# run all models
-linear_models: hurdle complexity rating users_rated
-tree_models: complexity_tree rating_tree users_rated_tree
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
-	--start-year 2024 \
-	--end-year 2029 \
-	--hurdle linear-hurdle \
-	--complexity catboost-complexity \
-	--rating catboost-rating \
-	--users-rated lightgbm-users_rated \
-	--experiment calculated-geek-rating
+	--start-year $(TEST_START_YEAR) \
+	--end-year $(TEST_END_YEAR) \
+	--hurdle $(HURDLE_CANDIDATE) \
+	--complexity $(COMPLEXITY_CANDIDATE) \
+	--rating $(RATING_CANDIDATE) \
+	--users-rated $(USERS_RATED_CANDIDATE) \
+	--experiment estimated-geek-rating
+
+# evaluate over time
+.PHONY: evaluate
+evaluate:
+	uv run -m src.models.time_based_evaluation \
+	--start-year 2016
+	--end-year 2022 \
+	--output-dir ./models/experiments
+    --model-args \
+		hurdle.model= $(HURDLE_MODEL) \
+        complexity.model=$(COMPLEXITY_MODEL) \
+        complexity.use-sample-weights=true \
+        rating.model=$(RATING_MODEL) \
+        rating.min-ratings=5 \
+        rating.use-sample-weights=true \
+        users_rated.model=$(USERS_RATED_MODEL) \
+        users_rated.min-ratings=0
 
 # predictions
 predictions: 
 	uv run predict.py \
 	--start-year 0 \
 	--end-year 2029 \
-	--hurdle linear-hurdle \
-	--complexity catboost-complexity \
-	--rating catboost-rating \
-	--users-rated lightgbm-users_rated
-
-# evaluate
-evaluation:
-	uv run -m src.models.time_based_evaluation \
-	--start-year 2016 \
-	--end-year 2021 \
-    --model-args \
-        hurdle.preprocessor-type=linear \
-        hurdle.model=logistic \
-        complexity.preprocessor-type=tree \
-        complexity.model=catboost \
-		complexty.model=use-sample-weights \
-        rating.preprocessor-type=tree \
-        rating.model=catboost \
-		rating.min-ratings=5 \
-		rating.use-sample-weights \
-		users_rated.preprocessor-type=tree \
-		users_rated.model=lightgbm \
-		users_rated.min-ratings=0
+	--hurdle $(HURDLE_CANDIDATE) \
+	--complexity $(COMPLEXITY_CANDIDATE) \
+	--rating $(RATING_CANDIDATE)
+	--users-rated $(USERS_RATED_CANDIDATE)
 
 ### register model candidates
 # register models
 register_complexity:
 	uv run -m scoring_service.register_model \
 	--model-type complexity \
-	--experiment catboost-complexity \
-	--name complexity-v2025 \
-	--description "Production (v2025) model for predicting game complexity"
+	--experiment $(COMPLEXITY_CANDIDATE) \
+	--name complexity-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) model for predicting game complexity"
 
 register_rating:
 	uv run -m scoring_service.register_model \
 	--model-type rating \
-	--experiment catboost-rating \
-	--name rating-v2025 \
-	--description "Production (v2025) model for predicting game rating"
+	--experiment $(RATING_CANDIDATE) \
+	--name rating-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) model for predicting game rating"
 
 register_users_rated:
 	uv run -m scoring_service.register_model \
 	--model-type users_rated \
-	--experiment lightgbm-users_rated \
-	--name users_rated-v2025 \
-	--description "Production (v2025) model for predicting users_rated"
+	--experiment $(USERS_RATED_CANDIDATE) \
+	--name users_rated-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) model for predicting users_rated"
 
 register_hurdle:
 	uv run -m scoring_service.register_model \
 	--model-type hurdle \
-	--experiment lightgbm-hurdle \
-	--name hurdle-v2025 \
-	--description "Production (v2025) model for predicting whether games will achieve ratings (hurdle)"
+	--experiment $(HURDLE_CANDIDATE) \
+	--name hurdle-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
 
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register
-register: register_complexity register_rating register_users_rated register_hurdle
-
-## train finalize and register models
-model_hurdle: train_hurdle_tree finalize_hurdle_tree register_hurdle
-model_complexity: train_complexity_tree finalize_complexity_tree register_complexity
-model_rating: train_rating_tree finalize_rating_tree register_rating
-model_users_rated: train_users_rated_tree finalize_users_rated_tree register_users_rated
-
-### train model candidates
-models: model_hurdle model_complexity model_rating model_users_rated
 
 ## view experiments
 experiment_dashboard:
@@ -326,26 +290,14 @@ clean_experiments:
 		echo "Aborted."; \
 	fi
 
-# remove rating experiments
-.PHONY: clean_ratings
-clean_ratings:
-	@echo "This will delete rating experiment subfolders in models/experiments/"
+# remove local predictions
+.PHONY: clean_predictions
+clean_predictions:
+	@echo "This will delete all subfolders in data/predictions/"
 	@read -p "Are you sure? (y/n) " confirm; \
 	if [ "$$confirm" = "y" ]; then \
-		rm -rf models/experiments/rating/*/; \
-		echo "Rating experiment subfolders deleted."; \
-	else \
-		echo "Aborted."; \
-	fi
-
-# remove users rated experiments
-.PHONY: clean_users_rated
-clean_users_rated:
-	@echo "This will delete users rated experiment subfolders in models/experiments/"
-	@read -p "Are you sure? (y/n) " confirm; \
-	if [ "$$confirm" = "y" ]; then \
-		rm -rf models/experiments/users_rated/*/; \
-		echo "Users rated experiment subfolders deleted."; \
+		rm -rf data/predictions/*/; \
+		echo "Subfolders deleted."; \
 	else \
 		echo "Aborted."; \
 	fi
@@ -375,13 +327,14 @@ docker-scoring:
 	--env-file .env \
 	bgg-scoring:test
 
+# run scoring service locally
 scoring-service:
 	uv run -m scoring_service.score \
     --service-url http://localhost:8080 \
-    --start-year 2024 \
+    --start-year 2025 \
     --end-year 2029 \
-    --hurdle-model hurdle-v2025 \
-    --complexity-model complexity-v2025 \
-    --rating-model rating-v2025 \
-    --users-rated-model users_rated-v2025 \
+    --hurdle-model hurdle-v$(CURRENT_YEAR) \
+    --complexity-model complexity-v$(CURRENT_YEAR) \
+    --rating-model rating-v$(CURRENT_YEAR) \
+    --users-rated-model users_rated-v$(CURRENT_YEAR) \
     --download

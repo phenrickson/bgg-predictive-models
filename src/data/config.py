@@ -51,12 +51,16 @@ class BigQueryConfig:
             raise
 
 
-def load_config(config_path: Optional[str] = None) -> BigQueryConfig:
+def load_config(
+    config_path: Optional[str] = None, use_service_account: Optional[bool] = None
+) -> BigQueryConfig:
     """Load BigQuery configuration from YAML file.
 
     Args:
         config_path: Path to config YAML file. If not provided,
             defaults to src/data/config.yaml
+        use_service_account: If True, use service account file. If False, use default credentials.
+            If None, auto-detect based on environment and file existence.
 
     Returns:
         BigQuery configuration
@@ -80,10 +84,37 @@ def load_config(config_path: Optional[str] = None) -> BigQueryConfig:
     # Get project ID from environment or default
     project_id = os.getenv("GCP_PROJECT_ID", "gcp-demos-411520")
 
-    # Explicitly set credentials path from .env
-    credentials_path = os.path.join(
-        Path(__file__).parent.parent.parent, "credentials", "service-account-key.json"
-    )
+    # Determine credentials approach
+    credentials_path = None
+
+    if use_service_account is True:
+        # Explicitly requested service account
+        credentials_path = os.path.join(
+            Path(__file__).parent.parent.parent,
+            "credentials",
+            "service-account-key.json",
+        )
+    elif use_service_account is False:
+        # Explicitly requested default credentials
+        credentials_path = None
+    else:
+        # Auto-detect: only use service account if file exists AND not in Cloud Run
+        potential_path = os.path.join(
+            Path(__file__).parent.parent.parent,
+            "credentials",
+            "service-account-key.json",
+        )
+
+        # Check if we're in Cloud Run (common environment variables)
+        in_cloud_run = (
+            os.getenv("K_SERVICE") is not None  # Cloud Run service name
+            or os.getenv("GOOGLE_CLOUD_PROJECT") is not None  # GCP project in Cloud Run
+            or os.getenv("GAE_ENV") is not None  # App Engine (similar environment)
+        )
+
+        if not in_cloud_run and os.path.exists(potential_path):
+            credentials_path = potential_path
+        # Otherwise, credentials_path stays None (use default credentials)
 
     return BigQueryConfig(
         project_id=project_id,
