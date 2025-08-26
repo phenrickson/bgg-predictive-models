@@ -176,7 +176,7 @@ USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--model $(USERS_RATED_MODEL) \
-	--complexity-experiment $(COMPLEXITY_EXPERIMENT) \
+	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--min-ratings 0 \
@@ -200,12 +200,12 @@ score_users_rated:
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
-	--start-year $(CURRENT_YEAR) -1 \
+	--start-year $(TEST_START_YEAR) \
 	--end-year $(TEST_END_YEAR) \
 	--hurdle $(HURDLE_CANDIDATE) \
-	--complexity $(COMPLEXITY_CANDIDATE)
+	--complexity $(COMPLEXITY_CANDIDATE) \
 	--rating $(RATING_CANDIDATE) \
-	--users-rated $(USERS_RATED_CANDIDATE)
+	--users-rated $(USERS_RATED_CANDIDATE) \
 	--experiment estimated-geek-rating
 
 # evaluate over time
@@ -331,8 +331,8 @@ docker-scoring:
 scoring-service:
 	uv run -m scoring_service.score \
     --service-url http://localhost:8080 \
-    --start-year $(CURRENT_YEAR)-1 \
-    --end-year $(CURRENT_YEAR)+5 \
+    --start-year 2025 \
+    --end-year 2029 \
     --hurdle-model hurdle-v$(CURRENT_YEAR) \
     --complexity-model complexity-v$(CURRENT_YEAR) \
     --rating-model rating-v$(CURRENT_YEAR) \
