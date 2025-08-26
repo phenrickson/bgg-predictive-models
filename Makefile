@@ -7,18 +7,26 @@ RAW_DIR := data/raw
 
 help:  ## Show this help message
 	@echo 'Usage:'
-	@echo '  make help         Show this help message'
-	@echo '  make all          Fetch all data from BigQuery'
-	@echo '  make clean        Remove generated data files'
-	@echo '  make clean_experiments  Remove all experiment subfolders'
-	@echo '  make clean_ratings      Remove rating experiment subfolders'
-	@echo
-	@echo 'Optional arguments:'
-	@echo '  OUTPUT_DIR       Directory to save data files (default: data/raw)'
-	@echo '  MIN_RATINGS      Minimum number of ratings threshold (default: 25)'
-	@echo
-	@echo 'Example:'
-	@echo '  make all OUTPUT_DIR=custom/path MIN_RATINGS=50'
+	@echo '  make help                        Show this help message'
+	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make clean_experiments           Remove all experiment subfolders'
+	@echo '  make clean_predictions           Remove data/prediction subfolders'
+	@echo '  make requirements                Install/update Python dependencies'
+	@echo '  make format                      Format code using ruff'
+	@echo '  make lint                        Lint code using ruff'
+	@echo '  make models                      Train all model candidates'
+	@echo '  make register                    Register all models to scoring service'
+	@echo '  make years                       Show year configuration for model training'
+	@echo '  make evaluate                    Evaluate models over time'
+	@echo '  make predictions                 Generate predictions using trained models'
+	@echo '  make experiment_dashboard        Launch experiment dashboard'
+	@echo '  make geek_rating_dashboard       Launch geek rating dashboard'
+	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
+	@echo '  make upload_experiments          Upload experiments to Google Cloud Storage'
+	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
+	@echo '  make docker-training             Build and run training Docker image locally'
+	@echo '  make docker-scoring              Build and run scoring Docker image locally'
+	@echo '  make scoring-service             Run scoring service locally'
 
 # requirements
 .PHONY: requirements format lint
