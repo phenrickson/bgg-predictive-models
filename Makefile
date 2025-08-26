@@ -77,7 +77,7 @@ LIGHTGBM_LINEAR ?= lightgbm_linear
 HURDLE_MODEL = $(LIGHTGBM)
 COMPLEXITY_MODEL = $(CATBOOST)
 RATING_MODEL ?= $(CATBOOST)
-USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR
+USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR)
 
 # set preprocessors given model types
 HURDLE_PREPROCESSOR ?= tree
@@ -85,7 +85,7 @@ COMPLEXITY_PREPROCESSOR ?= tree
 RATING_PREPROCESSOR ?= tree
 USERS_RATED_PREPROCESSOR ?= tree
 
-### train model candidates
+### train all model candidates
 .PHONY: models
 models: hurdle complexity rating users_rated
 
@@ -149,7 +149,6 @@ train_rating:
 	--use-sample-weights \
 	--preprocessor-type $(RATING_PREPROCESSOR) \
 	--model $(RATING_MODEL) \
-	--min-ratings 5 \
 	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(RATING_CANDIDATE) \
@@ -173,7 +172,6 @@ score_rating:
 rating: train_rating finalize_rating score_rating
 
 ## users rated
-USERS_RATED_MODEL ?= $(LIGHTGBM)
 USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
