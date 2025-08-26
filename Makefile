@@ -75,16 +75,10 @@ LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
 # set defaults
-HURDLE_MODEL = $(LIGHTGBM)
-COMPLEXITY_MODEL = $(CATBOOST)
-RATING_MODEL ?= $(CATBOOST)
-USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR)
-
-# set preprocessors given model types
-HURDLE_PREPROCESSOR ?= tree
-COMPLEXITY_PREPROCESSOR ?= tree
-RATING_PREPROCESSOR ?= tree
-USERS_RATED_PREPROCESSOR ?= tree
+HURDLE_MODEL = $(LINEAR)
+COMPLEXITY_MODEL = $(LINEAR)
+RATING_MODEL ?= $(LINEAR)
+USERS_RATED_MODEL ?= $(LINEAR)
 
 ## train all model candidates
 .PHONY: models
@@ -107,7 +101,6 @@ train_hurdle:
 	uv run -m src.models.hurdle \
 	--experiment $(HURDLE_CANDIDATE) \
 	--model $(HURDLE_MODEL) \
-	--preprocessor-type $(HURDLE_PREPROCESSOR) \
 	--train-end-year $(TRAIN_END_YEAR) \
 	--tune-start-year $(TRAIN_END_YEAR) \
 	--tune-end-year $(TUNE_END_YEAR) \
@@ -129,7 +122,6 @@ COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
 COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/?(COMPLEXITY_CANDIDATE).parquet
 train_complexity:
 	uv run -m src.models.complexity \
-	--preprocessor-type $(COMPLEXITY_PREPROCESSOR) \
 	--model $(COMPLEXITY_MODEL) \
 	--use-sample-weights \
 	--experiment $(COMPLEXITY_CANDIDATE) \
@@ -154,7 +146,6 @@ RATING_CANDIDATE ?= $(RATING_MODEL)-rating
 train_rating:
 	uv run -m src.models.rating \
 	--use-sample-weights \
-	--preprocessor-type $(RATING_PREPROCESSOR) \
 	--model $(RATING_MODEL) \
 	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
@@ -181,7 +172,6 @@ USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 
 train_users_rated:
 	uv run -m src.models.users_rated \
-	--preprocessor-type tree \
 	--model $(USERS_RATED_MODEL) \
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
@@ -223,16 +213,12 @@ evaluate:
 	--end-year 2022 \
 	--output-dir ./models/experiments
     --model-args \
-        hurdle.preprocessor-type=tree \
         hurdle.model=lightgbm \
-        complexity.preprocessor-type=tree \
         complexity.model=catboost \
         complexity.use-sample-weights=true \
-        rating.preprocessor-type=tree \
         rating.model=catboost \
         rating.min-ratings=5 \
         rating.use-sample-weights=true \
-        users_rated.preprocessor-type=tree \
         users_rated.model=lightgbm_linear \
         users_rated.min-ratings=0
 
