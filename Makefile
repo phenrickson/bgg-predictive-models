@@ -36,25 +36,71 @@ lint:
 data: 
 	uv run -m src.data.get_raw_data
 
-## model types
+## set years for training, tuning, testing
 CURRENT_YEAR = 2025
-TRAIN_YEAR = $(CURRENT_YEAR) -4
-TUNE_YEAR = $(TEST_YEAR) -2
+TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
+TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
+TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
+TEST_END_YEAR = $(shell expr $(TEST_START_YEAR) + 1)
 
+# show years
+.PHONY: years
+years: 
+	@echo "=== Year Configuration for Model Training ==="
+	@echo "Current Year: $(CURRENT_YEAR)"
+	@echo ""
+	@echo "=== Dataset Year Ranges ==="
+	@echo "Training Data:   [earliest] to $(TRAIN_END_YEAR) (exclusive)"
+	@echo "Tuning Data:     $(TRAIN_END_YEAR) to $(TUNE_END_YEAR) (inclusive)"
+	@echo "Testing Data:    $(TEST_START_YEAR) to $(TEST_END_YEAR) (inclusive)"
+	@echo ""
+	@echo "=== Calculated Values ==="
+	@echo "TRAIN_END_YEAR:  $(TRAIN_END_YEAR)  ($(CURRENT_YEAR) - 4)"
+	@echo "TUNE_END_YEAR:   $(TUNE_END_YEAR)   ($(TRAIN_END_YEAR) + 1)"
+	@echo "TEST_START_YEAR: $(TEST_START_YEAR) ($(TUNE_END_YEAR) + 1)"
+	@echo "TEST_END_YEAR:   $(TEST_END_YEAR)   ($(TEST_START_YEAR) + 1)"
+	@echo ""
+	@echo "=== Usage in Model Scripts ==="
+	@echo "• Training uses all data before $(TRAIN_END_YEAR)"
+	@echo "• Tuning/validation uses data from $(TRAIN_END_YEAR) to $(TUNE_END_YEAR)"
+	@echo "• Testing uses data from $(TEST_START_YEAR) to $(TEST_END_YEAR)"
+	@echo "• Final models are trained on combined train+tune data"
+	@echo "• Time-based evaluation uses rolling windows with these ranges"
+
+
+# model types
 CATBOOST ?= catboost
 LIGHTGBM ?= lightgbm
-LINEAR ?= linear
-TREE ?= tree
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
-## train hurdle moodel
-HURDLE_CANDIDATE ?= lightgbm-hurdle
+# set defaults
+HURDLE_MODEL = $(LIGHTGBM)
+COMPLEXITY_MODEL = $(CATBOOST)
+RATING_MODEL ?= $(CATBOOST)
+USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR
 
+# set preprocessors given model types
+HURDLE_PREPROCESSOR ?= tree
+COMPLEXITY_PREPROCESSOR ?= tree
+RATING_PREPROCESSOR ?= tree
+USERS_RATED_PREPROCESSOR ?= tree
+
+### train model candidates
+.PHONY: models
+models: hurdle complexity rating users_rated
+
+## train hurdle moodel
+HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
 train_hurdle:
 	uv run -m src.models.hurdle \
 	--experiment $(HURDLE_CANDIDATE) \
-	--preprocessor-type linear
-	--model logistic
+	--model $(HURDLE_MODEL) \
+	--preprocessor-type $(HURDLE_PREPROCESSOR) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_hurdle: 
 	uv run -m src.models.finalize_model \
@@ -70,14 +116,19 @@ hurdle: train_hurdle finalize_hurdle score_hurdle
 
 
 ## complexity model
-COMPLEXITY_CANDIDATE ?= catboost-complexity
+COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
 COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/catboost-complexity.parquet
 train_complexity:
 	uv run -m src.models.complexity \
-	--preprocessor-type tree \
-	--model catboost \
+	--preprocessor-type $(COMPLEXITY_PREPROCESSOR) \
+	--model $(COMPLEXITY_MODEL) \
 	--use-sample-weights \
-	--experiment $(COMPLEXITY_CANDIDATE)
+	--experiment $(COMPLEXITY_CANDIDATE) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_complexity: 
 	uv run -m src.models.finalize_model \
@@ -92,14 +143,21 @@ score_complexity:
 complexity: train_complexity finalize_complexity score_complexity
 
 ## rating model
-RATING_CANDIDATE ?= catboost-rating
+RATING_CANDIDATE ?= $(RATING_MODEL)-rating
 train_rating:
 	uv run -m src.models.rating \
 	--use-sample-weights \
+	--preprocessor-type $(RATING_PREPROCESSOR) \
+	--model $(RATING_MODEL) \
 	--min-ratings 5 \
-	--complexity-experiment catboost-complexity \
+	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
-	--experiment $(RATING_CANDIDATE)
+	--experiment $(RATING_CANDIDATE) \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_rating: 
 	uv run -m src.models.finalize_model \
@@ -124,7 +182,12 @@ train_users_rated:
 	--complexity-experiment catboost-complexity \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--min-ratings 0
+	--min-ratings 0 \
+	--train-end-year $(TRAIN_END_YEAR) \
+	--tune-start-year $(TRAIN_END_YEAR) \
+	--tune-end-year $(TUNE_END_YEAR) \
+	--test-start-year $(TEST_START_YEAR) \
+	--test-end-year $(TEST_END_YEAR)
 
 finalize_users_rated: 
 	uv run -m src.models.finalize_model \
@@ -139,18 +202,16 @@ score_users_rated:
 
 users_rated: train_users_rated finalize_users_rated score_users_rated
 
-# run all models_models: complexiity rating users_rated
-
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
-	--start-year 2024 \
-	--end-year 2029 \
+	--start-year $(CURRENT_YEAR) -1 \
+	--end-year $(TEST_END_YEAR) \
 	--hurdle $(HURDLE_CANDIDATE) \
 	--complexity $(COMPLEXITY_CANDIDATE)
 	--rating $(RATING_CANDIDATE) \
 	--users-rated $(USERS_RATED_CANDIDATE)
-	--experiment calculated-geek-rating
+	--experiment estimated-geek-rating
 
 # evaluate
 OUTPUT_DIR ?= ./models/experiments
@@ -197,28 +258,25 @@ register_rating:
 	uv run -m scoring_service.register_model \
 	--model-type rating \
 	--experiment $(RATING_CANDIDATE) \
-	--name rating-$(CURRENT_YEAR)
+	--name rating-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting game rating"
 
 register_users_rated:
 	uv run -m scoring_service.register_model \
 	--model-type users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--name users_rated-v2025 \
+	--name users_rated-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting users_rated"
 
 register_hurdle:
 	uv run -m scoring_service.register_model \
 	--model-type hurdle \
 	--experiment $(HURDLE_CANDIDATE) \
-	--name hurdle-v2025 \
+	--name hurdle-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
 
 .PHONY: register_complexity register_rating register_users_rated register_hurdle register
 register: register_complexity register_rating register_users_rated register_hurdle
-
-### train model candidates
-models: hurdle complexity rating users_rated
 
 ## view experiments
 experiment_dashboard:
@@ -275,8 +333,8 @@ scoring-service:
     --service-url http://localhost:8080 \
     --start-year $(CURRENT_YEAR)-1 \
     --end-year $(CURRENT_YEAR)+5 \
-    --hurdle-model hurdle-v2025 \
-    --complexity-model complexity-v2025 \
-    --rating-model rating-v2025 \
-    --users-rated-model users_rated-v2025 \
+    --hurdle-model hurdle-v$(CURRENT_YEAR) \
+    --complexity-model complexity-v$(CURRENT_YEAR) \
+    --rating-model rating-v$(CURRENT_YEAR) \
+    --users-rated-model users_rated-v$(CURRENT_YEAR) \
     --download
