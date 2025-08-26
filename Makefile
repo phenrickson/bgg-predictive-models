@@ -176,7 +176,7 @@ USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--model $(USERS_RATED_MODEL) \
-	--complexity-experiment $(COMPLEXiTY_EXPERIMENT) \
+	--complexity-experiment $(COMPLEXITY_EXPERIMENT) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--min-ratings 0 \
@@ -216,13 +216,13 @@ evaluate:
 	--end-year 2022 \
 	--output-dir ./models/experiments
     --model-args \
-        hurdle.model=lightgbm \
-        complexity.model=catboost \
+		hurdle.model= $(HURDLE_MODEL) \
+        complexity.model=$(COMPLEXITY_MODEL) \
         complexity.use-sample-weights=true \
-        rating.model=catboost \
+        rating.model=$(RATING_MODEL) \
         rating.min-ratings=5 \
         rating.use-sample-weights=true \
-        users_rated.model=lightgbm_linear \
+        users_rated.model=$(USERS_RATED_MODEL) \
         users_rated.min-ratings=0
 
 # predictions

@@ -113,7 +113,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--complexity-experiment",
         type=str,
-        required=True,
         help="Name of complexity experiment to use for predictions",
     )
     parser.add_argument(
@@ -129,10 +128,16 @@ def parse_arguments() -> argparse.Namespace:
         help="Regression model type to use",
     )
     parser.add_argument(
+        "--quantile",
+        type=float,
+        default=0.5,
+        help="Quantile to use when model is 'quantile' (default: 0.5, median)",
+    )
+    parser.add_argument(
         "--metric",
         type=str,
         default="rmse",
-        choices=["rmse", "mae", "r2", "mape", "poisson_deviance"],
+        choices=["rmse", "mae", "r2", "mape"],
         help="Metric to optimize during hyperparameter tuning",
     )
     parser.add_argument(
@@ -145,7 +150,13 @@ def parse_arguments() -> argparse.Namespace:
         "--use-sample-weights",
         action="store_true",
         default=False,
-        help="Enable sample weights based on game complexity or other factors",
+        help="Enable sample weights based on number of ratings",
+    )
+    parser.add_argument(
+        "--sample-weight-column",
+        type=str,
+        default="users_rated",
+        help="Column to use for calculating sample weights (default: users_rated)",
     )
     parser.add_argument(
         "--preprocessor-type",
@@ -172,6 +183,10 @@ def parse_arguments() -> argparse.Namespace:
         raise ValueError(
             "Invalid year ranges. Must satisfy: tune_start <= tune_end < test_start <= test_end"
         )
+
+    # Validate quantile argument
+    if args.model == "quantile" and (args.quantile < 0 or args.quantile > 1):
+        raise ValueError("Quantile must be between 0 and 1")
 
     return args
 
