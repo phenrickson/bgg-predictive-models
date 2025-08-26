@@ -49,7 +49,7 @@ CURRENT_YEAR = 2025
 TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
 TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
 TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
-TEST_END_YEAR = $(shell expr $(TEST_START_YEAR) + 1)
+TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
 
 # show years
 .PHONY: years
@@ -62,35 +62,30 @@ years:
 	@echo "Tuning Data:     $(TRAIN_END_YEAR) to $(TUNE_END_YEAR) (inclusive)"
 	@echo "Testing Data:    $(TEST_START_YEAR) to $(TEST_END_YEAR) (inclusive)"
 	@echo ""
-	@echo "=== Calculated Values ==="
-	@echo "TRAIN_END_YEAR:  $(TRAIN_END_YEAR)  ($(CURRENT_YEAR) - 4)"
-	@echo "TUNE_END_YEAR:   $(TUNE_END_YEAR)   ($(TRAIN_END_YEAR) + 1)"
-	@echo "TEST_START_YEAR: $(TEST_START_YEAR) ($(TUNE_END_YEAR) + 1)"
-	@echo "TEST_END_YEAR:   $(TEST_END_YEAR)   ($(TEST_START_YEAR) + 1)"
-	@echo ""
 	@echo "=== Usage in Model Scripts ==="
 	@echo "• Training uses all data before $(TRAIN_END_YEAR)"
 	@echo "• Tuning/validation uses data from $(TRAIN_END_YEAR) to $(TUNE_END_YEAR)"
 	@echo "• Testing uses data from $(TEST_START_YEAR) to $(TEST_END_YEAR)"
-	@echo "• Final models are trained on combined train+tune data"
 	@echo "• Time-based evaluation uses rolling windows with these ranges"
 
 
 # model types
 LINEAR ?= linear
+RIDGE ?= ridge
+LOGISTIC ?= logistic
 CATBOOST ?= catboost
 LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
 # set defaults
-HURDLE_MODEL = $(LINEAR)
-COMPLEXITY_MODEL = $(LINEAR)
-RATING_MODEL ?= $(LINEAR)
-USERS_RATED_MODEL ?= $(LINEAR)
+HURDLE_MODEL = $(LOGISTIC)
+COMPLEXITY_MODEL = $(RIDGE)
+RATING_MODEL ?= $(RIDGE)
+USERS_RATED_MODEL ?= $(RIDGE)
 
-## train all model candidates
+## train all model candidates and predict geek rating
 .PHONY: models
-models: hurdle complexity rating users_rated
+models: hurdle complexity rating users_rated geek_rating
 
 ## register models
 .PHONY: register_complexity register_rating register_users_rated register_hurdle register
@@ -127,7 +122,7 @@ score_hurdle:
 
 ## complexity model
 COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
-COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/?(COMPLEXITY_CANDIDATE).parquet
+COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/$(COMPLEXITY_CANDIDATE).parquet
 train_complexity:
 	uv run -m src.models.complexity \
 	--model $(COMPLEXITY_MODEL) \
@@ -181,7 +176,7 @@ USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 train_users_rated:
 	uv run -m src.models.users_rated \
 	--model $(USERS_RATED_MODEL) \
-	--complexity-experiment catboost-complexity \
+	--complexity-experiment $(COMPLEXiTY_EXPERIMENT) \
 	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--min-ratings 0 \
