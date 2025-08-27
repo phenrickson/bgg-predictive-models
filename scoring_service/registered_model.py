@@ -3,7 +3,6 @@
 import json
 import pickle
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from google.cloud import storage
@@ -14,7 +13,7 @@ import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from src.models.experiments import Experiment, ExperimentTracker
+from src.models.experiments import Experiment, ExperimentTracker  # noqa: E402
 
 
 class ModelValidationError(Exception):

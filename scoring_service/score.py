@@ -1,21 +1,17 @@
 import argparse
 import requests
-import time
 from typing import Optional
-from pathlib import Path
-import json
 import os
 from dotenv import load_dotenv
 from google.cloud import storage
 
 import sys
-import os
 
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from src.utils.logging import setup_logging
+from src.utils.logging import setup_logging  # noqa: E402
 
 # Load environment variables
 load_dotenv()

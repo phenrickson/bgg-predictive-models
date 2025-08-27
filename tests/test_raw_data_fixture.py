@@ -1,6 +1,5 @@
 """Test the raw data fixture functionality."""
 
-import pytest
 from pathlib import Path
 
 

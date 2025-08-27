@@ -8,12 +8,14 @@ RAW_DIR := data/raw
 help:  ## Show this help message
 	@echo 'Usage:'
 	@echo '  make help                        Show this help message'
+	@echo '  make format                      Format code using ruff'
+	@echo '  make lint                        Lint code using ruff'
+	@echo '  make fix                         Fix linting issues using ruff'
 	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make test                        Run tests using pytest'
 	@echo '  make clean_experiments           Remove all experiment subfolders'
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make requirements                Install/update Python dependencies'
-	@echo '  make format                      Format code using ruff'
-	@echo '  make lint                        Lint code using ruff'
 	@echo '  make models                      Train all model candidates'
 	@echo '  make register                    Register all models to scoring service'
 	@echo '  make years                       Show year configuration for model training'
@@ -38,6 +40,12 @@ format:
 
 lint:
 	uv run ruff check .
+
+fix: 
+	uv run ruff check . --fix
+
+test:
+	uv run -m pytest tests/
 
 ## fetch raw data from BigQuery
 .PHONY: data
@@ -78,10 +86,10 @@ LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
 # set defaults
-HURDLE_MODEL = $(LOGISTIC)
-COMPLEXITY_MODEL = $(RIDGE)
-RATING_MODEL ?= $(RIDGE)
-USERS_RATED_MODEL ?= $(RIDGE)
+HURDLE_MODEL = $(LIGHTGBM)
+COMPLEXITY_MODEL = $(CATBOOST)
+RATING_MODEL ?= $(CATBOOST)
+USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR)
 
 ## train all model candidates and predict geek rating
 .PHONY: models

@@ -1,5 +1,4 @@
 import json
-import pickle
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -40,7 +39,7 @@ class CloudExperimentTracker(ExperimentTracker):
         blobs = self.bucket.list_blobs(prefix=self.base_prefix)
 
         # Track unique experiment names and their versions
-        experiment_versions = {}
+        experiment_versions = {}  # noqa: F841
 
         for blob in blobs:
             # Extract experiment name and version from blob path

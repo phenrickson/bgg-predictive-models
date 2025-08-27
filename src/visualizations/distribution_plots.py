@@ -8,8 +8,6 @@ import seaborn as sns
 import polars as pl
 
 # Project imports
-from src.data.config import load_config
-from src.data.loader import BGGDataLoader
 from src.models.training import load_data
 
 
@@ -78,8 +76,6 @@ def main():
     """
     Load data and create distribution plots
     """
-    # Load configuration and data
-    config = load_config()
 
     # Load data with a reasonable minimum ratings threshold
     df = load_data(min_ratings=0, end_train_year=2023)

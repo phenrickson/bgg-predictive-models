@@ -1,24 +1,19 @@
 import os
-import json
 from dotenv import load_dotenv
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import logging
 
-import polars as pl
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from google.cloud import storage
 
 import sys
-import os
 
 # Configure logging first
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,11 +22,10 @@ logger = logging.getLogger(__name__)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from registered_model import RegisteredModel
-from src.data.loader import BGGDataLoader
-from src.data.config import load_config
-from src.models.geek_rating import calculate_geek_rating
-from src.models.score import load_model
+from registered_model import RegisteredModel  # noqa: E402
+from src.data.loader import BGGDataLoader  # noqa: E402
+from src.data.config import load_config  # noqa: E402
+from src.models.geek_rating import calculate_geek_rating  # noqa: E402
 
 
 load_dotenv()
@@ -333,7 +327,7 @@ async def list_available_models():
                 model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
             )
             available_models[model_type] = registered_model.list_registered_models()
-        except Exception as e:
+        except Exception:
             available_models[model_type] = []
 
     return available_models

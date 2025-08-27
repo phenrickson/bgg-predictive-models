@@ -1427,7 +1427,9 @@ def main():
                 color_map = get_cluster_colors(n_clusters)
 
                 # Prepare data for color mapping
-                cluster_colors = [color_map[str(cluster)] for cluster in sample_labels]
+                cluster_colors = [  # noqa: F841
+                    color_map[str(cluster)] for cluster in sample_labels
+                ]
 
                 # Create line plot
                 fig_embeddings = go.Figure()

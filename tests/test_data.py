@@ -102,9 +102,9 @@ def test_games_features_view_structure(bigquery_config):
         "families",
     ]
     for col in array_columns:
-        assert isinstance(
-            result[col][0].to_list(), list
-        ), f"Column {col} is not an array"
+        assert isinstance(result[col][0].to_list(), list), (
+            f"Column {col} is not an array"
+        )
 
 
 def test_data_loader_training_data(data_loader):
