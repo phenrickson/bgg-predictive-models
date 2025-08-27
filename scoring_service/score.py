@@ -3,7 +3,6 @@ import requests
 from typing import Optional
 import os
 from dotenv import load_dotenv
-from google.cloud import storage
 
 import sys
 
@@ -11,10 +10,17 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
+load_dotenv()
+
 from src.utils.logging import setup_logging  # noqa: E402
 
+# Add scoring_service directory to path for auth module
+scoring_service_path = os.path.dirname(__file__)
+sys.path.insert(0, scoring_service_path)
+
+from auth import get_authenticated_storage_client  # noqa: E402
+
 # Load environment variables
-load_dotenv()
 
 
 def submit_scoring_request(
@@ -28,6 +34,7 @@ def submit_scoring_request(
     output_path: Optional[str] = None,
     prior_rating: float = 5.5,
     prior_weight: float = 2000,
+    upload_to_bigquery: bool = False,
 ) -> dict:
     """
     Submit request to scoring service and return response.
@@ -58,10 +65,17 @@ def submit_scoring_request(
         "end_year": end_year,
         "prior_rating": prior_rating,
         "prior_weight": prior_weight,
+        "upload_to_bigquery": upload_to_bigquery,
     }
 
     if output_path:
         payload["output_path"] = output_path
+
+    # Add BigQuery environment from environment variable if uploading to BigQuery
+    if upload_to_bigquery:
+        bigquery_env = os.getenv("BIGQUERY_ENVIRONMENT", "dev")
+        payload["bigquery_environment"] = bigquery_env
+        logger.info(f"BigQuery upload enabled for environment: {bigquery_env}")
 
     try:
         logger.info(f"Submitting scoring request to {service_url}")
@@ -97,8 +111,8 @@ def download_predictions(gcs_path: str, local_path: Optional[str] = None) -> str
     # Split bucket and path
     bucket_name, blob_path = gcs_path.split("/", 1)
 
-    # Initialize GCS client
-    storage_client = storage.Client()
+    # Initialize GCS client using new authentication
+    storage_client = get_authenticated_storage_client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
 
@@ -161,6 +175,13 @@ def main():
         "--download", action="store_true", help="Download predictions after scoring"
     )
 
+    # BigQuery arguments
+    parser.add_argument(
+        "--upload-to-bigquery",
+        action="store_true",
+        help="Upload predictions to BigQuery",
+    )
+
     # Prior rating arguments
     parser.add_argument(
         "--prior-rating",
@@ -189,6 +210,7 @@ def main():
             output_path=args.output_path,
             prior_rating=args.prior_rating,
             prior_weight=args.prior_weight,
+            upload_to_bigquery=args.upload_to_bigquery,
         )
 
         # Log job details
@@ -205,6 +227,11 @@ def main():
             logger.info(f"{param}: {value}")
 
         logger.info(f"Predictions Location: {response['output_location']}")
+
+        # Log BigQuery information if available
+        if response.get("bigquery_job_id"):
+            logger.info(f"BigQuery Job ID: {response['bigquery_job_id']}")
+            logger.info(f"BigQuery Table: {response['bigquery_table']}")
 
         # Download predictions if requested
         if args.download:

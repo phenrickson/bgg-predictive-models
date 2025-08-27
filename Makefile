@@ -28,7 +28,7 @@ help:  ## Show this help message
 	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
 	@echo '  make docker-training             Build and run training Docker image locally'
 	@echo '  make docker-scoring              Build and run scoring Docker image locally'
-	@echo '  make scoring-service             Run scoring service locally'
+	@echo '  make docker-scoring-service      Build and run scoring service with credentials'
 
 # requirements
 .PHONY: requirements format lint
@@ -58,6 +58,10 @@ TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
 TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
 TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
 TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
+
+# set years for scoring (including current and previous year)
+SCORE_START_YEAR = $(shell expr $(CURRENT_YEAR) - 1)
+SCORE_END_YEAR = $(shell expr $(CURRENT_YEAR) + 4)
 
 # show years
 .PHONY: years
@@ -327,22 +331,36 @@ docker-training:
 	--env-file .env \
 	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); \print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
 
-# dockerfile scoring locally
+
+# run scoring service with credentials mounted
 docker-scoring:
-	docker build -f Dockerfile.scoring -t bgg-scoring:test . \
-	&& docker run -it \
+	docker build -f Dockerfile.scoring -t bgg-scoring-service . \
+	&& docker run -d \
 	-p 8080:8080 \
+	-v $(PWD)/credentials:/app/credentials \
+	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
 	--env-file .env \
-	bgg-scoring:test
+	bgg-scoring-service
 
 # run scoring service locally
 scoring-service:
 	uv run -m scoring_service.score \
     --service-url http://localhost:8080 \
-    --start-year 2025 \
-    --end-year 2029 \
+    --start-year $(SCORE_START_YEAR) \
+    --end-year $(SCORE_END_YEAR) \
     --hurdle-model hurdle-v$(CURRENT_YEAR) \
     --complexity-model complexity-v$(CURRENT_YEAR) \
     --rating-model rating-v$(CURRENT_YEAR) \
     --users-rated-model users_rated-v$(CURRENT_YEAR) \
     --download
+
+scoring-service-upload:
+	uv run -m scoring_service.score \
+    --service-url http://localhost:8080 \
+    --start-year $(SCORE_START_YEAR) \
+    --end-year $(SCORE_END_YEAR) \
+    --hurdle-model hurdle-v$(CURRENT_YEAR) \
+    --complexity-model complexity-v$(CURRENT_YEAR) \
+    --rating-model rating-v$(CURRENT_YEAR) \
+    --users-rated-model users_rated-v$(CURRENT_YEAR) \
+	--upload-to-bigquery

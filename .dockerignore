@@ -65,6 +65,7 @@ Thumbs.db
 *.pem
 *.crt
 credentials/
+!credentials/service-account-key.json
 .env
 
 # ignore top level models and data folders
