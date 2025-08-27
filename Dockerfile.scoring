@@ -28,6 +28,9 @@ COPY src/ /app/src/
 # Copy credentials directory
 COPY credentials/ /credentials/
 
+# Copy config directory
+COPY config/ /app/config/
+
 # Create necessary directories
 RUN mkdir -p data/predictions
 

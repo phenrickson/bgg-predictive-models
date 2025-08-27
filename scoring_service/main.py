@@ -376,8 +376,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
 
                 logger.error(f"Failed to upload to BigQuery: {str(e)}")
                 logger.error(f"BigQuery error traceback: {traceback.format_exc()}")
-                # Don't fail the entire request if BigQuery upload fails
-                # Just log the error and continue
+                # Raise HTTP exception to inform the client of BigQuery upload failure
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to upload predictions to BigQuery: {str(e)}",
+                )
 
         # Prepare model details
         model_details = {

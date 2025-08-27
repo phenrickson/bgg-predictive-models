@@ -335,12 +335,17 @@ docker-training:
 # run scoring service with credentials mounted
 docker-scoring:
 	docker build -f Dockerfile.scoring -t bgg-scoring-service . \
-	&& docker run -d \
+	
+start-scoring:
+	docker run -d \
 	-p 8080:8080 \
 	-v $(PWD)/credentials:/app/credentials \
 	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
 	--env-file .env \
 	bgg-scoring-service
+
+stop-scoring:
+	docker stop $$(docker ps -q --filter ancestor=bgg-scoring-service)
 
 # run scoring service locally
 scoring-service:
@@ -363,4 +368,5 @@ scoring-service-upload:
     --complexity-model complexity-v$(CURRENT_YEAR) \
     --rating-model rating-v$(CURRENT_YEAR) \
     --users-rated-model users_rated-v$(CURRENT_YEAR) \
-	--upload-to-bigquery
+	--upload-to-bigquery \
+	--download
