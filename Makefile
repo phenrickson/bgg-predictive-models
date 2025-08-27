@@ -220,7 +220,7 @@ geek_rating:
 .PHONY: evaluate
 evaluate:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2016
+	--start-year 2020 \
 	--end-year 2022 \
 	--output-dir ./models/experiments
     --model-args \
