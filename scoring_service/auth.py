@@ -190,7 +190,7 @@ def verify_authentication(
         auth_info = authenticator.get_authentication_info()
 
         # Test storage client creation
-        client = authenticator.get_storage_client()
+        client = authenticator.get_storage_client()  # noqa
         auth_info["storage_client_created"] = True
 
         # Test bucket access if provided

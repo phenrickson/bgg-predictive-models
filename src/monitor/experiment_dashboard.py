@@ -1236,7 +1236,7 @@ def main():
                                 # Try to convert to float
                                 sample_values.cast(pl.Float64)
                                 available_metrics.append(col)
-                            except:
+                            except:  # noqa: E722
                                 pass
 
             if available_metrics:

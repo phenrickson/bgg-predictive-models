@@ -1,14 +1,12 @@
 """BigQuery uploader for model predictions."""
 
-import os
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, List
 from pathlib import Path
 import pandas as pd
 import yaml
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
-from google.oauth2 import service_account
 
 from .config import load_config
 

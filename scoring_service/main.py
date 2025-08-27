@@ -51,7 +51,7 @@ try:
 
     # Log authentication info
     auth_info = authenticator.get_authentication_info()
-    logger.info(f"Authentication initialized successfully:")
+    logger.info("Authentication initialized successfully:")
     logger.info(f"  Project ID: {auth_info['project_id']}")
     logger.info(f"  Credentials Source: {auth_info['credentials_source']}")
     logger.info(f"  Running on GCP: {auth_info.get('running_on_gcp', False)}")
@@ -208,7 +208,7 @@ async def authentication_status():
 
         # Test storage client creation
         try:
-            client = authenticator.get_storage_client()
+            client = authenticator.get_storage_client()  # noqa
             auth_info["storage_client_created"] = True
         except Exception as e:
             auth_info["storage_client_created"] = False
