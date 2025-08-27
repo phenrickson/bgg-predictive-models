@@ -89,7 +89,7 @@ LIGHTGBM_LINEAR ?= lightgbm_linear
 HURDLE_MODEL = $(LIGHTGBM)
 COMPLEXITY_MODEL = $(CATBOOST)
 RATING_MODEL ?= $(CATBOOST)
-USERS_RATED_MODEL ?= $(LIGHTGBM_LINEAR)
+USERS_RATED_MODEL ?= $(RIDGE)
 
 ## train all model candidates and predict geek rating
 .PHONY: models
