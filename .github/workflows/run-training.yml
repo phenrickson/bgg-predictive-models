@@ -42,7 +42,7 @@ jobs:
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 16Gi \
-          --cpu 4 \
+          --cpu 8 \
           --max-retries 0 \
           --task-timeout 3600 \
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
