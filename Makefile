@@ -21,8 +21,8 @@ help:  ## Show this help message
 	@echo '  make years                       Show year configuration for model training'
 	@echo '  make evaluate                    Evaluate models over time'
 	@echo '  make predictions                 Generate predictions using trained models'
-	@echo '  make experiment_dashboard        Launch experiment dashboard'
-	@echo '  make geek_rating_dashboard       Launch geek rating dashboard'
+	@echo '  make experiment_dashboard        Launch predictions dashboard'
+	@echo '  make predictions_dashboard       Launch geek rating dashboard'
 	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
 	@echo '  make upload_experiments          Upload experiments to Google Cloud Storage'
 	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
@@ -283,15 +283,15 @@ experiment_dashboard:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
 # dashboard to look at predicted geek rating
-geek_rating_dashboard:
-	uv run streamlit run src/monitor/geek_rating_dashboard.py
-
-# dashboard to look at unsupervised learning methods
-unsupervised_dashboard:
-	uv run streamlit run src/monitor/unsupervised_dashboard.py
-	
-# remove trained experiments
-.PHONY: clean_experiments
+predictions_dashboard:
+	@if [ ! -f .env ]; then \
+		echo "Error: .env file not found. Please create one from .env.example"; \
+		exit 1; \
+	fi
+	@if [ ! -f $$(grep GOOGLE_APPLICATION_CREDENTIALS .env | cut -d '=' -f2) ]; then \
+		echo "Error: Service account credentials file not found at path specified in .env"; \
+		exit 1; \
+	fi
 clean_experiments:
 	@echo "This will delete all subfolders in models/experiments/"
 	@read -p "Are you sure? (y/n) " confirm; \
