@@ -129,8 +129,7 @@ jobs:
 
     - name: Trigger Predictions using score.py
       run: |
-        source .venv/bin/activate
-        uv run python scoring_service/score.py \
+        uv run -m scoring_service.score \
           --service-url "${{ steps.get-url.outputs.service_url }}" \
           --hurdle-model "${{ needs.get-latest-models.outputs.hurdle_model }}" \
           --complexity-model "${{ needs.get-latest-models.outputs.complexity_model }}" \
@@ -138,6 +137,7 @@ jobs:
           --users-rated-model "${{ needs.get-latest-models.outputs.users_rated_model }}" \
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
+          --upload-to-bigquery \
           --output-path "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
 
     - name: Log Prediction Metadata

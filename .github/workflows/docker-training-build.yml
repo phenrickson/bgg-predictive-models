@@ -12,7 +12,7 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read

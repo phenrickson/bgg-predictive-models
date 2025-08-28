@@ -234,7 +234,7 @@ evaluate:
 	uv run -m src.models.time_based_evaluation \
 	--start-year $(EVAL_START_YEAR) \
 	--end-year $(EVAL_END_YEAR) \
-	--output-dir ./models/experiments
+	--output-dir ./models/experiments \
     --model-args \
 		hurdle.model= $(HURDLE_MODEL) \
         complexity.model=$(COMPLEXITY_MODEL) \

@@ -13,7 +13,16 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from src.models.experiments import Experiment, ExperimentTracker  # noqa: E402
-from auth import get_authenticated_storage_client, AuthenticationError  # noqa: E402
+
+try:
+    # Try relative import first (when running as module from project root)
+    from .auth import (
+        get_authenticated_storage_client,
+        AuthenticationError,
+    )  # noqa: E402
+except ImportError:
+    # Fall back to direct import (when running standalone scoring service)
+    from auth import get_authenticated_storage_client, AuthenticationError  # noqa: E402
 
 
 class ModelValidationError(Exception):
