@@ -3,55 +3,6 @@
 # Default settings
 RAW_DIR := data/raw
 
-.PHONY: help clean all
-
-help:  ## Show this help message
-	@echo 'Usage:'
-	@echo '  make help                        Show this help message'
-	@echo '  make format                      Format code using ruff'
-	@echo '  make lint                        Lint code using ruff'
-	@echo '  make fix                         Fix linting issues using ruff'
-	@echo '  make data                        Fetch raw data from BigQuery'
-	@echo '  make test                        Run tests using pytest'
-	@echo '  make clean_experiments           Remove all experiment subfolders'
-	@echo '  make clean_predictions           Remove data/prediction subfolders'
-	@echo '  make requirements                Install/update Python dependencies'
-	@echo '  make models                      Train all model candidates'
-	@echo '  make register                    Register all models to scoring service'
-	@echo '  make years                       Show year configuration for model training'
-	@echo '  make evaluate                    Evaluate models over time'
-	@echo '  make predictions                 Generate predictions using trained models'
-	@echo '  make experiment_dashboard        Launch predictions dashboard'
-	@echo '  make predictions_dashboard       Launch geek rating dashboard'
-	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
-	@echo '  make upload_experiments          Upload experiments to Google Cloud Storage'
-	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
-	@echo '  make docker-training             Build and run training Docker image locally'
-	@echo '  make docker-scoring              Build and run scoring Docker image locally'
-	@echo '  make docker-scoring-service      Build and run scoring service with credentials'
-
-# requirements
-.PHONY: requirements format lint
-requirements: 
-	uv sync
-
-format: 
-	uv run ruff format .
-
-lint:
-	uv run ruff check .
-
-fix: 
-	uv run ruff check . --fix
-
-test:
-	uv run -m pytest tests/
-
-## fetch raw data from BigQuery
-.PHONY: data
-data: 
-	uv run -m src.data.get_raw_data
-
 ## set years for training, tuning, testing
 CURRENT_YEAR = 2025
 TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
@@ -85,6 +36,59 @@ years:
 	@echo "• Time-based evaluation uses rolling windows with these ranges"
 
 
+
+.PHONY: help clean all
+
+help:  ## Show this help message
+	@echo 'Usage:'
+	@echo '  make help                        Show this help message'
+	@echo '  make requirements                Install/update Python dependencies'
+	@echo '  make format                      Format code using ruff'
+	@echo '  make lint                        Lint code using ruff'
+	@echo '  make fix                         Fix linting issues using ruff'
+	@echo '  make test                        Run tests using pytest'
+	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make models                      Train all model candidates'
+	@echo '  make register                    Register all models to scoring service'
+	@echo '  make clean_experiments           Remove all experiment subfolders'
+	@echo '  make clean_predictions           Remove data/prediction subfolders'
+	@echo '  make years                       Show year configuration for model training'
+	@echo '  make evaluate                    Evaluate models over time'
+	@echo '  make predictions                 Generate predictions using trained models'
+	@echo '  make experiment_dashboard        Launch predictions dashboard'
+	@echo '  make predictions_dashboard       Launch geek rating dashboard'
+	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
+	@echo '  make upload_experiments          Upload experiments to Google Cloud Storage'
+	@echo '  make download_experiments        Download experiments from Google Cloud Storage'
+	@echo '  make docker-training             Build and run training Docker image locally'
+	@echo '  make docker-scoring              Build and run scoring Docker image locally'
+	@echo '  make start-scoring               Start scoring service with credentials'
+	@echo '  make stop-scoring                Stop scoring service'
+	@echo '  make scoring-service             Build and run scoring service locally'
+	@echo '  make scoring-service-upload      Build and run scoring service and upload to BigQuery'
+
+# requirements
+.PHONY: requirements format lint
+requirements: 
+	uv sync
+
+format: 
+	uv run ruff format .
+
+lint:
+	uv run ruff check .
+
+fix: 
+	uv run ruff check . --fix
+
+test:
+	uv run -m pytest tests/
+
+## fetch raw data from BigQuery
+.PHONY: data
+data: 
+	uv run -m src.data.get_raw_data
+
 # model types
 LINEAR ?= linear
 RIDGE ?= ridge
@@ -107,7 +111,7 @@ models: hurdle complexity rating users_rated geek_rating
 .PHONY: register_complexity register_rating register_users_rated register_hurdle register
 register: register_complexity register_rating register_users_rated register_hurdle
 
-# train models
+# train individual models
 hurdle: train_hurdle finalize_hurdle score_hurdle
 complexity: train_complexity finalize_complexity score_complexity
 rating: train_rating finalize_rating score_rating
