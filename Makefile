@@ -284,14 +284,9 @@ experiment_dashboard:
 
 # dashboard to look at predicted geek rating
 predictions_dashboard:
-	@if [ ! -f .env ]; then \
-		echo "Error: .env file not found. Please create one from .env.example"; \
-		exit 1; \
-	fi
-	@if [ ! -f $$(grep GOOGLE_APPLICATION_CREDENTIALS .env | cut -d '=' -f2) ]; then \
-		echo "Error: Service account credentials file not found at path specified in .env"; \
-		exit 1; \
-	fi
+	uv run streamlit run src/monitor/predictions_dashboard.py
+
+
 clean_experiments:
 	@echo "This will delete all subfolders in models/experiments/"
 	@read -p "Are you sure? (y/n) " confirm; \
