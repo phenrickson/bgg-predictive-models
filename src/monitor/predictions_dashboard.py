@@ -60,26 +60,18 @@ def load_predictions_for_job(job_id: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def load_latest_predictions() -> pd.DataFrame:
+def load_predictions_for_selected_job(selected_job_id: str) -> pd.DataFrame:
     """
-    Load the most recent predictions from BigQuery with caching.
+    Load predictions for the selected job from BigQuery with caching.
+
+    Args:
+        selected_job_id: The job ID to load predictions for
 
     Returns:
-        DataFrame with latest predictions
+        DataFrame with predictions for the selected job
     """
-    # Get jobs (cached)
-    jobs = get_prediction_jobs()
-
-    if len(jobs) == 0:
-        st.error("No prediction jobs found in BigQuery.")
-        return pd.DataFrame()
-
-    # Get the latest job
-    latest_job = jobs.iloc[0]  # Already sorted by latest_prediction DESC
-
-    # Load predictions for the latest job (cached)
-    df = load_predictions_for_job(latest_job["job_id"])
-
+    # Load predictions for the selected job (cached)
+    df = load_predictions_for_job(selected_job_id)
     return df
 
 
@@ -88,12 +80,56 @@ def main():
 
     st.title("Board Game Predictions")
 
-    # Load latest predictions
-    with st.spinner("Loading latest predictions from BigQuery..."):
-        df = load_latest_predictions()
+    # Load available jobs first
+    with st.spinner("Loading available prediction jobs..."):
+        jobs_df = get_prediction_jobs()
+
+    if jobs_df.empty:
+        st.error("No prediction jobs found in BigQuery.")
+        return
+
+    # Job selection in sidebar
+    st.sidebar.header("Job Selection")
+
+    # Format job options for display
+    job_options = []
+    for _, job in jobs_df.iterrows():
+        latest_pred = pd.to_datetime(job["latest_prediction"]).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        option_text = f"{latest_pred} ({job['num_predictions']} predictions)"
+        job_options.append((job["job_id"], option_text))
+
+    # Default to the first (latest) job
+    selected_job_id = st.sidebar.selectbox(
+        "Select Prediction Job",
+        options=[j[0] for j in job_options],
+        format_func=lambda x: next(j[1] for j in job_options if j[0] == x),
+        help="Choose which prediction job to explore",
+        index=0,  # Default to latest job
+    )
+
+    # Show selected job details
+    selected_job = jobs_df[jobs_df["job_id"] == selected_job_id].iloc[0]
+    st.sidebar.markdown("**Selected Job Details:**")
+    st.sidebar.markdown(
+        f"""
+    - **Job ID**: `{selected_job_id[:8]}...`
+    - **Predictions**: {selected_job['num_predictions']:,}
+    - **Date**: {pd.to_datetime(selected_job['latest_prediction']).strftime('%Y-%m-%d %H:%M')}
+    - **Hurdle Model**: `{selected_job['hurdle_experiment']}`
+    - **Complexity Model**: `{selected_job['complexity_experiment']}`
+    - **Rating Model**: `{selected_job['rating_experiment']}`
+    - **Users Rated Model**: `{selected_job['users_rated_experiment']}`
+    """
+    )
+
+    # Load predictions for selected job
+    with st.spinner(f"Loading predictions for selected job..."):
+        df = load_predictions_for_selected_job(selected_job_id)
 
     if df.empty:
-        st.error("No predictions data available.")
+        st.error("No predictions data available for the selected job.")
         return
 
     # Basic info
