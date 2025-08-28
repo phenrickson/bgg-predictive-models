@@ -332,7 +332,7 @@ docker-training:
 	docker build -f Dockerfile.training -t bgg-training:test . \
 	&& docker run -it \
 	--env-file .env \
-	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); \print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
+	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
 
 
 # run scoring service with credentials mounted
@@ -348,7 +348,13 @@ start-scoring:
 	bgg-scoring-service
 
 stop-scoring:
-	docker stop $$(docker ps -q --filter ancestor=bgg-scoring-service)
+	@containers=$$(docker ps -q --filter ancestor=bgg-scoring-service); \
+	if [ -n "$$containers" ]; then \
+		echo "Stopping scoring service containers: $$containers"; \
+		docker stop $$containers; \
+	else \
+		echo "No running scoring service containers found"; \
+	fi
 
 # run scoring service locally
 scoring-service:
