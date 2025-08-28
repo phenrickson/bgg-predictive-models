@@ -13,6 +13,7 @@ import polars as pl
 import plotly.express as px
 from datetime import datetime
 import pandas as pd
+import hashlib
 
 load_dotenv()
 
@@ -22,32 +23,64 @@ sys.path.insert(0, project_root)
 from src.data.bigquery_uploader import BigQueryUploader  # noqa: E402
 
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_prediction_jobs() -> pd.DataFrame:
+    """
+    Get prediction jobs summary from BigQuery with caching.
+
+    Returns:
+        DataFrame with job information
+    """
+    try:
+        uploader = BigQueryUploader(environment="dev")
+        jobs = uploader.get_prediction_summary()
+        return jobs
+    except Exception as e:
+        st.error(f"Error loading prediction jobs: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def load_predictions_for_job(job_id: str) -> pd.DataFrame:
+    """
+    Load predictions for a specific job with caching.
+
+    Args:
+        job_id: The job ID to load predictions for
+
+    Returns:
+        DataFrame with predictions
+    """
+    try:
+        uploader = BigQueryUploader(environment="dev")
+        df = uploader.query_predictions(job_id=job_id)
+        return df
+    except Exception as e:
+        st.error(f"Error loading predictions for job {job_id}: {e}")
+        return pd.DataFrame()
+
+
 def load_latest_predictions() -> pd.DataFrame:
     """
-    Load the most recent predictions from BigQuery.
+    Load the most recent predictions from BigQuery with caching.
 
     Returns:
         DataFrame with latest predictions
     """
-    try:
-        uploader = BigQueryUploader(environment="dev")
+    # Get jobs (cached)
+    jobs = get_prediction_jobs()
 
-        # Get the most recent job
-        jobs = uploader.get_prediction_summary()
-        if len(jobs) == 0:
-            st.error("No prediction jobs found in BigQuery.")
-            return pd.DataFrame()
-
-        # Get the latest job
-        latest_job = jobs.iloc[0]  # Already sorted by latest_prediction DESC
-
-        # Load predictions for the latest job
-        df = uploader.query_predictions(job_id=latest_job["job_id"])
-
-        return df
-    except Exception as e:
-        st.error(f"Error loading predictions from BigQuery: {e}")
+    if len(jobs) == 0:
+        st.error("No prediction jobs found in BigQuery.")
         return pd.DataFrame()
+
+    # Get the latest job
+    latest_job = jobs.iloc[0]  # Already sorted by latest_prediction DESC
+
+    # Load predictions for the latest job (cached)
+    df = load_predictions_for_job(latest_job["job_id"])
+
+    return df
 
 
 def main():
@@ -70,9 +103,15 @@ def main():
         latest_update = pd.to_datetime(df["score_ts"]).max()
         st.sidebar.text(f"Last Updated: {latest_update.strftime('%Y-%m-%d %H:%M')}")
 
+    # Cache controls
+    st.sidebar.header("Cache Controls")
+    if st.sidebar.button("🔄 Refresh Data", help="Clear cache and reload data"):
+        st.cache_data.clear()
+        st.rerun()
+
     # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(
-        ["Predictions Table", "Geek Rating Distribution", "Analysis"]
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Predictions Table", "Geek Rating Distribution", "Analysis", "BigQuery Jobs"]
     )
 
     with tab1:
@@ -217,6 +256,91 @@ def main():
             hover_data=["name", "year_published"],
         )
         st.plotly_chart(fig, use_container_width=True)
+
+    with tab4:
+        st.header("BigQuery Jobs")
+
+        # Load jobs data (cached)
+        jobs_df = get_prediction_jobs()
+
+        if jobs_df.empty:
+            st.warning("No BigQuery jobs found.")
+        else:
+            st.subheader("Prediction Job History")
+
+            # Format the jobs dataframe for display
+            display_jobs = jobs_df.copy()
+
+            # Convert timestamps to readable format
+            if "latest_prediction" in display_jobs.columns:
+                display_jobs["latest_prediction"] = pd.to_datetime(
+                    display_jobs["latest_prediction"]
+                ).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            if "earliest_prediction" in display_jobs.columns:
+                display_jobs["earliest_prediction"] = pd.to_datetime(
+                    display_jobs["earliest_prediction"]
+                ).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Round numeric columns for better display
+            numeric_columns = ["avg_predicted_rating"]
+            for col in numeric_columns:
+                if col in display_jobs.columns:
+                    display_jobs[col] = display_jobs[col].round(3)
+
+            # Display the jobs table
+            st.dataframe(
+                display_jobs,
+                use_container_width=True,
+                hide_index=True,
+                height=600,
+                column_config={
+                    "job_id": st.column_config.TextColumn("Job ID", width="medium"),
+                    "num_predictions": st.column_config.NumberColumn(
+                        "# Predictions", format="%d"
+                    ),
+                    "latest_prediction": st.column_config.TextColumn(
+                        "Latest Prediction"
+                    ),
+                    "earliest_prediction": st.column_config.TextColumn(
+                        "Earliest Prediction"
+                    ),
+                    "min_year": st.column_config.NumberColumn("Min Year", format="%d"),
+                    "max_year": st.column_config.NumberColumn("Max Year", format="%d"),
+                    "avg_predicted_rating": st.column_config.NumberColumn(
+                        "Avg Rating", format="%.3f"
+                    ),
+                    "hurdle_experiment": st.column_config.TextColumn("Hurdle Model"),
+                    "complexity_experiment": st.column_config.TextColumn(
+                        "Complexity Model"
+                    ),
+                    "rating_experiment": st.column_config.TextColumn("Rating Model"),
+                    "users_rated_experiment": st.column_config.TextColumn(
+                        "Users Rated Model"
+                    ),
+                },
+            )
+
+            # Job statistics
+            st.subheader("Job Statistics")
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Total Jobs", len(jobs_df))
+
+            with col2:
+                total_predictions = jobs_df["num_predictions"].sum()
+                st.metric("Total Predictions", f"{total_predictions:,}")
+
+            with col3:
+                if "latest_prediction" in jobs_df.columns:
+                    latest_job_time = pd.to_datetime(jobs_df["latest_prediction"]).max()
+                    st.metric("Latest Job", latest_job_time.strftime("%Y-%m-%d"))
+
+            with col4:
+                if "avg_predicted_rating" in jobs_df.columns:
+                    overall_avg = jobs_df["avg_predicted_rating"].mean()
+                    st.metric("Overall Avg Rating", f"{overall_avg:.3f}")
 
 
 if __name__ == "__main__":
