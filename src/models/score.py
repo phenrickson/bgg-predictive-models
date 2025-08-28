@@ -3,6 +3,7 @@
 import argparse
 import json
 import numpy as np
+import os
 import polars as pl
 from datetime import datetime
 from pathlib import Path
@@ -539,9 +540,32 @@ def save_and_display_results(
         # Ensure it's in the correct model type directory
         output_path = base_predictions_dir / output_path.name
 
-    # Save results
+    # Save results locally
     results.write_parquet(str(output_path))
     logger.info(f"Predictions for {experiment_name} saved to {output_path}")
+
+    # Also save to GCS if bucket name is configured
+    bucket_name = os.getenv("GCS_BUCKET_NAME")
+    if bucket_name:
+        try:
+            from google.cloud import storage
+
+            # Create GCS client and upload
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(bucket_name)
+
+            # Create GCS path
+            gcs_blob_path = f"predictions/{model_type}/{output_path.name}"
+            blob = bucket.blob(gcs_blob_path)
+
+            # Upload the file
+            blob.upload_from_filename(str(output_path))
+            gcs_path = f"gs://{bucket_name}/{gcs_blob_path}"
+            logger.info(f"Predictions also saved to GCS: {gcs_path}")
+
+        except Exception as e:
+            logger.warning(f"Failed to save to GCS: {e}")
+
     logger.info(f"Data loaded from year {start_year or 'beginning'} to {end_year}")
 
     # Display sample of results
