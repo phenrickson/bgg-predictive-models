@@ -9,11 +9,9 @@ import sys
 import os
 from dotenv import load_dotenv
 import streamlit as st
-import polars as pl
 import plotly.express as px
 from datetime import datetime
 import pandas as pd
-import hashlib
 
 load_dotenv()
 
@@ -115,17 +113,17 @@ def main():
     st.sidebar.markdown(
         f"""
     - **Job ID**: `{selected_job_id[:8]}...`
-    - **Predictions**: {selected_job['num_predictions']:,}
-    - **Date**: {pd.to_datetime(selected_job['latest_prediction']).strftime('%Y-%m-%d %H:%M')}
-    - **Hurdle Model**: `{selected_job['hurdle_experiment']}`
-    - **Complexity Model**: `{selected_job['complexity_experiment']}`
-    - **Rating Model**: `{selected_job['rating_experiment']}`
-    - **Users Rated Model**: `{selected_job['users_rated_experiment']}`
+    - **Predictions**: {selected_job["num_predictions"]:,}
+    - **Date**: {pd.to_datetime(selected_job["latest_prediction"]).strftime("%Y-%m-%d %H:%M")}
+    - **Hurdle Model**: `{selected_job["hurdle_experiment"]}`
+    - **Complexity Model**: `{selected_job["complexity_experiment"]}`
+    - **Rating Model**: `{selected_job["rating_experiment"]}`
+    - **Users Rated Model**: `{selected_job["users_rated_experiment"]}`
     """
     )
 
     # Load predictions for selected job
-    with st.spinner(f"Loading predictions for selected job..."):
+    with st.spinner("Loading predictions for selected job..."):
         df = load_predictions_for_selected_job(selected_job_id)
 
     if df.empty:

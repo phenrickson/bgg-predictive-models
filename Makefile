@@ -59,6 +59,10 @@ TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
 TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
 TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
 
+# years for evaluation over time
+EVAL_START_YEAR = $(shell expr $(CURRENT_YEAR) -5)
+EVAL_END_YEAR = $(shell expr $(EVAL_START_YEAR) +4)
+
 # set years for scoring (including current and previous year)
 SCORE_START_YEAR = $(shell expr $(CURRENT_YEAR) - 1)
 SCORE_END_YEAR = $(shell expr $(CURRENT_YEAR) + 4)
@@ -224,8 +228,8 @@ geek_rating:
 .PHONY: evaluate
 evaluate:
 	uv run -m src.models.time_based_evaluation \
-	--start-year 2020 \
-	--end-year 2022 \
+	--start-year $(EVAL_START_YEAR) \
+	--end-year $(EVAL_END_YEAR) \
 	--output-dir ./models/experiments
     --model-args \
 		hurdle.model= $(HURDLE_MODEL) \

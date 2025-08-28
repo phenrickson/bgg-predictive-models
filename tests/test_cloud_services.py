@@ -3,9 +3,8 @@
 import os
 import pytest
 import pandas as pd
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from google.cloud.exceptions import NotFound, Forbidden, BadRequest
-from google.auth.exceptions import DefaultCredentialsError
 import tempfile
 from datetime import datetime, timezone
 
@@ -301,7 +300,7 @@ class TestGCSAccess:
 
         # Test bucket access
         bucket = client.bucket("test-bucket")
-        blob = bucket.blob("test-file.txt")
+        blob = bucket.blob("test-file.txt")  # noqa: F841
 
         mock_client.bucket.assert_called_with("test-bucket")
         mock_bucket.blob.assert_called_with("test-file.txt")

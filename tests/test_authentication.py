@@ -41,7 +41,7 @@ class TestBigQueryAuthentication:
             config = load_config()
 
             with patch("src.data.config.bigquery.Client") as mock_client:
-                client = config.get_client()
+                client = config.get_client()  # noqa: F841
 
                 # Verify client was created with correct parameters
                 mock_client.assert_called_once_with(

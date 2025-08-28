@@ -12,6 +12,7 @@ RUN apt-get update --allow-releaseinfo-change && \
         git \
         libgomp1 \
         libomp-dev \
+        make \
     && rm -rf /var/lib/apt/lists/*
 
 # Install UV
