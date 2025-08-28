@@ -171,3 +171,67 @@ tables:
     description: "Game rankings by category"
     time_partitioning: load_timestamp
     clustering_fields: [game_id]
+
+  # Predictions
+  predictions:
+    name: predictions
+    description: "Model predictions for games with metadata"
+    time_partitioning: score_ts
+    clustering_fields: [game_id]
+    schema:
+      - name: job_id
+        type: STRING
+        mode: REQUIRED
+        description: "Unique identifier for the prediction job"
+      - name: game_id
+        type: INTEGER
+        mode: REQUIRED
+        description: "BGG game ID"
+      - name: name
+        type: STRING
+        mode: REQUIRED
+        description: "Game name"
+      - name: year_published
+        type: INTEGER
+        mode: NULLABLE
+        description: "Year the game was published"
+      - name: predicted_hurdle_prob
+        type: FLOAT
+        mode: REQUIRED
+        description: "Predicted probability that game will receive ratings"
+      - name: predicted_complexity
+        type: FLOAT
+        mode: REQUIRED
+        description: "Predicted game complexity score"
+      - name: predicted_rating
+        type: FLOAT
+        mode: REQUIRED
+        description: "Predicted average rating"
+      - name: predicted_users_rated
+        type: FLOAT
+        mode: REQUIRED
+        description: "Predicted number of users who will rate the game"
+      - name: predicted_geek_rating
+        type: FLOAT
+        mode: REQUIRED
+        description: "Predicted BGG Geek Rating (Bayesian average)"
+      - name: hurdle_experiment
+        type: STRING
+        mode: REQUIRED
+        description: "Experiment name for hurdle model"
+      - name: complexity_experiment
+        type: STRING
+        mode: REQUIRED
+        description: "Experiment name for complexity model"
+      - name: rating_experiment
+        type: STRING
+        mode: REQUIRED
+        description: "Experiment name for rating model"
+      - name: users_rated_experiment
+        type: STRING
+        mode: REQUIRED
+        description: "Experiment name for users_rated model"
+      - name: score_ts
+        type: TIMESTAMP
+        mode: REQUIRED
+        description: "Timestamp when predictions were generated"

@@ -3,7 +3,6 @@
 import argparse
 import os
 from typing import Dict, Any, Optional
-from pathlib import Path
 from dotenv import load_dotenv
 import logging
 
@@ -73,7 +72,7 @@ def register_model(
             metadata=metadata,
         )
 
-        print(f"\nSuccessfully registered model:")
+        print("\nSuccessfully registered model:")
         print(f"  Name: {registration['name']}")
         print(f"  Version: {registration['version']}")
         print(f"  Description: {registration['description']}")
@@ -82,7 +81,7 @@ def register_model(
         return registration
 
     except Exception as e:
-        print(f"\nError registering model:")
+        print("\nError registering model:")
         print(f"  {str(e)}")
         raise
 
@@ -113,7 +112,7 @@ def main():
 
     try:
         # Register the model
-        registration = register_model(
+        registration = register_model(  # noqa: F841
             model_type=args.model_type,
             experiment_name=args.experiment,
             registered_name=args.name,

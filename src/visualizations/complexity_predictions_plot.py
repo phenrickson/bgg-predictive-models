@@ -1,7 +1,5 @@
 import polars as pl
-import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 from pathlib import Path
 
@@ -81,7 +79,6 @@ def create_complexity_predictions_plot(predictions_path: str, experiment_dir: st
 
 def main():
     # Find the most recent predictions file
-    import glob
     import os
     from pathlib import Path
 

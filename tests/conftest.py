@@ -4,7 +4,6 @@ import subprocess
 import dotenv
 import pytest
 from pathlib import Path
-import logging
 
 from src.utils.logging import setup_logging
 

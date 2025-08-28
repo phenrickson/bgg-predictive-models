@@ -186,6 +186,162 @@ def create_metrics_overview(experiments: List[Dict[str, Any]], selected_dataset:
     return pl.DataFrame(metrics_data)
 
 
+def create_performance_by_run_visualization(
+    experiments: List[Dict[str, Any]],
+    selected_dataset: str,
+    selected_metrics: List[str],
+):
+    """
+    Create a visualization showing performance by model run across selected metrics.
+
+    Args:
+        experiments: List of experiments
+        selected_dataset: Dataset to analyze (train/tune/test)
+        selected_metrics: List of metrics to visualize
+
+    Returns:
+        Plotly figure showing performance trends
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    import pandas as pd
+    from datetime import datetime
+
+    # Prepare data for visualization
+    viz_data = []
+    for exp in experiments:
+        metrics = exp.get("metrics", {}).get(selected_dataset, {})
+
+        # Parse timestamp for proper ordering
+        timestamp_str = exp.get("timestamp", "Unknown")
+        try:
+            if timestamp_str != "Unknown":
+                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            else:
+                timestamp = datetime.now()
+        except (ValueError, TypeError):
+            timestamp = datetime.now()
+
+        row = {
+            "Experiment": exp["full_name"],
+            "Timestamp": timestamp,
+            "Run_Number": len(viz_data) + 1,  # Sequential run number
+        }
+
+        # Add selected metrics
+        for metric in selected_metrics:
+            value = metrics.get(metric, None)
+            # Convert to float if possible, otherwise set to None
+            if value is not None and value != "N/A":
+                try:
+                    row[metric] = float(value)
+                except (ValueError, TypeError):
+                    row[metric] = None
+            else:
+                row[metric] = None
+
+        viz_data.append(row)
+
+    # Convert to DataFrame and sort by timestamp
+    df = pd.DataFrame(viz_data)
+    df = df.sort_values("Timestamp").reset_index(drop=True)
+    df["Run_Number"] = range(1, len(df) + 1)
+
+    # Filter out experiments with no valid metric values
+    valid_experiments = []
+    for _, row in df.iterrows():
+        has_valid_metric = any(row[metric] is not None for metric in selected_metrics)
+        if has_valid_metric:
+            valid_experiments.append(row)
+
+    if not valid_experiments:
+        return None
+
+    df_valid = pd.DataFrame(valid_experiments)
+
+    # Create subplots if multiple metrics, otherwise single plot
+    if len(selected_metrics) > 1:
+        # Create subplots with secondary y-axis for different scales
+        fig = make_subplots(
+            rows=len(selected_metrics),
+            cols=1,
+            subplot_titles=[f"{metric.upper()}" for metric in selected_metrics],
+            vertical_spacing=0.08,
+            shared_xaxes=True,
+        )
+
+        colors = px.colors.qualitative.Set1[: len(selected_metrics)]
+
+        for i, metric in enumerate(selected_metrics):
+            # Filter out None values for this metric
+            metric_data = df_valid[df_valid[metric].notna()]
+
+            if len(metric_data) > 0:
+                fig.add_trace(
+                    go.Scatter(
+                        x=metric_data["Run_Number"],
+                        y=metric_data[metric],
+                        mode="lines+markers",
+                        name=metric.upper(),
+                        line=dict(color=colors[i], width=2),
+                        marker=dict(size=8, color=colors[i]),
+                        hovertemplate=f"<b>Run %{{x}}</b><br>{metric.upper()}: %{{y:.4f}}<br>Experiment: %{{text}}<extra></extra>",
+                        text=metric_data["Experiment"],
+                    ),
+                    row=i + 1,
+                    col=1,
+                )
+
+                # Update y-axis title for each subplot
+                fig.update_yaxes(title_text=metric.upper(), row=i + 1, col=1)
+
+        # Update x-axis title for the bottom subplot
+        fig.update_xaxes(
+            title_text="Model Run Number", row=len(selected_metrics), col=1
+        )
+
+        # Update layout
+        fig.update_layout(
+            title=f"Performance by Model Run - {selected_dataset.upper()} Dataset",
+            height=300 * len(selected_metrics),
+            showlegend=False,
+            hovermode="closest",
+        )
+
+    else:
+        # Single metric plot
+        metric = selected_metrics[0]
+        metric_data = df_valid[df_valid[metric].notna()]
+
+        if len(metric_data) == 0:
+            return None
+
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Scatter(
+                x=metric_data["Run_Number"],
+                y=metric_data[metric],
+                mode="lines+markers",
+                name=metric.upper(),
+                line=dict(color="#1f77b4", width=3),
+                marker=dict(size=10, color="#1f77b4"),
+                hovertemplate=f"<b>Run %{{x}}</b><br>{metric.upper()}: %{{y:.4f}}<br>Experiment: %{{text}}<extra></extra>",
+                text=metric_data["Experiment"],
+            )
+        )
+
+        fig.update_layout(
+            title=f"{metric.upper()} Performance by Model Run - {selected_dataset.upper()} Dataset",
+            xaxis_title="Model Run Number",
+            yaxis_title=metric.upper(),
+            hovermode="closest",
+            height=500,
+        )
+
+    return fig
+
+
 def create_parameters_overview(experiments: List[Dict[str, Any]]):
     """
     Create a comprehensive parameters overview.
@@ -218,6 +374,258 @@ def create_parameters_overview(experiments: List[Dict[str, Any]]):
         params_data.append(row)
 
     return pl.DataFrame(params_data)
+
+
+def create_category_feature_importance_plots(
+    experiment: Dict[str, Any],
+    model_type: str,
+    top_n_per_category: int = 10,
+):
+    """
+    Create feature importance visualizations for specific categories.
+
+    Args:
+        experiment: Specific experiment details
+        model_type: Type of model for experiment
+        top_n_per_category: Number of top features to display per category (default: 10)
+
+    Returns:
+        Dict with category names as keys and plotly figures as values
+    """
+    # Construct coefficient file path with more robust method
+    exp_name = experiment.get("name", experiment.get("full_name", "unknown"))
+    exp_version = experiment.get("version", 1)
+
+    # Construct the specific paths for both coefficient and feature importance files
+    coef_paths = [
+        Path(
+            f"models/experiments/{model_type}/{exp_name}/v{exp_version}/coefficients.csv"
+        ),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/coefficients.csv"),
+        Path(f"models/experiments/{exp_name}/coefficients.csv"),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/metadata/coefficients.csv"),
+    ]
+
+    feature_importance_paths = [
+        Path(
+            f"models/experiments/{model_type}/{exp_name}/v{exp_version}/feature_importance.csv"
+        ),
+        Path(f"models/experiments/{exp_name}/v{exp_version}/feature_importance.csv"),
+        Path(f"models/experiments/{exp_name}/feature_importance.csv"),
+        Path(
+            f"models/experiments/{exp_name}/v{exp_version}/metadata/feature_importance.csv"
+        ),
+    ]
+
+    # Find the first existing path
+    coef_path = next((path for path in coef_paths if path.exists()), None)
+    feature_importance_path = next(
+        (path for path in feature_importance_paths if path.exists()), None
+    )
+
+    # Define categories to look for
+    categories = {
+        "Publisher": "publisher_",
+        "Designer": "designer_",
+        "Artist": "artist_",
+        "Mechanic": "mechanic_",
+        "Category": "category_",
+        "Family": "family_",
+    }
+
+    # Abbreviate feature names
+    def abbreviate_feature(feature, n=30):
+        # Truncate to maximum n characters
+        if len(feature) > n:
+            return feature[: n - 3] + "..."
+        return feature
+
+    category_plots = {}
+
+    try:
+        # Prefer coefficient file if it exists
+        if coef_path:
+            coef_df = pl.read_csv(coef_path)
+
+            for category_name, prefix in categories.items():
+                # Filter features for this category
+                category_features = coef_df.filter(
+                    pl.col("feature").str.starts_with(prefix)
+                )
+
+                if len(category_features) == 0:
+                    continue  # Skip categories with no features
+
+                # Sort and select top N features by absolute coefficient value
+                df_sorted = (
+                    category_features.with_columns(
+                        [
+                            pl.col("coefficient").abs().alias("abs_coefficient"),
+                            pl.Series(
+                                name="abbreviated_feature",
+                                values=[
+                                    abbreviate_feature(f.replace(prefix, ""))
+                                    for f in category_features.get_column("feature")
+                                ],
+                            ),
+                        ]
+                    )
+                    .sort("abs_coefficient", descending=True)
+                    .head(top_n_per_category)
+                    .sort(
+                        "coefficient"
+                    )  # Sort by signed coefficient for correct y-axis order
+                )
+
+                # Create horizontal bar plot
+                fig = px.bar(
+                    df_sorted.to_pandas(),
+                    y="abbreviated_feature",
+                    x="coefficient",
+                    orientation="h",
+                    color="coefficient",
+                    color_continuous_scale="RdBu",
+                    color_continuous_midpoint=0,
+                )
+
+                # Enhanced layout
+                fig.update_layout(
+                    height=max(
+                        400, len(df_sorted) * 25
+                    ),  # Dynamic height based on number of features
+                    width=800,
+                    title=f"Top {min(top_n_per_category, len(df_sorted))} {category_name} Features - {exp_name}",
+                    yaxis_title="Feature",
+                    xaxis_title="Effect",
+                    title_x=0.5,
+                )
+
+                # Remove color axis label
+                fig.update_layout(coloraxis_colorbar=dict(title=""))
+
+                # Ensure zero line is visible
+                fig.add_vline(x=0, line_width=2, line_dash="dash", line_color="gray")
+
+                # Add hover text with full feature names and remove bar text
+                fig.update_traces(
+                    hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>Coefficient: %{x:.4f}<extra></extra>",
+                    text=df_sorted.get_column("feature"),
+                    texttemplate="",
+                    textposition="none",
+                )
+
+                category_plots[category_name] = fig
+
+        # If no coefficient file, try feature importance file
+        elif feature_importance_path:
+            feature_df = pl.read_csv(feature_importance_path)
+
+            # Flexible column name detection
+            feature_col = None
+            importance_col = None
+
+            # Common column name variations
+            feature_candidates = [
+                "feature",
+                "features",
+                "feature_name",
+                "name",
+                "column",
+            ]
+            importance_candidates = [
+                "importance",
+                "feature_importance",
+                "importance_score",
+                "score",
+                "value",
+            ]
+
+            # Find first matching column names
+            for candidate in feature_candidates:
+                if candidate in feature_df.columns:
+                    feature_col = candidate
+                    break
+
+            for candidate in importance_candidates:
+                if candidate in feature_df.columns:
+                    importance_col = candidate
+                    break
+
+            # Validate column detection
+            if not feature_col or not importance_col:
+                st.warning(
+                    f"Could not find feature and importance columns in {feature_importance_path}"
+                )
+                return category_plots
+
+            for category_name, prefix in categories.items():
+                # Filter features for this category
+                category_features = feature_df.filter(
+                    pl.col(feature_col).str.starts_with(prefix)
+                )
+
+                if len(category_features) == 0:
+                    continue  # Skip categories with no features
+
+                # Sort and select top N features by importance
+                df_sorted = (
+                    category_features.with_columns(
+                        [
+                            pl.Series(
+                                name="abbreviated_feature",
+                                values=[
+                                    abbreviate_feature(str(f).replace(prefix, ""))
+                                    for f in category_features.get_column(feature_col)
+                                ],
+                            )
+                        ]
+                    )
+                    .sort(importance_col, descending=True)
+                    .head(top_n_per_category)
+                    .sort(
+                        importance_col, descending=False
+                    )  # Reverse order to have most important at top
+                )
+
+                # Create horizontal bar plot for feature importance
+                fig = px.bar(
+                    df_sorted.to_pandas(),
+                    y="abbreviated_feature",
+                    x=importance_col,
+                    orientation="h",
+                    color=importance_col,
+                    color_continuous_scale="Viridis",  # Different color scale to distinguish from coefficient plot
+                )
+
+                # Enhanced layout
+                fig.update_layout(
+                    height=max(
+                        400, len(df_sorted) * 25
+                    ),  # Dynamic height based on number of features
+                    width=800,
+                    title=f"Top {min(top_n_per_category, len(df_sorted))} {category_name} Features - {exp_name} (Feature Importance)",
+                    yaxis_title="Feature",
+                    xaxis_title="Importance",
+                    title_x=0.5,
+                )
+
+                # Remove color axis label
+                fig.update_layout(coloraxis_colorbar=dict(title=""))
+
+                # Add hover text with full feature names
+                fig.update_traces(
+                    hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>Importance: %{x:.4f}<extra></extra>",
+                    text=df_sorted.get_column(feature_col),
+                    texttemplate="",
+                    textposition="none",
+                )
+
+                category_plots[category_name] = fig
+
+    except Exception as e:
+        st.warning(f"Error processing category feature importance for {exp_name}: {e}")
+
+    return category_plots
 
 
 def create_feature_importance_plot(
@@ -557,19 +965,24 @@ def display_predictions(
                 min_year = display_df["year_published"].min()
                 max_year = display_df["year_published"].max()
 
-                # Add year filter
-                year_filter = st.slider(
-                    "Year Published Range",
-                    min_value=int(min_year),
-                    max_value=int(max_year),
-                    value=(int(min_year), int(max_year)),
-                )
+                # Only show year filter if there's a range of years
+                if min_year != max_year:
+                    # Add year filter
+                    year_filter = st.slider(
+                        "Year Published Range",
+                        min_value=int(min_year),
+                        max_value=int(max_year),
+                        value=(int(min_year), int(max_year)),
+                    )
 
-                # Apply year filter
-                display_df = display_df.filter(
-                    (pl.col("year_published") >= year_filter[0])
-                    & (pl.col("year_published") <= year_filter[1])
-                )
+                    # Apply year filter
+                    display_df = display_df.filter(
+                        (pl.col("year_published") >= year_filter[0])
+                        & (pl.col("year_published") <= year_filter[1])
+                    )
+                else:
+                    # Show info that all games are from the same year
+                    st.info(f"All games in this dataset are from {int(min_year)}")
 
             # # Display filter info
             # st.info(
@@ -790,7 +1203,71 @@ def main():
 
         # Metrics overview
         metrics_df = create_metrics_overview(experiments, selected_dataset)
+
+        # Metrics table first
+        st.subheader("Metrics Table")
         st.dataframe(metrics_df)
+
+        # Performance by Model Run Visualization
+        st.subheader("Performance by Model Run")
+
+        # Get available metrics from the data
+        if len(metrics_df) > 0:
+            # Get numeric columns (excluding Experiment and Timestamp)
+            available_metrics = [
+                col
+                for col in metrics_df.columns
+                if col not in ["Experiment", "Timestamp"]
+                and metrics_df[col].dtype
+                in [pl.Float64, pl.Float32, pl.Int64, pl.Int32]
+            ]
+
+            # If no numeric columns found, try to identify them by checking for numeric values
+            if not available_metrics:
+                available_metrics = []
+                for col in metrics_df.columns:
+                    if col not in ["Experiment", "Timestamp"]:
+                        # Check if column contains numeric values (excluding "N/A")
+                        sample_values = (
+                            metrics_df[col].filter(pl.col(col) != "N/A").head(5)
+                        )
+                        if len(sample_values) > 0:
+                            try:
+                                # Try to convert to float
+                                sample_values.cast(pl.Float64)
+                                available_metrics.append(col)
+                            except:  # noqa: E722
+                                pass
+
+            if available_metrics:
+                # Metric selection
+                selected_metrics = st.multiselect(
+                    "Select Metrics to Visualize",
+                    available_metrics,
+                    default=available_metrics[
+                        : min(3, len(available_metrics))
+                    ],  # Default to first 3 metrics
+                    help="Choose one or more metrics to display in the performance trend chart",
+                )
+
+                if selected_metrics:
+                    # Create and display the performance visualization
+                    performance_fig = create_performance_by_run_visualization(
+                        experiments, selected_dataset, selected_metrics
+                    )
+
+                    if performance_fig:
+                        st.plotly_chart(performance_fig, use_container_width=True)
+                    else:
+                        st.info(
+                            "No valid data available for the selected metrics and dataset."
+                        )
+                else:
+                    st.info("Please select at least one metric to visualize.")
+            else:
+                st.info("No numeric metrics found for visualization.")
+        else:
+            st.info("No experiments available for visualization.")
 
     with tab2:
         st.header("Model Predictions")
@@ -899,10 +1376,14 @@ def main():
             None,
         )
 
-        # Feature importance configuration
-        top_n = st.slider("Top N Features", min_value=5, max_value=50, value=30, step=5)
+        # Feature importance configuration for overall plot
+        top_n = st.slider(
+            "Top N Features (Overall)", min_value=5, max_value=250, value=40, step=5
+        )
 
         if selected_exp:
+            # Overall feature importance plot
+            st.subheader("Overall Feature Importance")
             feature_fig = create_feature_importance_plot(
                 selected_exp,
                 model_type=selected_model_type,
@@ -913,6 +1394,38 @@ def main():
                 st.plotly_chart(feature_fig)
             else:
                 st.write("No coefficient data available for this experiment")
+
+            # Category-specific feature importance plots
+            st.subheader("Feature Importance by Category")
+
+            # Configuration for category plots
+            top_n_per_category = st.slider(
+                "Top N Features (Per Category)",
+                min_value=5,
+                max_value=100,
+                value=25,
+                step=5,
+            )
+
+            category_plots = create_category_feature_importance_plots(
+                selected_exp,
+                model_type=selected_model_type,
+                top_n_per_category=top_n_per_category,
+            )
+
+            if category_plots:
+                # Create tabs for each category
+                category_names = list(category_plots.keys())
+                if len(category_names) > 0:
+                    category_tabs = st.tabs(category_names)
+
+                    for i, (category_name, fig) in enumerate(category_plots.items()):
+                        with category_tabs[i]:
+                            st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No category-specific features found in this experiment.")
+            else:
+                st.info("No category-specific features found in this experiment.")
         else:
             st.error("Could not find the selected experiment")
 

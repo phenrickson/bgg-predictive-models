@@ -1,7 +1,7 @@
 import argparse
 import pandas as pd
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from datetime import datetime, timezone
 
 from src.data.loader import BGGDataLoader
@@ -160,12 +160,16 @@ def predict_games(
     users_rated_tracker = ExperimentTracker(model_type="users_rated")
 
     # Load experiment details
-    hurdle_experiment_details = hurdle_tracker.load_experiment(hurdle_experiment)
-    complexity_experiment_details = complexity_tracker.load_experiment(
+    hurdle_experiment_details = hurdle_tracker.load_experiment(  # noqa: F841
+        hurdle_experiment
+    )
+    complexity_experiment_details = complexity_tracker.load_experiment(  # noqa: F841
         complexity_experiment
     )
-    rating_experiment_details = rating_tracker.load_experiment(rating_experiment)
-    users_rated_experiment_details = users_rated_tracker.load_experiment(
+    rating_experiment_details = rating_tracker.load_experiment(  # noqa: F841
+        rating_experiment
+    )
+    users_rated_experiment_details = users_rated_tracker.load_experiment(  # noqa: F841
         users_rated_experiment
     )
 

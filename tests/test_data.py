@@ -1,33 +1,28 @@
 """Tests for the games_features view and data loading."""
 
 import os
-import yaml
-from pathlib import Path
 
 import pytest
 import polars as pl
 
-from src.data.config import BigQueryConfig
+from src.data.config import load_config
 from src.data.loader import BGGDataLoader
 
 
 @pytest.fixture
 def bigquery_config():
-    """Create a BigQuery configuration for testing."""
-    # Load dataset from config/bigquery.yaml
-    config_path = Path(__file__).parent.parent / "config" / "bigquery.yaml"
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    """Create a BigQuery configuration for testing using load_config()."""
+    # Temporarily unset GOOGLE_APPLICATION_CREDENTIALS to force ADC
+    original_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if original_creds:
+        del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
-    default_env = config.get("default_environment", "dev")
-    env_config = config.get("environments", {}).get(default_env, {})
-
-    # Create BigQuery config
-    return BigQueryConfig(
-        project_id=os.getenv("GCP_PROJECT_ID"),
-        dataset=env_config.get("dataset"),
-        credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-    )
+    try:
+        return load_config()
+    finally:
+        # Restore original environment
+        if original_creds:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = original_creds
 
 
 @pytest.fixture
@@ -102,9 +97,9 @@ def test_games_features_view_structure(bigquery_config):
         "families",
     ]
     for col in array_columns:
-        assert isinstance(
-            result[col][0].to_list(), list
-        ), f"Column {col} is not an array"
+        assert isinstance(result[col][0].to_list(), list), (
+            f"Column {col} is not an array"
+        )
 
 
 def test_data_loader_training_data(data_loader):

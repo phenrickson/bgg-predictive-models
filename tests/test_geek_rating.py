@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 from tests.conftest import check_experiments_exist
 from src.models.geek_rating import (
-    load_all_models,
     predict_game,
     calculate_geek_rating,
     predict_geek_rating,
@@ -25,6 +24,8 @@ def sample_features():
     """Create a sample DataFrame with game features."""
     return pd.DataFrame(
         {
+            "game_id": [12345],
+            "name": ["Test Game"],
             "year_published": [2020],
             "designer_count": [2],
             "category_count": [3],
@@ -56,15 +57,15 @@ def test_predict_game(sample_features, mock_models):
     """Test game prediction function."""
     predictions = predict_game(sample_features, mock_models)
 
-    assert "will_rate" in predictions
-    assert "complexity" in predictions
-    assert "rating" in predictions
-    assert "users_rated" in predictions
+    assert "predicted_hurdle_prob" in predictions
+    assert "predicted_complexity" in predictions
+    assert "predicted_rating" in predictions
+    assert "predicted_users_rated" in predictions
 
-    assert predictions["will_rate"] > 0.5
-    assert predictions["complexity"] > 0
-    assert predictions["rating"] > 0
-    assert predictions["users_rated"] >= 25
+    assert predictions["predicted_hurdle_prob"].iloc[0] > 0.5
+    assert predictions["predicted_complexity"].iloc[0] > 0
+    assert predictions["predicted_rating"].iloc[0] > 0
+    assert predictions["predicted_users_rated"].iloc[0] >= 25
 
 
 def test_calculate_geek_rating(sample_features, mock_models):
@@ -72,15 +73,15 @@ def test_calculate_geek_rating(sample_features, mock_models):
     predictions = predict_game(sample_features, mock_models)
     geek_rating = calculate_geek_rating(predictions)
 
-    assert 1 <= geek_rating <= 10
+    assert 1 <= geek_rating.iloc[0] <= 10
 
 
 def test_predict_geek_rating(sample_features, mock_models):
     """Test full geek rating prediction."""
     result = predict_geek_rating(sample_features, models=mock_models)
 
-    assert "geek_rating" in result
-    assert 1 <= result["geek_rating"] <= 10
+    assert "prediction" in result
+    assert 1 <= result["prediction"].iloc[0] <= 10
 
 
 def test_predict_geek_rating_low_probability(sample_features, mock_models):
@@ -91,11 +92,11 @@ def test_predict_geek_rating_low_probability(sample_features, mock_models):
     result = predict_geek_rating(sample_features, models=mock_models)
 
     # Check default values for low probability game
-    assert result["will_rate"] < 0.5
-    assert result["complexity"] == 1.0
-    assert result["rating"] == 5.5
-    assert result["users_rated"] == 25
-    assert result["geek_rating"] == 5.5
+    assert result["predicted_hurdle_prob"].iloc[0] < 0.5
+    assert result["predicted_complexity"].iloc[0] == 1.0
+    assert result["predicted_rating"].iloc[0] == 5.5
+    assert result["predicted_users_rated"].iloc[0] == 25
+    assert result["prediction"].iloc[0] == 5.5
 
 
 def test_predict_geek_rating_experiments(sample_features, mock_models, monkeypatch):
@@ -117,13 +118,11 @@ def test_predict_geek_rating_experiments(sample_features, mock_models, monkeypat
         },
     )
 
-    assert "geek_rating" in result
-    assert 1 <= result["geek_rating"] <= 10
+    assert "prediction" in result
+    assert 1 <= result["prediction"].iloc[0] <= 10
 
 
 def test_predict_geek_rating_no_models_or_experiments():
     """Test error handling when no models or experiments provided."""
-    with pytest.raises(
-        ValueError, match="Either models or experiments must be provided"
-    ):
+    with pytest.raises(ValueError, match="No valid method provided to load models"):
         predict_geek_rating(pd.DataFrame())

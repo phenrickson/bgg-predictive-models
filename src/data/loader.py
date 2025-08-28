@@ -23,12 +23,14 @@ class BGGDataLoader:
         self,
         where_clause: str = "",
         preprocessor=None,
+        timeout: int = 300,
     ) -> Union[pl.DataFrame, Tuple[pl.DataFrame, Dict[str, pl.Series]]]:
         """Load data from BigQuery warehouse.
 
         Args:
             where_clause: Optional WHERE clause for the SQL query
             preprocessor: Optional preprocessor to transform data
+            timeout: Timeout in seconds for BigQuery query execution (default: 300)
 
         Returns:
             If preprocessor is None:
@@ -61,7 +63,7 @@ class BGGDataLoader:
             print("Query job created successfully")
 
             # Check job status and get results
-            query_job.result(timeout=30)  # Wait for the query to complete
+            query_job.result(timeout=timeout)  # Wait for the query to complete
             print("Query job completed successfully")
 
             pandas_df = query_job.to_dataframe()

@@ -3,10 +3,8 @@
 import json
 import pickle
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
-from google.cloud import storage
 import sys
 import os
 
@@ -14,7 +12,8 @@ import os
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from src.models.experiments import Experiment, ExperimentTracker
+from src.models.experiments import Experiment, ExperimentTracker  # noqa: E402
+from auth import get_authenticated_storage_client, AuthenticationError  # noqa: E402
 
 
 class ModelValidationError(Exception):
@@ -44,21 +43,9 @@ class RegisteredModel(ExperimentTracker):
         # Initialize base tracker with local directory
         super().__init__(model_type)
 
-        # Initialize GCS client
+        # Initialize GCS client using new authentication
         try:
-            if project_id:
-                self.storage_client = storage.Client(project=project_id)
-            else:
-                # Try to get project ID from environment
-                import os
-
-                project_id = os.getenv("GCP_PROJECT_ID")
-                if not project_id:
-                    raise ValueError(
-                        "Project ID not provided and GCP_PROJECT_ID environment variable not set"
-                    )
-                self.storage_client = storage.Client(project=project_id)
-
+            self.storage_client = get_authenticated_storage_client(project_id)
             self.bucket = self.storage_client.bucket(bucket_name)
             self.base_prefix = f"{base_prefix}/{model_type}"
 
@@ -66,6 +53,8 @@ class RegisteredModel(ExperimentTracker):
             if not self.bucket.exists():
                 raise ValueError(f"Bucket {bucket_name} does not exist")
 
+        except AuthenticationError as e:
+            raise ValueError(f"Authentication failed: {str(e)}")
         except Exception as e:
             raise ValueError(f"Failed to initialize GCS client: {str(e)}")
 

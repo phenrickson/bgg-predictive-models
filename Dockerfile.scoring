@@ -3,19 +3,18 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN for i in {1..3}; do \
-      apt-get update --allow-releaseinfo-change && \
-      apt-get install -y --no-install-recommends \
+# Install system dependencies including OpenMP for LightGBM
+RUN apt-get update --allow-releaseinfo-change && \
+    apt-get install -y --no-install-recommends \
         build-essential \
+        cmake \
         curl \
-        software-properties-common \
         git \
-      && rm -rf /var/lib/apt/lists/* \
-      && apt-get clean \
-      && break \
-      || { echo "Retrying apt-get update/install... (attempt $i/3)"; sleep 5; } \
-    done
+        libgomp1 \
+        libomp-dev \
+        make && \ 
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install UV
 RUN pip install uv
@@ -25,7 +24,17 @@ COPY pyproject.toml .
 COPY scoring_service/main.py .
 COPY scoring_service/cloud_experiment_tracker.py .
 COPY scoring_service/registered_model.py .
+COPY scoring_service/auth.py .
 COPY src/ /app/src/
+
+# Copy credentials directory
+COPY credentials/ /credentials/
+
+# Copy config directory
+COPY config/ /app/config/
+
+# Create necessary directories
+RUN mkdir -p data/predictions
 
 # Create virtual environment and install dependencies
 RUN uv venv
@@ -38,7 +47,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 # pass along environment variables
 ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
 ENV GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
-ENV GOOGLE_APPLICATION_CREDENTIALS=${SERVICE_ACCOUNT_CREDENTIALS}
+ENV GOOGLE_APPLICATION_CREDENTIALS=/credentials/service-account-key.json
 
 # Expose port for FastAPI
 EXPOSE 8080

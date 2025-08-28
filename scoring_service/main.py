@@ -1,25 +1,18 @@
 import os
-import json
 from dotenv import load_dotenv
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import logging
 
-import polars as pl
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from google.cloud import storage
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 import sys
-import os
 
 # Configure logging first
-import logging
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,28 +20,53 @@ logger = logging.getLogger(__name__)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from registered_model import RegisteredModel
-from src.data.loader import BGGDataLoader
-from src.data.config import load_config
-from src.models.geek_rating import calculate_geek_rating
-from src.models.score import load_model
-
+from registered_model import RegisteredModel  # noqa: E402
+from src.data.loader import BGGDataLoader  # noqa: E402
+from src.data.config import load_config  # noqa: E402
+from src.data.bigquery_uploader import BigQueryUploader  # noqa: E402
+from src.models.geek_rating import calculate_geek_rating  # noqa: E402
+from auth import GCPAuthenticator, AuthenticationError  # noqa: E402
 
 load_dotenv()
 
-# Get environment variables
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+# Set up proper credentials path relative to project root
+credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if credentials_path and not os.path.isabs(credentials_path):
+    # Convert relative path to absolute path based on project root
+    absolute_credentials_path = os.path.join(project_root, credentials_path)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = absolute_credentials_path
+    logger.info(f"Set GOOGLE_APPLICATION_CREDENTIALS to: {absolute_credentials_path}")
+
+# Initialize authentication
+try:
+    authenticator = GCPAuthenticator()
+    GCP_PROJECT_ID = authenticator.project_id
+    BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+
+    # Verify bucket access
+    if not authenticator.verify_bucket_access(BUCKET_NAME):
+        logger.warning(
+            f"Cannot access bucket {BUCKET_NAME}. Service may not function properly."
+        )
+
+    # Log authentication info
+    auth_info = authenticator.get_authentication_info()
+    logger.info("Authentication initialized successfully:")
+    logger.info(f"  Project ID: {auth_info['project_id']}")
+    logger.info(f"  Credentials Source: {auth_info['credentials_source']}")
+    logger.info(f"  Running on GCP: {auth_info.get('running_on_gcp', False)}")
+    logger.info(f"  Bucket Name: {BUCKET_NAME}")
+
+except AuthenticationError as e:
+    logger.error(f"Authentication failed: {str(e)}")
+    raise
+except Exception as e:
+    logger.error(f"Unexpected error during authentication setup: {str(e)}")
+    raise
 
 # Debug logging for environment and paths
 logger.info(f"Current Working Directory: {os.getcwd()}")
 logger.info(f"Project Root: {project_root}")
-logger.info(f"GCP Project ID: {GCP_PROJECT_ID}")
-logger.info(f"Bucket Name: {BUCKET_NAME}")
-
-# Check credentials file existence
-if not GCP_PROJECT_ID:
-    raise ValueError("GCP_PROJECT_ID environment variable must be set")
 
 
 class PredictGamesRequest(BaseModel):
@@ -65,6 +83,8 @@ class PredictGamesRequest(BaseModel):
     prior_rating: float = 5.5
     prior_weight: float = 2000
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
+    upload_to_bigquery: bool = False
+    bigquery_environment: str = "dev"
 
 
 class PredictGamesResponse(BaseModel):
@@ -72,6 +92,8 @@ class PredictGamesResponse(BaseModel):
     model_details: Dict[str, Any]
     scoring_parameters: Dict[str, Any]
     output_location: str
+    bigquery_job_id: Optional[str] = None
+    bigquery_table: Optional[str] = None
 
 
 def construct_year_filter(
@@ -149,6 +171,63 @@ def predict_game_characteristics(
 
 
 app = FastAPI(title="BGG Model Scoring Service")
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint with authentication status."""
+    try:
+        auth_info = authenticator.get_authentication_info()
+        bucket_accessible = authenticator.verify_bucket_access(BUCKET_NAME)
+
+        return {
+            "status": "healthy",
+            "authentication": {
+                "project_id": auth_info["project_id"],
+                "credentials_source": auth_info["credentials_source"],
+                "running_on_gcp": auth_info.get("running_on_gcp", False),
+                "bucket_accessible": bucket_accessible,
+                "bucket_name": BUCKET_NAME,
+            },
+            "service": "BGG Model Scoring Service",
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "service": "BGG Model Scoring Service",
+        }
+
+
+@app.get("/auth/status")
+async def authentication_status():
+    """Detailed authentication status endpoint."""
+    try:
+        # Use the existing authenticator instance that has the corrected credentials path
+        auth_info = authenticator.get_authentication_info()
+
+        # Test storage client creation
+        try:
+            client = authenticator.get_storage_client()  # noqa
+            auth_info["storage_client_created"] = True
+        except Exception as e:
+            auth_info["storage_client_created"] = False
+            auth_info["storage_error"] = str(e)
+
+        # Test bucket access
+        try:
+            bucket_accessible = authenticator.verify_bucket_access(BUCKET_NAME)
+            auth_info["bucket_accessible"] = bucket_accessible
+        except Exception as e:
+            auth_info["bucket_accessible"] = False
+            auth_info["bucket_error"] = str(e)
+
+        auth_info["status"] = "success"
+        auth_info["bucket_name"] = BUCKET_NAME
+
+        return auth_info
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 @app.post("/predict_games", response_model=PredictGamesResponse)
@@ -261,7 +340,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         results.to_parquet(local_output_path, index=False)
 
         # Upload predictions to Google Cloud Storage
-        storage_client = storage.Client()
+        storage_client = authenticator.get_storage_client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
         # Construct GCS path for predictions
@@ -271,6 +350,37 @@ async def predict_games_endpoint(request: PredictGamesRequest):
 
         # Use GCS path as output location
         output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
+
+        # Upload to BigQuery if requested
+        bigquery_job_id = None
+        bigquery_table = None
+        if request.upload_to_bigquery:
+            try:
+                logger.info(
+                    f"Uploading predictions to BigQuery ({request.bigquery_environment} environment)"
+                )
+                uploader = BigQueryUploader(environment=request.bigquery_environment)
+                bigquery_job_id = uploader.upload_predictions(results, job_id)
+
+                # Construct table reference using uploader's actual configuration
+                bigquery_table = (
+                    f"{uploader.project_id}.{uploader.dataset_id}.predictions"
+                )
+
+                logger.info(
+                    f"Successfully uploaded to BigQuery table: {bigquery_table}"
+                )
+                logger.info(f"BigQuery job ID: {bigquery_job_id}")
+            except Exception as e:
+                import traceback
+
+                logger.error(f"Failed to upload to BigQuery: {str(e)}")
+                logger.error(f"BigQuery error traceback: {traceback.format_exc()}")
+                # Raise HTTP exception to inform the client of BigQuery upload failure
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to upload predictions to BigQuery: {str(e)}",
+                )
 
         # Prepare model details
         model_details = {
@@ -308,6 +418,8 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 "prior_weight": request.prior_weight,
             },
             output_location=output_path,
+            bigquery_job_id=bigquery_job_id,
+            bigquery_table=bigquery_table,
         )
 
         return response
@@ -333,7 +445,7 @@ async def list_available_models():
                 model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
             )
             available_models[model_type] = registered_model.list_registered_models()
-        except Exception as e:
+        except Exception:
             available_models[model_type] = []
 
     return available_models
