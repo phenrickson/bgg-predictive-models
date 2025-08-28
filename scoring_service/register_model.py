@@ -2,12 +2,17 @@
 
 import argparse
 import os
+import sys
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 import logging
 
-from src.models.experiments import ExperimentTracker
-from scoring_service.registered_model import RegisteredModel
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
+from src.models.experiments import ExperimentTracker  # noqa: E402
+from scoring_service.registered_model import RegisteredModel  # noqa: E402
 
 # load environment variables
 load_dotenv()

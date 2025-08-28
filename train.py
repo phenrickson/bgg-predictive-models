@@ -1,121 +1,377 @@
 #!/usr/bin/env python3
-"""Script to run time-based model evaluation with specific configuration."""
+"""
+Training script that replicates the 'make models' functionality.
+Trains all model candidates: hurdle, complexity, rating, users_rated, and geek_rating.
+"""
 
+import yaml
+import subprocess
 import sys
-import argparse
-from src.models.time_based_evaluation import (
-    run_time_based_evaluation,
-    generate_time_splits,
-)
+from pathlib import Path
+from typing import Dict, Any
+from src.utils.logging import setup_logging
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = setup_logging()
 
 
-def get_default_model_args():
-    """Get default model arguments."""
-    return {
-        "hurdle": {
-            "preprocessor-type": "linear",
-            "model": "logistic",
-        },
-        "complexity": {
-            "preprocessor-type": "tree",
-            "model": "catboost",
-            "use-sample-weights": True,
-        },
-        "rating": {
-            "preprocessor-type": "tree",
-            "model": "catboost",
-            "min-ratings": 5,
-            "use-sample-weights": True,
-        },
-        "users_rated": {
-            "preprocessor-type": "tree",
-            "model": "lightgbm",
-            "min-ratings": 0,
-        },
-    }
+def load_config() -> Dict[str, Any]:
+    """Load configuration from model_config.yml"""
+    config_path = Path("model_config.yml")
+    if not config_path.exists():
+        raise FileNotFoundError("model_config.yml not found")
+
+    with open(config_path) as f:
+        return yaml.safe_load(f)
 
 
-def parse_model_args(args_list):
-    """Parse model arguments from command line format into dictionary."""
-    # Start with default arguments
-    model_args = get_default_model_args()
+def run_command(cmd: list, description: str) -> None:
+    """Run a command and handle errors"""
+    logger.info(f"\n{'=' * 60}")
+    logger.info(f"Running: {description}")
+    logger.info(f"Command: {' '.join(cmd)}")
+    logger.info(f"{'=' * 60}")
 
-    if not args_list:
-        return model_args
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=False)  # noqa
+        logger.info(f"✓ {description} completed successfully")
+    except subprocess.CalledProcessError as e:
+        logger.info(f"✗ {description} failed with exit code {e.returncode}")
+        sys.exit(1)
 
-    for arg in args_list:
-        try:
-            # Split into model.key=value format
-            model_key, value = arg.split("=")
-            model, key = model_key.split(".")
 
-            # Initialize model dict if not exists
-            if model not in model_args:
-                model_args[model] = {}
+def train_hurdle(config: Dict[str, Any]) -> None:
+    """Train hurdle model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.hurdle",
+        "--experiment",
+        config["experiments"]["hurdle"],
+        "--model",
+        config["models"]["hurdle"],
+        "--train-end-year",
+        str(config["train_end_year"]),
+        "--tune-start-year",
+        str(config["train_end_year"]),
+        "--tune-end-year",
+        str(config["tune_end_year"]),
+        "--test-start-year",
+        str(config["test_start_year"]),
+        "--test-end-year",
+        str(config["test_end_year"]),
+    ]
+    run_command(cmd, "Training hurdle model")
 
-            # Convert value to appropriate type
-            if value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            elif value.isdigit():
-                value = int(value)
-            elif value.replace(".", "", 1).isdigit():
-                value = float(value)
 
-            model_args[model][key] = value
-        except ValueError:
-            print(f"Warning: Skipping invalid model argument: {arg}")
+def finalize_hurdle(config: Dict[str, Any]) -> None:
+    """Finalize hurdle model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.finalize_model",
+        "--model-type",
+        "hurdle",
+        "--experiment",
+        config["experiments"]["hurdle"],
+    ]
+    run_command(cmd, "Finalizing hurdle model")
 
-    return model_args
+
+def score_hurdle(config: Dict[str, Any]) -> None:
+    """Score hurdle model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.score",
+        "--model-type",
+        "hurdle",
+        "--experiment",
+        config["experiments"]["hurdle"],
+    ]
+    run_command(cmd, "Scoring hurdle model")
+
+
+def train_complexity(config: Dict[str, Any]) -> None:
+    """Train complexity model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.complexity",
+        "--model",
+        config["models"]["complexity"],
+        "--experiment",
+        config["experiments"]["complexity"],
+        "--train-end-year",
+        str(config["train_end_year"]),
+        "--tune-start-year",
+        str(config["train_end_year"]),
+        "--tune-end-year",
+        str(config["tune_end_year"]),
+        "--test-start-year",
+        str(config["test_start_year"]),
+        "--test-end-year",
+        str(config["test_end_year"]),
+    ]
+
+    # Add use-sample-weights if specified
+    if config["model_settings"]["complexity"]["use_sample_weights"]:
+        cmd.append("--use-sample-weights")
+
+    run_command(cmd, "Training complexity model")
+
+
+def finalize_complexity(config: Dict[str, Any]) -> None:
+    """Finalize complexity model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.finalize_model",
+        "--model-type",
+        "complexity",
+        "--experiment",
+        config["experiments"]["complexity"],
+    ]
+    run_command(cmd, "Finalizing complexity model")
+
+
+def score_complexity(config: Dict[str, Any]) -> None:
+    """Score complexity model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.score",
+        "--model-type",
+        "complexity",
+        "--experiment",
+        config["experiments"]["complexity"],
+    ]
+    run_command(cmd, "Scoring complexity model")
+
+
+def train_rating(config: Dict[str, Any]) -> None:
+    """Train rating model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.rating",
+        "--model",
+        config["models"]["rating"],
+        "--complexity-experiment",
+        config["experiments"]["complexity"],
+        "--local-complexity-path",
+        config["paths"]["complexity_predictions"],
+        "--experiment",
+        config["experiments"]["rating"],
+        "--train-end-year",
+        str(config["train_end_year"]),
+        "--tune-start-year",
+        str(config["train_end_year"]),
+        "--tune-end-year",
+        str(config["tune_end_year"]),
+        "--test-start-year",
+        str(config["test_start_year"]),
+        "--test-end-year",
+        str(config["test_end_year"]),
+    ]
+
+    # Add use-sample-weights if specified
+    if config["model_settings"]["rating"]["use_sample_weights"]:
+        cmd.append("--use-sample-weights")
+
+    run_command(cmd, "Training rating model")
+
+
+def finalize_rating(config: Dict[str, Any]) -> None:
+    """Finalize rating model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.finalize_model",
+        "--model-type",
+        "rating",
+        "--experiment",
+        config["experiments"]["rating"],
+    ]
+    run_command(cmd, "Finalizing rating model")
+
+
+def score_rating(config: Dict[str, Any]) -> None:
+    """Score rating model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.score",
+        "--model-type",
+        "rating",
+        "--experiment",
+        config["experiments"]["rating"],
+        "--complexity-predictions",
+        config["paths"]["complexity_predictions"],
+    ]
+    run_command(cmd, "Scoring rating model")
+
+
+def train_users_rated(config: Dict[str, Any]) -> None:
+    """Train users_rated model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.users_rated",
+        "--model",
+        config["models"]["users_rated"],
+        "--complexity-experiment",
+        config["experiments"]["complexity"],
+        "--local-complexity-path",
+        config["paths"]["complexity_predictions"],
+        "--experiment",
+        config["experiments"]["users_rated"],
+        "--min-ratings",
+        str(config["model_settings"]["users_rated"]["min_ratings"]),
+        "--train-end-year",
+        str(config["train_end_year"]),
+        "--tune-start-year",
+        str(config["train_end_year"]),
+        "--tune-end-year",
+        str(config["tune_end_year"]),
+        "--test-start-year",
+        str(config["test_start_year"]),
+        "--test-end-year",
+        str(config["test_end_year"]),
+    ]
+    run_command(cmd, "Training users_rated model")
+
+
+def finalize_users_rated(config: Dict[str, Any]) -> None:
+    """Finalize users_rated model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.finalize_model",
+        "--model-type",
+        "users_rated",
+        "--experiment",
+        config["experiments"]["users_rated"],
+    ]
+    run_command(cmd, "Finalizing users_rated model")
+
+
+def score_users_rated(config: Dict[str, Any]) -> None:
+    """Score users_rated model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.score",
+        "--model-type",
+        "users_rated",
+        "--experiment",
+        config["experiments"]["users_rated"],
+        "--complexity-predictions",
+        config["paths"]["complexity_predictions"],
+    ]
+    run_command(cmd, "Scoring users_rated model")
+
+
+def train_geek_rating(config: Dict[str, Any]) -> None:
+    """Train geek rating model (combines all other models)"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "src.models.geek_rating",
+        "--start-year",
+        str(config["test_start_year"]),
+        "--end-year",
+        str(config["test_end_year"]),
+        "--hurdle",
+        config["experiments"]["hurdle"],
+        "--complexity",
+        config["experiments"]["complexity"],
+        "--rating",
+        config["experiments"]["rating"],
+        "--users-rated",
+        config["experiments"]["users_rated"],
+        "--experiment",
+        "estimated-geek-rating",
+    ]
+    run_command(cmd, "Training geek rating model")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run time-based model evaluation")
-    parser.add_argument(
-        "--start-year",
-        type=int,
-        default=2020,
-        help="First year for evaluation",
-    )
-    parser.add_argument(
-        "--end-year",
-        type=int,
-        default=2021,
-        help="Last year for evaluation",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="./models/experiments",
-        help="Output directory for experiments",
-    )
-    parser.add_argument(
-        "--model-args",
-        nargs="+",
-        help="Model arguments in format 'model.key=value'",
-    )
+    """Main training pipeline - replicates 'make models'"""
+    logger.info("Starting BGG Model Training Pipeline")
+    logger.info("====================================")
 
-    args = parser.parse_args()
-
-    # Parse model arguments (will include defaults if none provided)
-    model_args = parse_model_args(args.model_args)
-
-    # Generate time splits
-    splits = generate_time_splits(
-        start_year=args.start_year,
-        end_year=args.end_year,
-    )
-
+    # Load configuration
     try:
-        # Run evaluation
-        run_time_based_evaluation(
-            splits=splits,
-            model_args=model_args,
-            output_dir=args.output_dir,
+        config = load_config()
+        logger.info("Loaded configuration from model_config.yml")
+        logger.info(f"Current year: {config['current_year']}")
+        logger.info(f"Training period: up to {config['train_end_year']}")
+        logger.info(
+            f"Tuning period: {config['train_end_year']} to {config['tune_end_year']}"
         )
+        logger.info(
+            f"Testing period: {config['test_start_year']} to {config['test_end_year']}"
+        )
+
+        # Train models in sequence (matches Makefile order)
+        # 1. Hurdle model
+        logger.info(f"\n🚀 Training hurdle model ({config['models']['hurdle']})")
+        train_hurdle(config)
+        finalize_hurdle(config)
+        score_hurdle(config)
+
+        # 2. Complexity model
+        logger.info(
+            f"\n🚀 Training complexity model ({config['models']['complexity']})"
+        )
+        train_complexity(config)
+        finalize_complexity(config)
+        score_complexity(config)
+
+        # 3. Rating model
+        logger.info(f"\n🚀 Training rating model ({config['models']['rating']})")
+        train_rating(config)
+        finalize_rating(config)
+        score_rating(config)
+
+        # 4. Users rated model
+        logger.info(
+            f"\n🚀 Training users_rated model ({config['models']['users_rated']})"
+        )
+        train_users_rated(config)
+        finalize_users_rated(config)
+        score_users_rated(config)
+
+        # 5. Geek rating model (combines all others)
+        logger.info("\n🚀 Training geek rating model")
+        train_geek_rating(config)
+
+        logger.info(f"\n{'=' * 60}")
+        logger.info("🎉 All models trained successfully!")
+        logger.info("Ready for registration with register.py")
+        logger.info(f"{'=' * 60}")
+
     except Exception as e:
-        print(f"Error running evaluation: {e}", file=sys.stderr)
+        if "Config error" in str(e) or "model_config.yml not found" in str(e):
+            logger.info(f"Error loading configuration: {e}")
+        else:
+            logger.info(f"\n❌ Training pipeline failed: {e}")
         sys.exit(1)
 
 

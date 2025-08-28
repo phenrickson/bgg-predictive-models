@@ -1,0 +1,45 @@
+# Model Configuration for BGG Predictive Models
+# Replicates settings from Makefile
+
+# Year settings
+current_year: 2025
+train_end_year: 2021  # current_year - 4
+tune_end_year: 2022   # train_end_year + 1
+test_start_year: 2023 # tune_end_year + 1
+test_end_year: 2023   # test_start_year
+
+# Evaluation years
+eval_start_year: 2020 # current_year - 5
+eval_end_year: 2024   # eval_start_year + 4
+
+# Scoring years
+score_start_year: 2024 # current_year - 1
+score_end_year: 2029   # current_year + 4
+
+# Model types
+models:
+  hurdle: lightgbm
+  complexity: catboost
+  rating: catboost
+  users_rated: ridge
+
+# Experiment names (constructed from model types)
+experiments:
+  hurdle: lightgbm-hurdle
+  complexity: catboost-complexity
+  rating: catboost-rating
+  users_rated: ridge-users_rated
+
+# Model-specific settings
+model_settings:
+  complexity:
+    use_sample_weights: true
+  rating:
+    use_sample_weights: true
+    min_ratings: 5
+  users_rated:
+    min_ratings: 0
+
+# Paths
+paths:
+  complexity_predictions: models/experiments/predictions/catboost-complexity.parquet
