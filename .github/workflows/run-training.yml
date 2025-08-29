@@ -130,7 +130,7 @@ jobs:
         
         # Create and execute upload job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest\
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 4Gi \
           --cpu 2 \
@@ -140,7 +140,7 @@ jobs:
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
           --command="bash" \
-          --args="-c,uv run python -m src.utils.sync_experiments --bucket-name $GCS_BUCKET_NAME"
+          --args="-c,uv run python -m src.utils.sync_experiments --bucket-name ${{ vars.GCS_BUCKET_NAME }}"
         
         # Execute with streaming logs and wait for completion
         gcloud run jobs execute ${JOB_NAME} \
