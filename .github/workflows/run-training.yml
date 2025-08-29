@@ -76,7 +76,7 @@ jobs:
         
         # Create and execute training job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 16Gi \
           --cpu 8 \
@@ -130,7 +130,7 @@ jobs:
         
         # Create and execute upload job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest\
           --region us-central1 \
           --memory 4Gi \
           --cpu 2 \
@@ -184,7 +184,7 @@ jobs:
         
         # Create and execute registration job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 4Gi \
           --cpu 2 \
