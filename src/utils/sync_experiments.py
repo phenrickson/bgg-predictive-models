@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from google.cloud import storage
 import google.cloud.exceptions
 import logging
-import yaml
 from dotenv import load_dotenv
 import pathspec
 
@@ -53,11 +52,11 @@ def sync_experiments_to_gcs(
     local_dir: str = "models/experiments",
     bucket_name: Optional[str] = None,
     base_prefix: str = "models/experiments",
-    config_path: Optional[str] = "config/bigquery.yaml",
     create_bucket: bool = True,
     location: str = "US",
     download: bool = False,
     gitignore_path: Optional[str] = ".gitignore",
+    dry_run: bool = False,
 ):
     """
     Sync experiments directory with Google Cloud Storage.
@@ -65,13 +64,13 @@ def sync_experiments_to_gcs(
 
     Args:
         local_dir: Local directory to sync
-        bucket_name: GCS bucket name. If None, uses the default from config.
+        bucket_name: GCS bucket name. If None, uses GCS_BUCKET_NAME environment variable.
         base_prefix: Base prefix in the bucket for storing experiments
-        config_path: Path to configuration file with default bucket info
         create_bucket: Whether to create the bucket if it doesn't exist
         location: GCS location for bucket creation
         download: Whether to download missing files from cloud
         gitignore_path: Path to .gitignore file for filtering files
+        dry_run: If True, only show what would be done without actually transferring files
     """
     # Configure logging
     logging.basicConfig(
@@ -79,17 +78,22 @@ def sync_experiments_to_gcs(
     )
     logger = logging.getLogger(__name__)
 
-    # If no bucket specified, try to read from config
-    if bucket_name is None and config_path:
-        try:
-            with open(config_path, "r") as f:
-                config = yaml.safe_load(f)
-                bucket_name = config.get("storage", {}).get("bucket")
-        except FileNotFoundError:
-            logger.warning(f"Config file {config_path} not found")
+    # If no bucket specified, use environment variable
+    if bucket_name is None:
+        bucket_name = os.getenv("GCS_BUCKET_NAME")
+        if bucket_name:
+            logger.info(
+                f"Using bucket from GCS_BUCKET_NAME environment variable: {bucket_name}"
+            )
+        else:
+            logger.info(
+                "No bucket name provided and GCS_BUCKET_NAME environment variable not set"
+            )
 
-    # Use bucket name as provided (should be environment-specific via GitHub environment)
-    logger.info(f"Using bucket: {bucket_name}")
+    logger.info(f"Final bucket name: {bucket_name}")
+
+    if dry_run:
+        logger.info("DRY RUN MODE: No files will be transferred")
 
     if not bucket_name:
         raise ValueError("No bucket name specified or found in configuration")
@@ -169,9 +173,9 @@ def sync_experiments_to_gcs(
     skipped_files = 0
 
     # Determine which files need transfer
-    files_to_transfer: List[Tuple[str, str, bool]] = (
-        []
-    )  # [(relative_path, hash, is_new)]
+    files_to_transfer: List[
+        Tuple[str, str, bool]
+    ] = []  # [(relative_path, hash, is_new)]
 
     if download:
         # Find files that need downloading
@@ -197,28 +201,36 @@ def sync_experiments_to_gcs(
         for dir_path in all_dirs:
             dir_path.mkdir(parents=True, exist_ok=True)
 
-        # Download files in parallel
-        def download_file(args) -> Tuple[str, bool]:
-            relative_path, _, is_new = args
-            try:
-                blob = bucket.blob(f"{base_prefix}/{relative_path}")
-                blob.download_to_filename(str(local_path / relative_path))
+        if dry_run:
+            # In dry-run mode, just log what would be downloaded
+            for relative_path, _, is_new in files_to_transfer:
                 logger.info(
-                    f"{'Downloaded new' if is_new else 'Updated'}: {relative_path}"
+                    f"[DRY RUN] Would {'download new' if is_new else 'update'}: {relative_path}"
                 )
-                return relative_path, True
-            except Exception as e:
-                logger.error(f"Failed to download {relative_path}: {e}")
-                return relative_path, False
+                processed_files += 1
+        else:
+            # Download files in parallel
+            def download_file(args) -> Tuple[str, bool]:
+                relative_path, _, is_new = args
+                try:
+                    blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                    blob.download_to_filename(str(local_path / relative_path))
+                    logger.info(
+                        f"{'Downloaded new' if is_new else 'Updated'}: {relative_path}"
+                    )
+                    return relative_path, True
+                except Exception as e:
+                    logger.error(f"Failed to download {relative_path}: {e}")
+                    return relative_path, False
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [
-                executor.submit(download_file, args) for args in files_to_transfer
-            ]
-            for future in as_completed(futures):
-                _, success = future.result()
-                if success:
-                    processed_files += 1
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(download_file, args) for args in files_to_transfer
+                ]
+                for future in as_completed(futures):
+                    _, success = future.result()
+                    if success:
+                        processed_files += 1
 
     else:
         # Find files that need uploading
@@ -239,34 +251,45 @@ def sync_experiments_to_gcs(
             # Add to transfer list
             files_to_transfer.append((relative_path, local_hash, is_new))
 
-        # Upload files in parallel
-        def upload_file(args) -> Tuple[str, bool]:
-            relative_path, local_hash, is_new = args
-            try:
-                blob = bucket.blob(f"{base_prefix}/{relative_path}")
-                blob.upload_from_filename(str(local_path / relative_path))
-                blob.metadata = {"file_hash": local_hash}
-                blob.patch()
+        if dry_run:
+            # In dry-run mode, just log what would be uploaded
+            for relative_path, _, is_new in files_to_transfer:
                 logger.info(
-                    f"{'Uploaded new' if is_new else 'Updated'}: {relative_path}"
+                    f"[DRY RUN] Would {'upload new' if is_new else 'update'}: {relative_path}"
                 )
-                return relative_path, True
-            except Exception as e:
-                logger.error(f"Failed to process {relative_path}: {e}")
-                return relative_path, False
+                processed_files += 1
+        else:
+            # Upload files in parallel
+            def upload_file(args) -> Tuple[str, bool]:
+                relative_path, local_hash, is_new = args
+                try:
+                    blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                    blob.upload_from_filename(str(local_path / relative_path))
+                    blob.metadata = {"file_hash": local_hash}
+                    blob.patch()
+                    logger.info(
+                        f"{'Uploaded new' if is_new else 'Updated'}: {relative_path}"
+                    )
+                    return relative_path, True
+                except Exception as e:
+                    logger.error(f"Failed to process {relative_path}: {e}")
+                    return relative_path, False
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(upload_file, args) for args in files_to_transfer]
-            for future in as_completed(futures):
-                _, success = future.result()
-                if success:
-                    processed_files += 1
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(upload_file, args) for args in files_to_transfer
+                ]
+                for future in as_completed(futures):
+                    _, success = future.result()
+                    if success:
+                        processed_files += 1
 
     # Summary log
     operation = "Download" if download else "Upload"
+    dry_run_prefix = "[DRY RUN] " if dry_run else ""
     logger.info(
-        f"{operation} sync complete. "
-        f"{processed_files} files processed, "
+        f"{dry_run_prefix}{operation} sync complete. "
+        f"{processed_files} files {'would be ' if dry_run else ''}processed, "
         f"{skipped_files} files skipped, "
         f"total {total_files} files examined in bucket {bucket_name}"
     )
@@ -279,7 +302,7 @@ def main():
     parser.add_argument(
         "--bucket-name",
         default=None,
-        help="GCS bucket name. If not provided, uses default from config.",
+        help="GCS bucket name. If not provided, uses GCS_BUCKET_NAME environment variable.",
     )
     parser.add_argument(
         "--local-dir", default="models/experiments", help="Local directory to sync"
@@ -309,6 +332,11 @@ def main():
         action="store_true",
         help="Download missing files from cloud to local",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without actually transferring files",
+    )
 
     args = parser.parse_args()
 
@@ -316,10 +344,10 @@ def main():
         local_dir=args.local_dir,
         bucket_name=args.bucket_name,
         base_prefix=args.base_prefix,
-        config_path=args.config_path,
         create_bucket=args.create_bucket,
         location=args.location,
         download=args.download,
+        dry_run=args.dry_run,
     )
 
 
