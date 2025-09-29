@@ -207,10 +207,19 @@ def main():
 
         # st.header("Predictions Table")
 
-        # Columns to display
+        # Create a copy of the dataframe for display
+        display_df = filtered_df.copy()
+
+        # Add BoardGameGeek link column
+        display_df["bgg_link"] = display_df.apply(
+            lambda row: f"https://boardgamegeek.com/boardgame/{row['game_id']}", axis=1
+        )
+
+        # Columns to display (with BGG link after game_id)
         display_columns = [
             "year_published",
             "game_id",
+            "bgg_link",
             "name",
             "actual_geek_rating",
             "predicted_geek_rating",
@@ -220,19 +229,8 @@ def main():
             "predicted_users_rated",
         ]
 
-        # Ensure all columns exist
-        display_columns = [col for col in display_columns if col in filtered_df.columns]
-
-        # Create a copy of the dataframe for display
-        display_df = filtered_df.copy()
-
-        # Add BoardGameGeek link column
-        display_df["bgg_link"] = display_df.apply(
-            lambda row: f"https://boardgamegeek.com/boardgame/{row['game_id']}", axis=1
-        )
-
-        # Update display columns to include the new link column
-        display_columns.append("bgg_link")
+        # Ensure all columns exist (check in display_df since that's where bgg_link was added)
+        display_columns = [col for col in display_columns if col in display_df.columns]
 
         # Display interactive table
         st.dataframe(
