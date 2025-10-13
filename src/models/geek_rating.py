@@ -8,7 +8,7 @@ import argparse
 from typing import Dict, Optional, Union
 
 from src.data.loader import BGGDataLoader
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.models.score import load_model
 from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker

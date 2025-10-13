@@ -8,7 +8,7 @@ import yaml
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
-from .config import load_config
+from src.utils.config import load_config
 
 
 logger = logging.getLogger(__name__)

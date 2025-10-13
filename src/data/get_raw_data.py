@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 
 
-from .config import load_config
-from .loader import BGGDataLoader
+from src.utils.config import load_config
+from src.data.loader import BGGDataLoader
 
 
 # Load data

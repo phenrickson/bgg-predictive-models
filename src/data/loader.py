@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
-from .config import BigQueryConfig
+from src.utils.config import BigQueryConfig
 
 
 class BGGDataLoader:

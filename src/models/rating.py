@@ -18,7 +18,7 @@ from src.models.experiments import (
     ExperimentTracker,
     log_experiment,
 )
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.training import (
     load_data,

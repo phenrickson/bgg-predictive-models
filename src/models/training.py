@@ -20,7 +20,7 @@ import lightgbm as lgb
 from catboost import CatBoostRegressor
 
 # Project imports
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
 from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split

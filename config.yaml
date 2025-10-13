@@ -1,0 +1,39 @@
+# Data Configuration
+data:
+  bigquery:
+    dataset: bgg_data_test  # Changed from bgg_data_dev
+    project_id: ${GCP_PROJECT_ID}  # Keep environment variable reference
+
+# Year Configuration
+years:
+  current: 2025
+  train_end: 2021  # current - 4
+  tune_end: 2022   # train_end + 1
+  test_start: 2023 # tune_end + 1
+  test_end: 2023   # test_start
+  eval:
+    start: 2020    # current - 5
+    end: 2024      # start + 4
+  score:
+    start: 2024    # current - 1
+    end: 2029      # current + 4
+
+# Model Configuration
+models:
+  hurdle:
+    type: lightgbm
+    experiment_name: lightgbm-hurdle
+  complexity:
+    type: catboost
+    experiment_name: catboost-complexity
+    use_sample_weights: true
+    predictions_path: models/experiments/predictions/catboost-complexity.parquet
+  rating:
+    type: catboost
+    experiment_name: catboost-rating
+    use_sample_weights: true
+    min_ratings: 5
+  users_rated:
+    type: ridge
+    experiment_name: ridge-users_rated
+    min_ratings: 0
