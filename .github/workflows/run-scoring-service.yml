@@ -12,17 +12,45 @@ on:
         required: false
         default: '2029'
       output_path:
-        description: 'Cloud storage path for predictions'
+        description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
         required: false
-        default: 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet'
+        default: ''
 
   schedule:
     # Run daily at 1 AM UTC
     - cron: '0 1 * * *'
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      env_tag: ${{ steps.env-tag.outputs.env_tag }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
+
   get-latest-models:
     runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read
@@ -37,6 +65,7 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
     - name: Setup Environment
       run: |
         mkdir -p credentials 
@@ -44,7 +73,7 @@ jobs:
         
         cat << EOF > .env
         GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-        GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
+        ENVIRONMENT=${{ needs.setup.outputs.env_tag }}
         GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
         EOF
         
@@ -69,6 +98,7 @@ jobs:
         gcloud config set core/disable_usage_reporting true
         gcloud config set core/disable_prompts true
         gcloud components update
+
     - name: Get Latest Registered Models
       id: get-models
       run: |
@@ -89,8 +119,9 @@ jobs:
         echo "users_rated_model=$(echo $MODELS_JSON | jq -r '.users_rated')" >> $GITHUB_OUTPUT
 
   trigger-predictions:
-    needs: get-latest-models
+    needs: [setup, get-latest-models]
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read
@@ -127,6 +158,13 @@ jobs:
           --format 'value(status.url)')
         echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
+    - name: Setup Environment
+      run: |
+        cat << EOF > .env
+        GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+        ENVIRONMENT=${{ needs.setup.outputs.env_tag }}
+        EOF
+
     - name: Trigger Predictions using score.py
       run: |
         uv run -m scoring_service.score \
@@ -138,15 +176,16 @@ jobs:
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
           --upload-to-bigquery \
-          --output-path "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
+          ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
 
     - name: Log Prediction Metadata
       run: |
         echo "Prediction Parameters:"
+        echo "Environment: ${{ needs.setup.outputs.env_tag }}"
         echo "Hurdle Model: ${{ needs.get-latest-models.outputs.hurdle_model }}"
         echo "Complexity Model: ${{ needs.get-latest-models.outputs.complexity_model }}"
         echo "Rating Model: ${{ needs.get-latest-models.outputs.rating_model }}"
         echo "Users Rated Model: ${{ needs.get-latest-models.outputs.users_rated_model }}"
         echo "Start Year: ${{ github.event.inputs.start_year || 2024 }}"
         echo "End Year: ${{ github.event.inputs.end_year || 2029 }}"
-        echo "Output Path: ${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
+        echo "Output Path: ${{ github.event.inputs.output_path || 'Using environment default' }}"

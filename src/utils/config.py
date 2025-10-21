@@ -21,6 +21,8 @@ class BigQueryConfig:
     project_id: str
     dataset: str
     credentials_path: Optional[str] = None
+    location: str = "US"  # Default to US
+    datasets: Optional[Dict[str, str]] = None  # Make datasets optional
 
     def get_client(self) -> bigquery.Client:
         """Get authenticated BigQuery client using Google Application Default Credentials.
@@ -45,6 +47,14 @@ class BigQueryConfig:
 
         except Exception:
             raise
+
+
+@dataclass
+class EnvironmentConfig:
+    """Configuration for environment-specific settings."""
+
+    bucket_name: str
+    bigquery: BigQueryConfig
 
 
 @dataclass
@@ -77,9 +87,28 @@ class YearConfig:
 class Config:
     """Main configuration class."""
 
-    bigquery: BigQueryConfig
+    environment: Dict[str, EnvironmentConfig]
+    default_environment: str
     years: YearConfig
     models: Dict[str, ModelConfig]
+
+    def get_current_environment(self) -> str:
+        """Get the current environment name based on ENVIRONMENT variable or default."""
+        return os.getenv("ENVIRONMENT", self.default_environment)
+
+    def get_bucket_name(self) -> str:
+        """Get the bucket name for the current environment."""
+        env_name = self.get_current_environment()
+        if env_name not in self.environment:
+            raise ValueError(f"Unknown environment: {env_name}")
+        return self.environment[env_name].bucket_name
+
+    def get_bigquery_config(self) -> BigQueryConfig:
+        """Get the BigQuery configuration for the current environment."""
+        env_name = self.get_current_environment()
+        if env_name not in self.environment:
+            raise ValueError(f"Unknown environment: {env_name}")
+        return self.environment[env_name].bigquery
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -103,19 +132,24 @@ def load_config(config_path: Optional[str] = None) -> Config:
         config = yaml.safe_load(f)
 
     # Validate required sections
-    if not all(section in config for section in ["data", "years", "models"]):
-        raise ValueError("Missing required config sections: data, years, models")
+    if not all(section in config for section in ["environment", "years", "models"]):
+        raise ValueError("Missing required config sections: environment, years, models")
 
     # Get project ID from environment variable
     project_id = os.getenv("GCP_PROJECT_ID")
     if not project_id:
         raise ValueError("GCP_PROJECT_ID environment variable must be set")
 
-    # Create BigQuery config
-    bigquery_config = BigQueryConfig(
-        project_id=project_id,
-        dataset=config["data"]["bigquery"]["dataset"],
-    )
+    # Create environment configs
+    environment_configs = {}
+    for env_name, env_config in config["environment"].items():
+        environment_configs[env_name] = EnvironmentConfig(
+            bucket_name=env_config["bucket_name"],
+            bigquery=BigQueryConfig(
+                project_id=project_id,
+                dataset=env_config["bigquery"]["dataset"],
+            ),
+        )
 
     # Create years config
     years_config = YearConfig(
@@ -142,7 +176,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         )
 
     return Config(
-        bigquery=bigquery_config,
+        environment=environment_configs,
+        default_environment=config.get("default_environment", "dev"),
         years=years_config,
         models=model_configs,
     )

@@ -72,7 +72,8 @@ jobs:
           --max-instances 10 \
           --memory 8Gi \
           --cpu 4 \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
+          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }} \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
 
     - name: Verify Deployment
       run: |

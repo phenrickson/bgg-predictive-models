@@ -346,7 +346,7 @@ def finalize_model(
 
     # Load configuration and data loader
     config = load_config()
-    loader = BGGDataLoader(config)
+    loader = BGGDataLoader(config.get_bigquery_config())
 
     # Extract min_weights and min_ratings if available
     min_weights = extract_min_weights(experiment)

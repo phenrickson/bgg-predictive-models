@@ -65,6 +65,7 @@ $RECYCLE.BIN/
 
 # ignore local data
 /data/
+/data.backup/
 !src/models
 
 # ignore finalized models anywhere in director

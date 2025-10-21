@@ -1,8 +1,20 @@
-# Data Configuration
-data:
-  bigquery:
-    dataset: bgg_data_test  # Changed from bgg_data_dev
-    project_id: ${GCP_PROJECT_ID}  # Keep environment variable reference
+# Environment Configuration
+environment:
+  prod:
+    bucket_name: bgg-predictive-models-prod
+    bigquery:
+      dataset: bgg_data_dev
+  dev:
+    bucket_name: bgg-predictive-models-dev
+    bigquery:
+      dataset: bgg_data_dev
+  test:
+    bucket_name: bgg-predictive-models-test
+    bigquery:
+      dataset: bgg_data_dev
+
+# Default environment
+default_environment: dev
 
 # Year Configuration
 years:

@@ -350,8 +350,20 @@ def main():
     Allows flexible loading of models via command-line arguments and
     tracks the experiment using ExperimentTracker.
     """
+    # Load config to get default paths
+    config = load_config()
+    complexity_predictions_path = config.models["complexity"].predictions_path
+
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Predict geek ratings for board games")
+
+    # Add argument for local complexity predictions path
+    parser.add_argument(
+        "--local-complexity-path",
+        type=str,
+        default=complexity_predictions_path,
+        help="Path to local complexity predictions parquet file",
+    )
 
     # Add arguments for each model experiment
     parser.add_argument(
@@ -431,9 +443,11 @@ def main():
     tracker = ExperimentTracker(model_type="geek_rating")
 
     # Function to get experiment years
-    def get_experiment_years(experiment_name):
+    def get_experiment_years(experiment_name, model_type):
         try:
-            experiment = tracker.load_experiment(experiment_name)
+            # Create tracker with correct model type
+            model_tracker = ExperimentTracker(model_type=model_type)
+            experiment = model_tracker.load_experiment(experiment_name)
             # Assuming the years are stored in the metadata
             return experiment.metadata.get("data_years", {})
         except Exception as e:
@@ -442,12 +456,18 @@ def main():
             )
             return {}
 
+    # Map experiment names to their model types
+    experiment_types = {
+        args.hurdle: "hurdle",
+        args.complexity: "complexity",
+        args.rating: "rating",
+        args.users_rated: "users_rated",
+    }
+
     # Collect years from individual experiments
     experiment_years = {
-        "hurdle": get_experiment_years(args.hurdle),
-        "complexity": get_experiment_years(args.complexity),
-        "rating": get_experiment_years(args.rating),
-        "users_rated": get_experiment_years(args.users_rated),
+        model_type: get_experiment_years(exp_name, model_type)
+        for exp_name, model_type in experiment_types.items()
     }
 
     # Create experiment with additional metadata
@@ -472,7 +492,17 @@ def main():
 
     # Load configuration and data
     config = load_config()
-    loader = BGGDataLoader(config)
+    bigquery_config = config.get_bigquery_config()
+    loader = BGGDataLoader(bigquery_config)
+
+    # Load complexity predictions from local file
+    logger.info(f"Loading complexity predictions from {args.local_complexity_path}")
+    try:
+        complexity_df = pl.read_parquet(args.local_complexity_path)
+        logger.info(f"Loaded {len(complexity_df)} complexity predictions")
+    except Exception as e:
+        logger.error(f"Failed to load complexity predictions: {e}")
+        raise
 
     # Construct WHERE clause for year filtering
     where_clauses = []
@@ -484,6 +514,10 @@ def main():
     # Load data with optional year filtering
     where_clause = " AND ".join(where_clauses) if where_clauses else ""
     df = loader.load_data(where_clause=where_clause, preprocessor=None)
+
+    # Join with complexity predictions
+    df = df.join(complexity_df, on="game_id", how="inner")
+    logger.info(f"After joining with complexity predictions: {len(df)} games")
 
     logger.info(
         f"Filtered to {len(df)} games between years {args.start_year or 'min'} and {args.end_year or 'max'}"

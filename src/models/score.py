@@ -254,7 +254,7 @@ def load_scoring_data(
 
     # Load configuration and data loader
     config = load_config()
-    loader = BGGDataLoader(config)
+    loader = BGGDataLoader(config.get_bigquery_config())
 
     # If data path is provided, load directly from CSV
     if data_path:

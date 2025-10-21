@@ -17,14 +17,22 @@ load_dotenv()
 logger = setup_logging()
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from model_config.yml"""
-    config_path = Path("model_config.yml")
-    if not config_path.exists():
-        raise FileNotFoundError("model_config.yml not found")
+def load_registration_config() -> Dict[str, Any]:
+    """Load configuration for registration from config.yaml"""
+    from src.utils.config import load_config
 
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    config = load_config()
+
+    # Convert config to format expected by registration functions
+    return {
+        "current_year": config.years.current,
+        "experiments": {
+            "hurdle": config.models["hurdle"].experiment_name,
+            "complexity": config.models["complexity"].experiment_name,
+            "rating": config.models["rating"].experiment_name,
+            "users_rated": config.models["users_rated"].experiment_name,
+        },
+    }
 
 
 def run_command(cmd: list, description: str) -> None:
@@ -125,8 +133,8 @@ def main():
 
     # Load configuration and register models
     try:
-        config = load_config()
-        logger.info("Loaded configuration from model_config.yml")
+        config = load_registration_config()
+        logger.info("Loaded configuration from config.yaml")
         logger.info(f"Current year: {config['current_year']}")
         logger.info(f"Registering models with version: v{config['current_year']}")
 

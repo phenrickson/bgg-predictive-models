@@ -1,3 +1,5 @@
+"""Sync experiment files with Google Cloud Storage."""
+
 import os
 import argparse
 import hashlib
@@ -10,6 +12,8 @@ import google.cloud.exceptions
 import logging
 from dotenv import load_dotenv
 import pathspec
+
+from .config import load_config
 
 # Load environment variables from .env file
 load_dotenv()
@@ -57,6 +61,7 @@ def sync_experiments_to_gcs(
     download: bool = False,
     gitignore_path: Optional[str] = ".gitignore",
     dry_run: bool = False,
+    config_path: Optional[str] = None,
 ):
     """
     Sync experiments directory with Google Cloud Storage.
@@ -64,13 +69,14 @@ def sync_experiments_to_gcs(
 
     Args:
         local_dir: Local directory to sync
-        bucket_name: GCS bucket name. If None, uses GCS_BUCKET_NAME environment variable.
+        bucket_name: GCS bucket name. If None, uses configuration from config.yaml
         base_prefix: Base prefix in the bucket for storing experiments
         create_bucket: Whether to create the bucket if it doesn't exist
         location: GCS location for bucket creation
         download: Whether to download missing files from cloud
         gitignore_path: Path to .gitignore file for filtering files
         dry_run: If True, only show what would be done without actually transferring files
+        config_path: Path to config file. If None, uses default config.yaml
     """
     # Configure logging
     logging.basicConfig(
@@ -78,17 +84,15 @@ def sync_experiments_to_gcs(
     )
     logger = logging.getLogger(__name__)
 
-    # If no bucket specified, use environment variable
+    # If no bucket specified, get from config
     if bucket_name is None:
-        bucket_name = os.getenv("GCS_BUCKET_NAME")
-        if bucket_name:
-            logger.info(
-                f"Using bucket from GCS_BUCKET_NAME environment variable: {bucket_name}"
-            )
-        else:
-            logger.info(
-                "No bucket name provided and GCS_BUCKET_NAME environment variable not set"
-            )
+        try:
+            config = load_config(config_path)
+            bucket_name = config.get_bucket_name()
+            logger.info(f"Using bucket from config: {bucket_name}")
+        except Exception as e:
+            logger.error(f"Failed to load bucket name from config: {e}")
+            raise
 
     logger.info(f"Final bucket name: {bucket_name}")
 
@@ -173,9 +177,9 @@ def sync_experiments_to_gcs(
     skipped_files = 0
 
     # Determine which files need transfer
-    files_to_transfer: List[
-        Tuple[str, str, bool]
-    ] = []  # [(relative_path, hash, is_new)]
+    files_to_transfer: List[Tuple[str, str, bool]] = (
+        []
+    )  # [(relative_path, hash, is_new)]
 
     if download:
         # Find files that need downloading
@@ -302,7 +306,7 @@ def main():
     parser.add_argument(
         "--bucket-name",
         default=None,
-        help="GCS bucket name. If not provided, uses GCS_BUCKET_NAME environment variable.",
+        help="GCS bucket name. If not provided, uses configuration from config.yaml",
     )
     parser.add_argument(
         "--local-dir", default="models/experiments", help="Local directory to sync"
@@ -314,8 +318,8 @@ def main():
     )
     parser.add_argument(
         "--config-path",
-        default="config/bigquery.yaml",
-        help="Path to configuration file with default bucket info",
+        default=None,
+        help="Path to configuration file. If not provided, uses default config.yaml",
     )
     parser.add_argument(
         "--create-bucket",
@@ -348,6 +352,7 @@ def main():
         location=args.location,
         download=args.download,
         dry_run=args.dry_run,
+        config_path=args.config_path,
     )
 
 

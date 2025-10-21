@@ -84,7 +84,7 @@ jobs:
           --task-timeout 3600 \
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
           --args="-c,uv run train.py"
         
@@ -138,7 +138,7 @@ jobs:
           --task-timeout 1800 \
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
           --args="-c,uv run python -m src.utils.sync_experiments"
         
@@ -192,7 +192,7 @@ jobs:
           --task-timeout 1800 \
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
           --args="-c,uv run register.py"
         
