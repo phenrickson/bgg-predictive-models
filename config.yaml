@@ -49,3 +49,16 @@ models:
     type: ridge
     experiment_name: ridge-users_rated
     min_ratings: 0
+
+# Scoring Configuration
+scoring:
+  models:
+    hurdle: hurdle-v2025  # Name of registered model to use
+    complexity: complexity-v2025
+    rating: rating-v2025
+    users_rated: users_rated-v2025
+  parameters:
+    prior_rating: 5.5
+    prior_weight: 2000
+  output:
+    predictions_path: data/predictions/game_predictions.parquet

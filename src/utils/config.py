@@ -58,6 +58,15 @@ class EnvironmentConfig:
 
 
 @dataclass
+class ScoringConfig:
+    """Configuration for scoring settings."""
+
+    models: Dict[str, str]  # Maps model type to registered model name
+    parameters: Dict[str, float]  # Scoring parameters like prior_rating
+    output: Dict[str, str]  # Output settings like predictions_path
+
+
+@dataclass
 class ModelConfig:
     """Configuration for model settings."""
 
@@ -91,6 +100,7 @@ class Config:
     default_environment: str
     years: YearConfig
     models: Dict[str, ModelConfig]
+    scoring: Optional[ScoringConfig] = None
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -175,9 +185,19 @@ def load_config(config_path: Optional[str] = None) -> Config:
             predictions_path=model_config.get("predictions_path"),
         )
 
+    # Create scoring config if present
+    scoring_config = None
+    if "scoring" in config:
+        scoring_config = ScoringConfig(
+            models=config["scoring"]["models"],
+            parameters=config["scoring"]["parameters"],
+            output=config["scoring"]["output"],
+        )
+
     return Config(
         environment=environment_configs,
         default_environment=config.get("default_environment", "dev"),
         years=years_config,
         models=model_configs,
+        scoring=scoring_config,
     )

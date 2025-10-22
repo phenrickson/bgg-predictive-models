@@ -26,13 +26,13 @@ def submit_scoring_request(
     service_url: str,
     start_year: int,
     end_year: int,
-    hurdle_model: str,
-    complexity_model: str,
-    rating_model: str,
-    users_rated_model: str,
+    hurdle_model: Optional[str] = None,
+    complexity_model: Optional[str] = None,
+    rating_model: Optional[str] = None,
+    users_rated_model: Optional[str] = None,
     output_path: Optional[str] = None,
-    prior_rating: float = 5.5,
-    prior_weight: float = 2000,
+    prior_rating: Optional[float] = None,
+    prior_weight: Optional[float] = None,
     upload_to_bigquery: bool = False,
 ) -> dict:
     """
@@ -42,33 +42,59 @@ def submit_scoring_request(
         service_url: URL of the scoring service
         start_year: Start year for predictions
         end_year: End year for predictions
-        hurdle_model: Name of hurdle model to use
-        complexity_model: Name of complexity model to use
-        rating_model: Name of rating model to use
-        users_rated_model: Name of users rated model to use
-        output_path: Optional local path to save predictions
-        prior_rating: Prior mean rating for Bayesian average
-        prior_weight: Weight given to prior rating
+        hurdle_model: Optional override for hurdle model name
+        complexity_model: Optional override for complexity model name
+        rating_model: Optional override for rating model name
+        users_rated_model: Optional override for users rated model name
+        output_path: Optional override for predictions output path
+        prior_rating: Optional override for prior mean rating
+        prior_weight: Optional override for prior weight
+        upload_to_bigquery: Whether to upload results to BigQuery
 
     Returns:
         Response from scoring service
     """
     logger = setup_logging()
+    config = load_config()
 
-    payload = {
-        "hurdle_model_name": hurdle_model,
-        "complexity_model_name": complexity_model,
-        "rating_model_name": rating_model,
-        "users_rated_model_name": users_rated_model,
-        "start_year": start_year,
-        "end_year": end_year,
-        "prior_rating": prior_rating,
-        "prior_weight": prior_weight,
-        "upload_to_bigquery": upload_to_bigquery,
-    }
+    # Get model names and parameters from config
+    if config.scoring:
+        model_config = config.scoring.models
+        param_config = config.scoring.parameters
+        output_config = config.scoring.output
 
-    if output_path:
-        payload["output_path"] = output_path
+        payload = {
+            "hurdle_model_name": hurdle_model or model_config.get("hurdle"),
+            "complexity_model_name": complexity_model or model_config.get("complexity"),
+            "rating_model_name": rating_model or model_config.get("rating"),
+            "users_rated_model_name": users_rated_model
+            or model_config.get("users_rated"),
+            "start_year": start_year,
+            "end_year": end_year,
+            "prior_rating": prior_rating or param_config.get("prior_rating", 5.5),
+            "prior_weight": prior_weight or param_config.get("prior_weight", 2000),
+            "upload_to_bigquery": upload_to_bigquery,
+        }
+
+        if output_path:
+            payload["output_path"] = output_path
+        elif "predictions_path" in output_config:
+            payload["output_path"] = output_config["predictions_path"]
+    else:
+        # If no scoring config, use provided values or defaults
+        payload = {
+            "hurdle_model_name": hurdle_model,
+            "complexity_model_name": complexity_model,
+            "rating_model_name": rating_model,
+            "users_rated_model_name": users_rated_model,
+            "start_year": start_year,
+            "end_year": end_year,
+            "prior_rating": prior_rating or 5.5,
+            "prior_weight": prior_weight or 2000,
+            "upload_to_bigquery": upload_to_bigquery,
+        }
+        if output_path:
+            payload["output_path"] = output_path
 
     # Add BigQuery environment from config if uploading to BigQuery
     if upload_to_bigquery:
@@ -145,22 +171,16 @@ def main():
         description="Submit scoring request to BGG Scoring Service"
     )
 
-    # Model selection arguments
-    parser.add_argument(
-        "--hurdle-model", required=True, help="Name of hurdle model to use"
-    )
+    # Model selection arguments (optional now since they can come from config)
+    parser.add_argument("--hurdle-model", help="Override hurdle model name from config")
     parser.add_argument(
         "--complexity-model",
-        required=True,
-        help="Name of complexity model to use",
+        help="Override complexity model name from config",
     )
-    parser.add_argument(
-        "--rating-model", required=True, help="Name of rating model to use"
-    )
+    parser.add_argument("--rating-model", help="Override rating model name from config")
     parser.add_argument(
         "--users-rated-model",
-        required=True,
-        help="Name of users rated model to use",
+        help="Override users rated model name from config",
     )
 
     # Year range arguments
