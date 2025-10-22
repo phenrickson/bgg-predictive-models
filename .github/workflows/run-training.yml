@@ -7,8 +7,46 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-training:
+  setup:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      env_tag: ${{ steps.env-tag.outputs.env_tag }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Google Cloud Docker Auth
+      run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
+
+  train-model:
+    runs-on: ubuntu-latest
+    needs: setup
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
     
     permissions:
@@ -30,67 +68,140 @@ jobs:
     - name: Configure Google Cloud Docker Auth
       run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
-    - name: Run training job
+    - name: Run model training
       run: |
-        # Create unique job name
         JOB_NAME="bgg-training-${{ github.run_id }}"
         
-        echo "Creating Cloud Run job: ${JOB_NAME}"
+        echo "Running model training job: ${JOB_NAME}"
         
-        # Create Cloud Run job
+        # Create and execute training job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
           --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
           --region us-central1 \
           --memory 16Gi \
-          --cpu 4 \
+          --cpu 8 \
           --max-retries 0 \
           --task-timeout 3600 \
           --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
-          --args="-c,ls -la && pwd && uv run train.py && uv run register.py"
-
-        # Execute the job and wait for completion
-        echo "Starting Cloud Run job execution..."
-        EXECUTION_OUTPUT=$(gcloud run jobs execute ${JOB_NAME} \
+          --args="-c,uv run train.py"
+        
+        # Execute with streaming logs and wait for completion
+        gcloud run jobs execute ${JOB_NAME} \
           --region us-central1 \
-          --wait 2>&1)
-        echo "$EXECUTION_OUTPUT"
+          --wait
         
-        # Extract execution ID from output
-        EXECUTION_ID=$(echo "$EXECUTION_OUTPUT" | grep -o "${JOB_NAME}-[0-9a-z\-]*" | head -1)
+        # Clean up the job
+        gcloud run jobs delete ${JOB_NAME} \
+          --region us-central1 \
+          --quiet
+
+  upload-experiments:
+    runs-on: ubuntu-latest
+    needs: [setup, train-model]
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Google Cloud Docker Auth
+      run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+    - name: Upload training artifacts
+      run: |
+        JOB_NAME="bgg-upload-${{ github.run_id }}"
         
-        if [ -n "$EXECUTION_ID" ]; then
-          echo "Execution ID: $EXECUTION_ID"
-          
-          # Get all logs from the execution
-          echo "Fetching complete logs for execution $EXECUTION_ID"
-          gcloud run jobs executions logs read $EXECUTION_ID \
-            --region us-central1 \
-            --project ${{ vars.GCP_PROJECT_ID }}
-          
-          # Log job URL for reference
-          echo "Job URL: https://console.cloud.google.com/run/jobs/executions/details/us-central1/$EXECUTION_ID/tasks?project=${{ vars.GCP_PROJECT_ID }}"
-          
-          # Check if job succeeded
-          STATUS=$(gcloud run jobs executions describe $EXECUTION_ID \
-            --region us-central1 \
-            --format='get(condition.type)')
-          
-          # Clean up the job
-          echo "Cleaning up job ${JOB_NAME}"
-          gcloud run jobs delete ${JOB_NAME} \
-            --region us-central1 \
-            --quiet || echo "Failed to delete job, may need manual cleanup"
-          
-          if [ "$STATUS" != "COMPLETED" ]; then
-            echo "Job failed with status: $STATUS"
-            exit 1
-          fi
-        else
-          echo "Failed to extract execution ID from output"
-          exit 1
-        fi
+        echo "Running experiment upload job: ${JOB_NAME}"
         
-        echo "Training job completed. Check the logs above for results."
+        # Create and execute upload job with streaming logs
+        gcloud run jobs create ${JOB_NAME} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
+          --region us-central1 \
+          --memory 4Gi \
+          --cpu 2 \
+          --max-retries 0 \
+          --task-timeout 1800 \
+          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
+          --command="bash" \
+          --args="-c,uv run python -m src.utils.sync_experiments"
+        
+        # Execute with streaming logs and wait for completion
+        gcloud run jobs execute ${JOB_NAME} \
+          --region us-central1 \
+          --wait
+        
+        # Clean up the job
+        gcloud run jobs delete ${JOB_NAME} \
+          --region us-central1 \
+          --quiet
+
+  register-model:
+    runs-on: ubuntu-latest
+    needs: [setup, train-model, upload-experiments]
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'TEST' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Google Cloud Docker Auth
+      run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+    - name: Register trained model
+      run: |
+        JOB_NAME="bgg-registration-${{ github.run_id }}"
+        
+        echo "Running model registration job: ${JOB_NAME}"
+        
+        # Create and execute registration job with streaming logs
+        gcloud run jobs create ${JOB_NAME} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:latest \
+          --region us-central1 \
+          --memory 4Gi \
+          --cpu 2 \
+          --max-retries 0 \
+          --task-timeout 1800 \
+          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
+          --command="bash" \
+          --args="-c,uv run register.py"
+        
+        # Execute with streaming logs and wait for completion
+        gcloud run jobs execute ${JOB_NAME} \
+          --region us-central1 \
+          --wait
+        
+        # Clean up the job
+        gcloud run jobs delete ${JOB_NAME} \
+          --region us-central1 \
+          --quiet

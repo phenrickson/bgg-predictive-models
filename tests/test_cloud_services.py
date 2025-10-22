@@ -9,7 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 
 from src.data.bigquery_uploader import BigQueryUploader
-from src.data.config import load_config
+from src.utils.config import load_config
 from scoring_service.auth import GCPAuthenticator
 
 

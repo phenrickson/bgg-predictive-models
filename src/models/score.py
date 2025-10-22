@@ -249,12 +249,12 @@ def load_scoring_data(
         Polars DataFrame with data to be scored
     """
     from src.data.loader import BGGDataLoader
-    from src.data.config import load_config
+    from src.utils.config import load_config
     from src.models.experiments import ExperimentTracker
 
     # Load configuration and data loader
     config = load_config()
-    loader = BGGDataLoader(config)
+    loader = BGGDataLoader(config.get_bigquery_config())
 
     # If data path is provided, load directly from CSV
     if data_path:

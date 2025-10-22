@@ -294,6 +294,10 @@ experiment_dashboard:
 predictions_dashboard:
 	uv run streamlit run src/monitor/predictions_dashboard.py
 
+## view experiments
+unsupervised_dashboard:
+	uv run streamlit run src/monitor/unsupervised_dashboard.py
+
 
 clean_experiments:
 	@echo "This will delete all subfolders in models/experiments/"

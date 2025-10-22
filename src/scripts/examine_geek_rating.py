@@ -15,7 +15,7 @@ from sklearn.metrics import (
     r2_score,
 )
 
-from src.data.config import load_config
+from src.utils.config import load_config
 
 # Configure logging
 logging.basicConfig(

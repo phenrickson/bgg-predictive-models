@@ -8,7 +8,7 @@ from google.cloud.exceptions import NotFound, Forbidden
 import tempfile
 import json
 
-from src.data.config import load_config, BigQueryConfig
+from src.utils.config import load_config, BigQueryConfig
 from scoring_service.auth import GCPAuthenticator, AuthenticationError
 
 

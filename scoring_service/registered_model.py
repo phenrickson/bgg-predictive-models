@@ -13,6 +13,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from src.models.experiments import Experiment, ExperimentTracker  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 
 try:
     # Try relative import first (when running as module from project root)
@@ -37,7 +38,7 @@ class RegisteredModel(ExperimentTracker):
     def __init__(
         self,
         model_type: str,
-        bucket_name: str,
+        bucket_name: Optional[str] = None,
         project_id: Optional[str] = None,
         base_prefix: str = "models/registered",
     ):
@@ -45,12 +46,17 @@ class RegisteredModel(ExperimentTracker):
 
         Args:
             model_type: Type of model (hurdle, complexity, etc.)
-            bucket_name: Google Cloud Storage bucket name
+            bucket_name: Google Cloud Storage bucket name. If not provided, uses config system.
             project_id: Optional Google Cloud project ID (uses environment default if not provided)
             base_prefix: Base prefix for registered model storage
         """
         # Initialize base tracker with local directory
         super().__init__(model_type)
+
+        # Get bucket name from config if not provided
+        if bucket_name is None:
+            config = load_config()
+            bucket_name = config.get_bucket_name()
 
         # Initialize GCS client using new authentication
         try:
@@ -100,6 +106,11 @@ class RegisteredModel(ExperimentTracker):
         existing_versions = self.list_model_versions(name)
         next_version = max([v["version"] for v in existing_versions], default=0) + 1
 
+        # Add environment to metadata
+        if metadata is None:
+            metadata = {}
+        metadata["environment"] = os.getenv("ENVIRONMENT", "unknown")
+
         # Prepare registration metadata
         registration = {
             "name": name,
@@ -112,8 +123,9 @@ class RegisteredModel(ExperimentTracker):
             },
             "model_info": model_info,
             "registered_at": datetime.now().isoformat(),
-            "registered_by": metadata.get("registered_by") if metadata else None,
-            "metadata": metadata or {},
+            "registered_by": metadata.get("registered_by"),
+            "environment": metadata["environment"],
+            "metadata": metadata,
         }
 
         # Create version directory in GCS

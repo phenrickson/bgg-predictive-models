@@ -8,7 +8,7 @@ import yaml
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
-from .config import load_config
+from src.utils.config import load_config
 
 
 logger = logging.getLogger(__name__)
@@ -26,24 +26,17 @@ class BigQueryUploader:
         """
         self.environment = environment
 
-        # Load BigQuery configuration from config.yaml
-        self.bq_config = load_config()
+        # Load configuration from config.yaml
+        config = load_config()
+
+        # Get BigQuery configuration for the specified environment
+        self.bq_config = config.get_bigquery_config()
         self.client = self.bq_config.get_client()
 
-        # Use project_id from BigQuery config (which gets it from environment variables)
+        # Get environment-specific settings
         self.project_id = self.bq_config.project_id
-
-        # Set dataset based on environment suffix
-        base_dataset = self.bq_config.dataset
-        if environment == "prod":
-            # Remove _dev suffix for production
-            self.dataset_id = base_dataset.replace("_dev", "")
-        else:
-            # Keep _dev suffix for dev environment
-            self.dataset_id = base_dataset
-
-        # Default location
-        self.location = "US"
+        self.dataset_id = self.bq_config.dataset
+        self.location = self.bq_config.location
 
         # Load table configurations from bigquery.yaml for schema definitions
         self.table_config_path = (

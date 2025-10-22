@@ -37,25 +37,43 @@ jobs:
       run: |
         gcloud auth configure-docker gcr.io
 
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
+
     - name: Build Docker Image
       run: |
-        docker build -f Dockerfile.scoring -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} .
+        docker build -f Dockerfile.scoring \
+          -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} \
+          -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.env-tag.outputs.env_tag }} \
+          -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          .
 
     - name: Push Docker Image
       run: |
         docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }}
+        docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.env-tag.outputs.env_tag }}
+        docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy bgg-model-scoring \
-          --image gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} \
+          --image gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
           --platform managed \
           --region us-central1 \
           --allow-unauthenticated \
           --max-instances 10 \
           --memory 8Gi \
           --cpu 4 \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
+          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }} \
+          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
 
     - name: Verify Deployment
       run: |

@@ -10,7 +10,7 @@ import polars as pl
 
 from src.models.experiments import ExperimentTracker
 from src.models.experiments import Experiment
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.hurdle import setup_logging
 from src.models.training import calculate_sample_weights  # Import the function
@@ -346,7 +346,7 @@ def finalize_model(
 
     # Load configuration and data loader
     config = load_config()
-    loader = BGGDataLoader(config)
+    loader = BGGDataLoader(config.get_bigquery_config())
 
     # Extract min_weights and min_ratings if available
     min_weights = extract_min_weights(experiment)

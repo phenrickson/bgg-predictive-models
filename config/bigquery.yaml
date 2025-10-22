@@ -18,9 +18,6 @@ datasets:
   reporting: bgg_reporting_dev
   monitoring: bgg_monitoring_dev
 
-storage:
-  bucket: bgg-predictive-models
-
 # Raw data tables
 raw_tables:
   thing_ids:

@@ -13,6 +13,7 @@ sys.path.insert(0, project_root)
 
 from src.models.experiments import ExperimentTracker  # noqa: E402
 from scoring_service.registered_model import RegisteredModel  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 
 # load environment variables
 load_dotenv()
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def validate_environment():
     """Validate that required environment variables are set."""
-    required_vars = ["GCP_PROJECT_ID", "GCS_BUCKET_NAME"]
+    required_vars = ["GCP_PROJECT_ID", "ENVIRONMENT"]
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
         raise ValueError(
@@ -54,11 +55,11 @@ def register_model(
     # Validate environment variables
     validate_environment()
 
-    # Get bucket name from environment if not provided
+    # Get bucket name from config if not provided
     if bucket_name is None:
-        bucket_name = os.getenv("GCS_BUCKET_NAME")
-        if not bucket_name:
-            raise ValueError("GCS_BUCKET_NAME environment variable is required")
+        config = load_config()
+        bucket_name = config.get_bucket_name()
+        logger.info(f"Using bucket from config: {bucket_name}")
 
     # Load experiment
     tracker = ExperimentTracker(model_type)
@@ -96,6 +97,8 @@ def register_model(
         print(f"  Version: {registration['version']}")
         print(f"  Description: {registration['description']}")
         print(f"  Registered at: {registration['registered_at']}")
+        print(f"  Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
+        print(f"  Bucket: {bucket_name}")
 
         return registration
 

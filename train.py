@@ -17,14 +17,44 @@ load_dotenv()
 logger = setup_logging()
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from model_config.yml"""
-    config_path = Path("model_config.yml")
-    if not config_path.exists():
-        raise FileNotFoundError("model_config.yml not found")
+def load_training_config() -> Dict[str, Any]:
+    """Load configuration for training from config.yaml"""
+    from src.utils.config import load_config
 
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    config = load_config()
+
+    # Convert config to format expected by training functions
+    return {
+        "current_year": config.years.current,
+        "train_end_year": config.years.train_end,
+        "tune_end_year": config.years.tune_end,
+        "test_start_year": config.years.test_start,
+        "test_end_year": config.years.test_end,
+        "models": {
+            "hurdle": config.models["hurdle"].type,
+            "complexity": config.models["complexity"].type,
+            "rating": config.models["rating"].type,
+            "users_rated": config.models["users_rated"].type,
+        },
+        "experiments": {
+            "hurdle": config.models["hurdle"].experiment_name,
+            "complexity": config.models["complexity"].experiment_name,
+            "rating": config.models["rating"].experiment_name,
+            "users_rated": config.models["users_rated"].experiment_name,
+        },
+        "model_settings": {
+            "complexity": {
+                "use_sample_weights": config.models["complexity"].use_sample_weights
+            },
+            "rating": {
+                "use_sample_weights": config.models["rating"].use_sample_weights
+            },
+            "users_rated": {"min_ratings": config.models["users_rated"].min_ratings},
+        },
+        "paths": {
+            "complexity_predictions": config.models["complexity"].predictions_path
+        },
+    }
 
 
 def run_command(cmd: list, description: str) -> None:
@@ -318,8 +348,8 @@ def main():
 
     # Load configuration
     try:
-        config = load_config()
-        logger.info("Loaded configuration from model_config.yml")
+        config = load_training_config()
+        logger.info("Loaded configuration from config.yaml")
         logger.info(f"Current year: {config['current_year']}")
         logger.info(f"Training period: up to {config['train_end_year']}")
         logger.info(

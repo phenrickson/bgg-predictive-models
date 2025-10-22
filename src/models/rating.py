@@ -12,13 +12,12 @@ from sklearn.base import clone
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Project imports
-# Project imports
 from src.utils.logging import setup_logging
 from src.models.experiments import (
     ExperimentTracker,
     log_experiment,
 )
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
 from src.models.training import (
     load_data,
@@ -250,36 +249,15 @@ def main():
         f"Loading complexity predictions for experiment: {args.complexity_experiment}"
     )
 
-    # Try to load from local path first
-    if args.local_complexity_path:
-        try:
-            complexity_df = pl.read_parquet(args.local_complexity_path)
-            logger.info(
-                f"Loaded local complexity predictions from {args.local_complexity_path}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to load local complexity predictions: {e}")
-            raise
-    else:
-        # If no local path, load from BigQuery
-        try:
-            config = load_config()
-            loader = BGGDataLoader(config)
-
-            # Construct query to get complexity predictions for a specific experiment
-            query = f"""
-            SELECT game_id, predicted_complexity
-            FROM `{config.project_id}.{config.dataset}.complexity_predictions`
-            WHERE model_id = '{args.complexity_experiment}'
-            """
-
-            complexity_df = pl.from_pandas(loader.client.query(query).to_dataframe())
-            logger.info(
-                f"Loaded complexity predictions from BigQuery for experiment {args.complexity_experiment}"
-            )
-        except Exception as e:
-            logger.error(f"Failed to load complexity predictions from BigQuery: {e}")
-            raise
+    # Load complexity predictions from local file
+    try:
+        complexity_df = pl.read_parquet(args.local_complexity_path)
+        logger.info(
+            f"Loaded {len(complexity_df)} complexity predictions from {args.local_complexity_path}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to load complexity predictions: {e}")
+        raise
 
     # Validate complexity predictions
     if len(complexity_df) == 0:
