@@ -285,6 +285,10 @@ register_hurdle:
 	--name hurdle-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
 
+## dashboard
+dashboard:
+	uv run streamlit run src/monitor/Experiments.py
+
 
 ## view experiments
 experiment_dashboard:

@@ -860,7 +860,7 @@ def display_predictions(
     Display predictions for a specific dataset with comprehensive analysis.
 
     Args:
-        experiment: Experiment object
+        experiment: Experiment dictionary containing experiment details
         dataset: Dataset to display predictions for ('tune' or 'test')
         model_type: Type of model ('regression' or 'classification')
         selected_model_type: Model type selected in the sidebar
@@ -868,9 +868,13 @@ def display_predictions(
     Returns:
         Polars DataFrame with predictions
     """
-    # Check if predictions exist
+    # Load actual experiment instance
     try:
-        predictions_df = experiment.get_predictions(dataset)
+        tracker = ExperimentTracker(selected_model_type)
+        exp_instance = tracker.load_experiment(
+            experiment["name"], experiment["version"]
+        )
+        predictions_df = exp_instance.get_predictions(dataset)
     except Exception as e:
         st.warning(f"Could not retrieve predictions: {e}")
         st.info("Possible reasons:")

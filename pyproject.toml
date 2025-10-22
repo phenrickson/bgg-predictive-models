@@ -65,6 +65,7 @@ extend-exclude = '''
 
 # pyproject.toml
 [tool.pytest.ini_options]
+pythonpath = "."
 filterwarnings = [
     "error",
     "ignore::UserWarning",

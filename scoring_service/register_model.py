@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 def validate_environment():
     """Validate that required environment variables are set."""
-    required_vars = ["GCP_PROJECT_ID", "ENVIRONMENT"]
+    required_vars = [
+        "GCP_PROJECT_ID"
+    ]  # ENVIRONMENT is optional as it defaults to value in config
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
         raise ValueError(
