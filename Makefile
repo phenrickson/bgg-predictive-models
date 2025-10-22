@@ -287,8 +287,7 @@ register_hurdle:
 
 ## dashboard
 dashboard:
-	uv run streamlit run src/monitor/Experiments.py
-
+	uv run streamlit run src/streamlit/Home.py
 
 ## view experiments
 experiment_dashboard:
