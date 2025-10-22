@@ -30,8 +30,9 @@ COPY src/ /app/src/
 # Copy credentials directory
 COPY credentials/ /credentials/
 
-# Copy config directory
+# Copy config files
 COPY config/ /app/config/
+COPY config.yaml /app/config.yaml
 
 # Create necessary directories
 RUN mkdir -p data/predictions
@@ -46,7 +47,6 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # pass along environment variables
 ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
-ENV GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
 ENV GOOGLE_APPLICATION_CREDENTIALS=/credentials/service-account-key.json
 
 # Expose port for FastAPI

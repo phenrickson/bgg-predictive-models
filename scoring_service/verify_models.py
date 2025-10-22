@@ -1,7 +1,14 @@
 from google.cloud import storage
 import json
 import os
+import sys
 from dotenv import load_dotenv
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
+from src.utils.config import load_config  # noqa: E402
 
 # Load environment variables from .env file
 load_dotenv()
@@ -82,8 +89,9 @@ def verify_model_registration(bucket_name, model_types, project_id=None):
 
 
 def main():
-    # Get bucket name from environment variable
-    bucket_name = os.getenv("GCS_BUCKET_NAME", "bgg-predictive-models-dev")
+    # Get bucket name from config
+    config = load_config()
+    bucket_name = config.get_bucket_name()
 
     # Model types to verify
     model_types = ["hurdle", "complexity", "rating", "users_rated"]

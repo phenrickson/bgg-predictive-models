@@ -22,7 +22,7 @@ sys.path.insert(0, project_root)
 
 from registered_model import RegisteredModel  # noqa: E402
 from src.data.loader import BGGDataLoader  # noqa: E402
-from src.data.config import load_config  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 from src.data.bigquery_uploader import BigQueryUploader  # noqa: E402
 from src.models.geek_rating import calculate_geek_rating  # noqa: E402
 from auth import GCPAuthenticator, AuthenticationError  # noqa: E402
@@ -41,7 +41,10 @@ if credentials_path and not os.path.isabs(credentials_path):
 try:
     authenticator = GCPAuthenticator()
     GCP_PROJECT_ID = authenticator.project_id
-    BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "bgg-models")
+
+    # Get bucket name from config
+    config = load_config()
+    BUCKET_NAME = config.get_bucket_name()
 
     # Verify bucket access
     if not authenticator.verify_bucket_access(BUCKET_NAME):
@@ -118,7 +121,8 @@ def load_game_data(
     Load game data with optional year filtering.
     """
     config = load_config()
-    loader = BGGDataLoader(config)
+    bigquery_config = config.get_bigquery_config()
+    loader = BGGDataLoader(bigquery_config)
 
     where_clause = construct_year_filter(start_year, end_year)
     df = loader.load_data(where_clause=where_clause, preprocessor=None)

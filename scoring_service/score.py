@@ -13,6 +13,7 @@ sys.path.insert(0, project_root)
 load_dotenv()
 
 from src.utils.logging import setup_logging  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 
 # Add scoring_service directory to path for auth module
 scoring_service_path = os.path.dirname(__file__)
@@ -20,17 +21,15 @@ sys.path.insert(0, scoring_service_path)
 
 from auth import get_authenticated_storage_client  # noqa: E402
 
-# Load environment variables
-
 
 def submit_scoring_request(
     service_url: str,
     start_year: int,
     end_year: int,
-    hurdle_model: str = "hurdle-v2025",
-    complexity_model: str = "complexity-v2025",
-    rating_model: str = "rating-v2025",
-    users_rated_model: str = "users_rated-v2025",
+    hurdle_model: str,
+    complexity_model: str,
+    rating_model: str,
+    users_rated_model: str,
     output_path: Optional[str] = None,
     prior_rating: float = 5.5,
     prior_weight: float = 2000,
@@ -71,11 +70,12 @@ def submit_scoring_request(
     if output_path:
         payload["output_path"] = output_path
 
-    # Add BigQuery environment from environment variable if uploading to BigQuery
+    # Add BigQuery environment from config if uploading to BigQuery
     if upload_to_bigquery:
-        bigquery_env = os.getenv("BIGQUERY_ENVIRONMENT", "dev")
-        payload["bigquery_environment"] = bigquery_env
-        logger.info(f"BigQuery upload enabled for environment: {bigquery_env}")
+        config = load_config()
+        environment = config.get_current_environment()
+        payload["bigquery_environment"] = environment
+        logger.info(f"BigQuery upload enabled for environment: {environment}")
 
     try:
         logger.info(f"Submitting scoring request to {service_url}")
@@ -116,9 +116,16 @@ def download_predictions(gcs_path: str, local_path: Optional[str] = None) -> str
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(blob_path)
 
-    # Determine local save path
+    # Determine local save path from config
     if not local_path:
-        local_path = os.path.join("data", "predictions", os.path.basename(blob_path))
+        config = load_config()
+        predictions_path = os.path.join("data", "predictions")
+        if (
+            "predictions" in config.models
+            and "predictions_path" in config.models["predictions"]
+        ):
+            predictions_path = config.models["predictions"]["predictions_path"]
+        local_path = os.path.join(predictions_path, os.path.basename(blob_path))
 
     # Ensure directory exists
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
@@ -140,19 +147,19 @@ def main():
 
     # Model selection arguments
     parser.add_argument(
-        "--hurdle-model", default="hurdle-v2025", help="Name of hurdle model to use"
+        "--hurdle-model", required=True, help="Name of hurdle model to use"
     )
     parser.add_argument(
         "--complexity-model",
-        default="complexity-v2025",
+        required=True,
         help="Name of complexity model to use",
     )
     parser.add_argument(
-        "--rating-model", default="rating-v2025", help="Name of rating model to use"
+        "--rating-model", required=True, help="Name of rating model to use"
     )
     parser.add_argument(
         "--users-rated-model",
-        default="users_rated-v2025",
+        required=True,
         help="Name of users rated model to use",
     )
 
