@@ -53,7 +53,9 @@ help:  ## Show this help message
 	@echo '  make clean_experiments           Remove all experiment subfolders'
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make years                       Show year configuration for model training'
-	@echo '  make evaluate                    Evaluate models over time'
+	@echo '  make evaluate                    Evaluate models over time using config.yaml'
+	@echo '  make evaluate-verbose            Run evaluation with verbose logging'
+	@echo '  make evaluate-dry-run            Show what evaluation would do without running'
 	@echo '  make predictions                 Generate predictions using trained models'
 	@echo '  make experiment_dashboard        Launch predictions dashboard'
 	@echo '  make predictions_dashboard       Launch geek rating dashboard'
@@ -228,32 +230,16 @@ geek_rating:
 	--users-rated $(USERS_RATED_CANDIDATE) \
 	--experiment estimated-geek-rating
 
-# evaluate over time
-.PHONY: evaluate
+# evaluate over time using config.yaml settings
+.PHONY: evaluate evaluate-verbose evaluate-dry-run
 evaluate:
-	uv run -m src.models.time_based_evaluation \
-	--start-year $(EVAL_START_YEAR) \
-	--end-year $(EVAL_END_YEAR) \
-	--output-dir ./models/experiments \
-    --model-args \
-		hurdle.model= $(HURDLE_MODEL) \
-        complexity.model=$(COMPLEXITY_MODEL) \
-        complexity.use-sample-weights=true \
-        rating.model=$(RATING_MODEL) \
-        rating.min-ratings=5 \
-        rating.use-sample-weights=true \
-        users_rated.model=$(USERS_RATED_MODEL) \
-        users_rated.min-ratings=0
+	uv run python evaluate.py
 
-# predictions
-predictions: 
-	uv run predict.py \
-	--start-year 0 \
-	--end-year 2029 \
-	--hurdle $(HURDLE_CANDIDATE) \
-	--complexity $(COMPLEXITY_CANDIDATE) \
-	--rating $(RATING_CANDIDATE)
-	--users-rated $(USERS_RATED_CANDIDATE)
+evaluate-verbose:  ## Run evaluation with verbose logging
+	uv run python evaluate.py --verbose
+
+evaluate-dry-run:  ## Show what evaluation would do without running
+	uv run python evaluate.py --dry-run --verbose
 
 ### register model candidates
 # register models
