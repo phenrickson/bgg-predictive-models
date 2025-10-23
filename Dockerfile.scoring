@@ -27,27 +27,24 @@ COPY scoring_service/registered_model.py .
 COPY scoring_service/auth.py .
 COPY src/ /app/src/
 
-# Copy credentials directory
-COPY credentials/ /credentials/
-
 # Copy config files
 COPY config/ /app/config/
 COPY config.yaml /app/config.yaml
+
+# Copy credentials (will be created by GitHub Actions)
+COPY credentials/service-account-key.json /app/credentials/
 
 # Create necessary directories
 RUN mkdir -p data/predictions
 
 # Create virtual environment and install dependencies
-RUN uv venv
-RUN . .venv/bin/activate && uv pip install -e .
+RUN uv venv && \
+    . .venv/bin/activate && uv pip install -e .
 
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PATH="/app/.venv/bin:$PATH"
-
-# pass along environment variables
-ENV GCP_PROJECT_ID=${GCP_PROJECT_ID}
-ENV GOOGLE_APPLICATION_CREDENTIALS=/credentials/service-account-key.json
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
 
 # Expose port for FastAPI
 EXPOSE 8080
