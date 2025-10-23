@@ -118,11 +118,17 @@ def sync_experiments_to_gcs(
     except Exception as e:
         raise ValueError(f"Error accessing bucket {bucket_name}: {e}")
 
-    # Ensure local directory exists
+    # Set up local directory
     local_path = Path(local_dir)
-    if not local_path.exists():
-        logger.error(f"Local directory {local_dir} does not exist")
+
+    # Only check directory exists if we're uploading
+    if not download and not local_path.exists():
+        logger.error(f"Local directory {local_dir} does not exist for upload")
         return
+
+    # When downloading, ensure directory exists
+    if download:
+        local_path.mkdir(parents=True, exist_ok=True)
 
     # Read .gitignore patterns
     gitignore_spec = None

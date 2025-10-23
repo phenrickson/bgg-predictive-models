@@ -84,61 +84,7 @@ jobs:
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
-          --args="-c,uv run train.py"
-        
-        # Execute with streaming logs and wait for completion
-        gcloud run jobs execute ${JOB_NAME} \
-          --region us-central1 \
-          --wait
-        
-        # Clean up the job
-        gcloud run jobs delete ${JOB_NAME} \
-          --region us-central1 \
-          --quiet
-
-  upload-experiments:
-    runs-on: ubuntu-latest
-    needs: [setup, train-model]
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-    
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
-
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
-
-    - name: Configure Google Cloud Docker Auth
-      run: gcloud auth configure-docker us-central1-docker.pkg.dev
-
-    - name: Upload training artifacts
-      run: |
-        JOB_NAME="bgg-upload-${{ github.run_id }}"
-        
-        echo "Running experiment upload job: ${JOB_NAME}"
-        
-        # Create and execute upload job with streaming logs
-        gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
-          --region us-central1 \
-          --memory 4Gi \
-          --cpu 2 \
-          --max-retries 0 \
-          --task-timeout 1800 \
-          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
-          --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
-          --command="bash" \
-          --args="-c,uv run python -m src.utils.sync_experiments"
+          --args="-c,uv run train.py; uv run python -m src.utils.sync_experiments"
         
         # Execute with streaming logs and wait for completion
         gcloud run jobs execute ${JOB_NAME} \
@@ -152,7 +98,7 @@ jobs:
 
   register-model:
     runs-on: ubuntu-latest
-    needs: [setup, train-model, upload-experiments]
+    needs: [setup, train-model]
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     
     permissions:
@@ -192,7 +138,7 @@ jobs:
           --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
           --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
-          --args="-c,uv run register.py"
+          --args="-c,uv run python -m src.utils.sync_experiments --download && uv run register.py"
         
         # Execute with streaming logs and wait for completion
         gcloud run jobs execute ${JOB_NAME} \
