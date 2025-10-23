@@ -1,0 +1,57 @@
+name: Deploy Streamlit to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/streamlit/**'
+      - 'Dockerfile.streamlit'
+      - '.github/workflows/deploy-streamlit.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1
+  SERVICE: bgg-streamlit
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - id: auth
+      name: Authenticate with Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Authorize Docker push
+      run: gcloud auth configure-docker
+
+    - name: Build and Push Container
+      run: |-
+        docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }} -f Dockerfile.streamlit .
+        docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      run: |-
+        gcloud run deploy ${{ env.SERVICE }} \
+          --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }} \
+          --region ${{ env.REGION }} \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080 \
+          --set-env-vars PYTHONPATH=/app
+
+    - name: Show Output URL
+      run: gcloud run services describe ${{ env.SERVICE }} --region ${{ env.REGION }} --format 'value(status.url)'
