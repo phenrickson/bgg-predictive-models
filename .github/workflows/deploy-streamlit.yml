@@ -1,57 +1,94 @@
-name: Deploy Streamlit to Cloud Run
+name: Deploy Streamlit Dashboard
 
 on:
   push:
-    branches: [ main ]
+    branches:
+        - main
+        - develop
     paths:
       - 'src/streamlit/**'
       - 'Dockerfile.streamlit'
       - '.github/workflows/deploy-streamlit.yml'
-  workflow_dispatch:
-
-env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: us-central1
-  SERVICE: bgg-streamlit
+  workflow_dispatch:  # Allow manual triggers for testing
 
 jobs:
-  deploy:
+  deploy-streamlit:
+    name: deploy-streamlit
     runs-on: ubuntu-latest
-
     permissions:
       contents: 'read'
       id-token: 'write'
-
+    
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - id: auth
-      name: Authenticate with Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ secrets.GCP_SA_EMAIL }}
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
 
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
+      - name: Install UV
+        run: pip install uv
 
-    - name: Authorize Docker push
-      run: gcloud auth configure-docker
+      - name: Setup Environment
+        run: |
+          mkdir -p credentials
+          echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
 
-    - name: Build and Push Container
-      run: |-
-        docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }} -f Dockerfile.streamlit .
-        docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }}
+          cat << EOF > .env
+          GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+          ENVIRONMENT=${{ vars.ENVIRONMENT || 'dev' }}
+          GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
+          EOF
 
-    - name: Deploy to Cloud Run
-      run: |-
-        gcloud run deploy ${{ env.SERVICE }} \
-          --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }} \
-          --region ${{ env.REGION }} \
-          --platform managed \
-          --allow-unauthenticated \
-          --port 8080 \
-          --set-env-vars PYTHONPATH=/app
+      - name: Google Cloud Auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
-    - name: Show Output URL
-      run: gcloud run services describe ${{ env.SERVICE }} --region ${{ env.REGION }} --format 'value(status.url)'
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Configure Docker
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure Docker auth for GCR
+        run: |
+          gcloud auth configure-docker gcr.io
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.streamlit
+          push: true
+          tags: gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-streamlit:latest
+
+      - name: Deploy Streamlit to Cloud Run
+        run: |
+          # Get the project ID from the environment
+          PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+          ENVIRONMENT=${{ vars.ENVIRONMENT || 'dev' }}
+          
+          gcloud run deploy bgg-streamlit \
+            --image gcr.io/${PROJECT_ID}/bgg-streamlit:latest \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --memory 1Gi \
+            --cpu 1 \
+            --service-account bgg-data-warehouse@${PROJECT_ID}.iam.gserviceaccount.com \
+            --set-env-vars="ENVIRONMENT=${ENVIRONMENT},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
+            --port=8080 \
+            --timeout=300s \
+            --min-instances=0 \
+            --max-instances=3
+
+      - name: Output Streamlit URL
+        run: |
+          echo "Streamlit Dashboard deployed to: $(gcloud run services describe bgg-streamlit --platform managed --region us-central1 --format='value(status.url)')"
