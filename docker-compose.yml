@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount persistent volume for experiments
+      - experiments_data:/app/models/experiments
+      # Mount credentials if using service account file
+      - ./credentials:/app/credentials:ro
+    environment:
+      - STREAMLIT_SERVER_PORT=8080
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - STREAMLIT_THEME_BASE=dark
+      # Google Cloud Platform Configuration
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
+    restart: unless-stopped
+
+volumes:
+  # Named volume for persistent experiment storage
+  experiments_data:
+    driver: local

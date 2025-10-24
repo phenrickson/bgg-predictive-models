@@ -80,14 +80,16 @@ jobs:
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
-            --memory 1Gi \
+            --memory 2Gi \
             --cpu 1 \
             --service-account bgg-data-warehouse@${PROJECT_ID}.iam.gserviceaccount.com \
             --set-env-vars="ENVIRONMENT=${ENVIRONMENT},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
             --port=8080 \
             --timeout=300s \
             --min-instances=0 \
-            --max-instances=3
+            --max-instances=3 \
+            --add-volume name=gcs-experiments,type=cloud-storage,bucket=${PROJECT_ID}-experiments \
+            --add-volume-mount volume=gcs-experiments,mount-path=/app/models/experiments
 
       - name: Output Streamlit URL
         run: |

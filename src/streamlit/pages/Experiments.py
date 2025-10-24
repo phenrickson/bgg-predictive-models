@@ -31,12 +31,54 @@ st.set_page_config(page_title="Experiments | BGG Models Dashboard", layout="wide
 st.title("Experiment Tracking")
 
 # Model Type Selection
-model_types = [
-    d.name
-    for d in Path("models/experiments").iterdir()
-    if d.is_dir() and d.name not in ["predictions"]
-]
-selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
+try:
+    experiments_path = Path("models/experiments")
+    if experiments_path.exists():
+        model_types = [
+            d.name
+            for d in experiments_path.iterdir()
+            if d.is_dir() and d.name not in ["predictions"]
+        ]
+    else:
+        model_types = []
+
+    if not model_types:
+        st.sidebar.warning(
+            "No model types found. Please ensure experiments directory exists."
+        )
+        selected_model_type = None
+    else:
+        selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
+except Exception as e:
+    st.sidebar.error(f"Error loading model types: {e}")
+    selected_model_type = None
+
+# Optional sync for local development (Cloud Run uses automatic GCS FUSE mounting)
+st.sidebar.divider()
+st.sidebar.header("🔄 Manual Sync")
+st.sidebar.caption("Only needed for local development - Cloud Run auto-syncs")
+if st.sidebar.button(
+    "📥 Sync from GCS", help="Download experiments from GCS (for local development)"
+):
+    with st.spinner("Syncing experiments from GCS..."):
+        try:
+            from src.utils.sync_experiments import sync_experiments_to_gcs
+
+            sync_experiments_to_gcs(
+                local_dir="models/experiments",
+                base_prefix="models/experiments",
+                download=True,
+                dry_run=False,
+            )
+            st.sidebar.success("✅ Sync completed!")
+            st.sidebar.info("Refresh the page to see new experiments")
+        except Exception as e:
+            st.sidebar.error(f"❌ Sync failed: {e}")
+
+# Only proceed if we have a valid model type selected
+if selected_model_type is None:
+    st.info("Please select a model type from the sidebar to view experiments.")
+    st.stop()
 
 # Load experiments
 experiments = load_experiments(selected_model_type)

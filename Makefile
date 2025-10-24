@@ -68,6 +68,9 @@ help:  ## Show this help message
 	@echo '  make stop-scoring                Stop scoring service'
 	@echo '  make scoring-service             Build and run scoring service locally'
 	@echo '  make scoring-service-upload      Build and run scoring service and upload to BigQuery'
+	@echo '  make streamlit-build             Build Streamlit Docker image'
+	@echo '  make streamlit-run               Run Streamlit with persistent volumes'
+	@echo '  make streamlit-stop              Stop Streamlit service'
 
 # requirements
 .PHONY: requirements format lint
@@ -372,3 +375,16 @@ scoring-service-upload:
     --users-rated-model users_rated-v$(CURRENT_YEAR) \
 	--upload-to-bigquery \
 	--download
+
+# Streamlit targets
+.PHONY: streamlit-build streamlit-run streamlit-stop
+
+streamlit-build:  ## Build Streamlit Docker image
+	docker-compose build streamlit
+
+streamlit-run:  ## Run Streamlit with persistent volumes
+	docker-compose --env-file .env up -d streamlit
+	@echo "Streamlit available at: http://localhost:8080"
+
+streamlit-stop:  ## Stop Streamlit service
+	docker-compose down
