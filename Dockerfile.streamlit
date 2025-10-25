@@ -1,7 +1,7 @@
 # Use Python 3.12 slim image
 FROM python:3.12-slim
 
-# Ensure apt can fetch packages and install gcsfuse for Cloud Storage mounting
+# Install minimal system dependencies
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get update && \
@@ -9,12 +9,6 @@ RUN apt-get clean && \
     ca-certificates \
     curl \
     build-essential \
-    gnupg \
-    lsb-release \
-    && echo "deb https://packages.cloud.google.com/apt gcsfuse-$(lsb_release -c -s) main" | tee /etc/apt/sources.list.d/gcsfuse.list \
-    && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add - \
-    && apt-get update \
-    && apt-get install -y gcsfuse \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -25,9 +19,6 @@ RUN pip install uv
 
 # Copy project files
 COPY . .
-
-# Create experiments directory for GCS FUSE mounting
-RUN mkdir -p /app/models/experiments
 
 # Create virtual environment
 RUN uv venv

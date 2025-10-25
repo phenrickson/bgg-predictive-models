@@ -15,37 +15,39 @@ project_root = os.path.abspath(
 )
 sys.path.insert(0, project_root)
 
-# Import dashboard modules
+# Import efficient experiment loader
+from src.utils.experiment_loader import get_experiment_loader
+
+# Import dashboard modules for visualization functions
 from src.monitor.experiment_dashboard import (
-    load_experiments,
     create_metrics_overview,
     create_performance_by_run_visualization,
     create_parameters_overview,
     create_feature_importance_plot,
     create_category_feature_importance_plots,
-    get_experiment_details,
     display_predictions as display_experiment_predictions,
 )
 
 st.set_page_config(page_title="Experiments | BGG Models Dashboard", layout="wide")
 st.title("Experiment Tracking")
 
+
+# Initialize experiment loader
+@st.cache_resource
+def get_loader():
+    """Get cached experiment loader instance."""
+    return get_experiment_loader()
+
+
+loader = get_loader()
+
 # Model Type Selection
 try:
-    experiments_path = Path("models/experiments")
-    if experiments_path.exists():
-        model_types = [
-            d.name
-            for d in experiments_path.iterdir()
-            if d.is_dir() and d.name not in ["predictions"]
-        ]
-    else:
-        model_types = []
+    with st.spinner("Loading model types..."):
+        model_types = loader.list_model_types()
 
     if not model_types:
-        st.sidebar.warning(
-            "No model types found. Please ensure experiments directory exists."
-        )
+        st.sidebar.warning("No model types found in GCS experiments bucket.")
         selected_model_type = None
     else:
         selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
@@ -53,35 +55,30 @@ except Exception as e:
     st.sidebar.error(f"Error loading model types: {e}")
     selected_model_type = None
 
-# Optional sync for local development (Cloud Run uses automatic GCS FUSE mounting)
+# Cache management
 st.sidebar.divider()
-st.sidebar.header("🔄 Manual Sync")
-st.sidebar.caption("Only needed for local development - Cloud Run auto-syncs")
-if st.sidebar.button(
-    "📥 Sync from GCS", help="Download experiments from GCS (for local development)"
-):
-    with st.spinner("Syncing experiments from GCS..."):
-        try:
-            from src.utils.sync_experiments import sync_experiments_to_gcs
-
-            sync_experiments_to_gcs(
-                local_dir="models/experiments",
-                base_prefix="models/experiments",
-                download=True,
-                dry_run=False,
-            )
-            st.sidebar.success("✅ Sync completed!")
-            st.sidebar.info("Refresh the page to see new experiments")
-        except Exception as e:
-            st.sidebar.error(f"❌ Sync failed: {e}")
+st.sidebar.header("🔄 Cache Management")
+if st.sidebar.button("🗑️ Clear Cache", help="Clear cached experiment data"):
+    loader.clear_cache()
+    st.cache_data.clear()
+    st.sidebar.success("✅ Cache cleared!")
+    st.sidebar.info("Refresh the page to reload data")
 
 # Only proceed if we have a valid model type selected
 if selected_model_type is None:
     st.info("Please select a model type from the sidebar to view experiments.")
     st.stop()
 
-# Load experiments
-experiments = load_experiments(selected_model_type)
+
+# Load experiments using efficient loader
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_experiments_cached(model_type):
+    """Load experiments with caching."""
+    return loader.list_experiments(model_type)
+
+
+with st.spinner(f"Loading experiments for {selected_model_type}..."):
+    experiments = load_experiments_cached(selected_model_type)
 
 # Check if any experiments were loaded
 if not experiments:
@@ -131,25 +128,46 @@ with tab2:
         [exp["full_name"] for exp in experiments],
         key="predictions_experiment",
     )
-    exp_name, exp_version = selected_experiment.split("/")
-    exp_version = int(exp_version.replace("v", ""))
+    exp_name = selected_experiment
     selected_dataset = st.selectbox(
         "Select Dataset", ["tune", "test"], key="predictions_dataset"
     )
-    # Find selected experiment
-    selected_exp = next(
-        (exp for exp in experiments if exp["full_name"] == selected_experiment),
-        None,
-    )
-    if selected_exp:
-        predictions_df = display_experiment_predictions(
-            selected_exp, selected_dataset, "regression", selected_model_type
-        )
-    else:
-        st.error("Could not find the selected experiment")
-        st.stop()
-    if predictions_df is not None:
-        st.dataframe(predictions_df)
+
+    try:
+        with st.spinner(f"Loading {selected_dataset} predictions..."):
+            predictions_df = loader.load_predictions(
+                selected_model_type, exp_name, selected_dataset
+            )
+
+        if predictions_df is not None:
+            st.subheader(f"Predictions for {selected_dataset} dataset")
+            st.dataframe(predictions_df)
+
+            # Basic statistics
+            if len(predictions_df) > 0:
+                st.subheader("Dataset Statistics")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Predictions", len(predictions_df))
+                with col2:
+                    if "prediction" in predictions_df.columns:
+                        st.metric(
+                            "Avg Prediction",
+                            f"{predictions_df['prediction'].mean():.3f}",
+                        )
+                with col3:
+                    if "actual" in predictions_df.columns:
+                        st.metric(
+                            "Avg Actual", f"{predictions_df['actual'].mean():.3f}"
+                        )
+        else:
+            st.warning(f"No predictions found for {selected_dataset} dataset")
+            st.info("This could mean:")
+            st.info("1. Predictions were not saved during training")
+            st.info("2. The selected dataset might be empty")
+            st.info("3. Experiment tracking did not log predictions")
+    except Exception as e:
+        st.error(f"Error loading predictions: {e}")
 
 with tab3:
     st.header("Model Parameters")
@@ -163,46 +181,33 @@ with tab4:
         [exp["full_name"] for exp in experiments],
         key="feature_importance_experiment",
     )
-    exp_name, exp_version = selected_experiment.split("/")
-    exp_version = int(exp_version.replace("v", ""))
-    selected_exp = next(
-        (exp for exp in experiments if exp["full_name"] == selected_experiment),
-        None,
-    )
-    if selected_exp:
-        top_n = st.slider(
-            "Top N Features (Overall)",
-            min_value=5,
-            max_value=250,
-            value=40,
-            step=5,
-        )
-        feature_fig = create_feature_importance_plot(
-            selected_exp, model_type=selected_model_type, top_n=top_n
-        )
-        if feature_fig:
-            st.plotly_chart(feature_fig)
+    exp_name = selected_experiment
 
-        st.subheader("Feature Importance by Category")
-        top_n_per_category = st.slider(
-            "Top N Features (Per Category)",
-            min_value=5,
-            max_value=100,
-            value=25,
-            step=5,
-        )
-        category_plots = create_category_feature_importance_plots(
-            selected_exp,
-            model_type=selected_model_type,
-            top_n_per_category=top_n_per_category,
-        )
-        if category_plots:
-            category_names = list(category_plots.keys())
-            if len(category_names) > 0:
-                category_tabs = st.tabs(category_names)
-                for i, (category_name, fig) in enumerate(category_plots.items()):
-                    with category_tabs[i]:
-                        st.plotly_chart(fig, use_container_width=True)
+    try:
+        with st.spinner("Loading feature importance..."):
+            feature_importance_data = loader.load_feature_importance(
+                selected_model_type, exp_name
+            )
+
+        if feature_importance_data:
+            st.subheader("Feature Importance Data")
+            st.json(feature_importance_data)
+
+            # You can add visualization here if the data structure supports it
+            # For now, just display the raw data
+            st.info(
+                "Feature importance visualization will be added based on the data structure"
+            )
+        else:
+            st.warning("No feature importance data found for this experiment")
+            st.info("This could mean:")
+            st.info("1. Feature importance was not calculated during training")
+            st.info("2. The feature importance file was not saved")
+            st.info(
+                "3. The experiment used a model type that doesn't support feature importance"
+            )
+    except Exception as e:
+        st.error(f"Error loading feature importance: {e}")
 
 with tab5:
     st.header("Experiment Details")
@@ -211,10 +216,10 @@ with tab5:
         [exp["full_name"] for exp in experiments],
         key="details_experiment",
     )
-    exp_name, exp_version = selected_experiment.split("/")
-    exp_version = int(exp_version.replace("v", ""))
+    exp_name = selected_experiment
     try:
-        details = get_experiment_details(selected_model_type, exp_name, exp_version)
+        with st.spinner("Loading experiment details..."):
+            details = loader.load_experiment_details(selected_model_type, exp_name)
         st.json(details)
     except Exception as e:
         st.error(f"Could not load experiment details: {e}")
