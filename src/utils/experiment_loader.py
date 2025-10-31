@@ -81,19 +81,21 @@ class ExperimentLoader:
             return []
 
     def list_experiments(self, model_type: str) -> List[Dict[str, Any]]:
-        """List experiments for a given model type with basic metadata.
+        """List experiments for a given model type with enriched metadata.
 
         Args:
             model_type: The model type (e.g., 'catboost-complexity').
 
         Returns:
-            List of experiment dictionaries with metadata.
+            List of experiment dictionaries with full metadata including metrics and parameters.
         """
         cache_key = f"experiments_{model_type}"
         if cache_key in self._experiments_cache:
+            logger.debug(f"Using cached experiments for {model_type}")
             return self._experiments_cache[cache_key]
 
         try:
+            logger.debug(f"Loading experiments for model type: {model_type}")
             experiments = []
             prefix = f"models/experiments/{model_type}/"
 
@@ -106,19 +108,26 @@ class ExperimentLoader:
                     [prefix.rstrip("/").split("/")[-1] for prefix in page.prefixes]
                 )
 
-            # Load metadata for each experiment in parallel
-            def load_experiment_metadata(exp_name):
+            logger.debug(
+                f"Found {len(experiment_dirs)} experiment directories: {experiment_dirs}"
+            )
+
+            # Load enriched metadata for each experiment in parallel
+            def load_enriched_experiment_metadata(exp_name):
                 try:
-                    return self._load_single_experiment_metadata(model_type, exp_name)
+                    logger.debug(
+                        f"Loading enriched metadata for {model_type}/{exp_name}"
+                    )
+                    return self._load_enriched_experiment_metadata(model_type, exp_name)
                 except Exception as e:
                     logger.warning(
-                        f"Failed to load metadata for {model_type}/{exp_name}: {e}"
+                        f"Failed to load enriched metadata for {model_type}/{exp_name}: {e}"
                     )
                     return None
 
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [
-                    executor.submit(load_experiment_metadata, exp_name)
+                    executor.submit(load_enriched_experiment_metadata, exp_name)
                     for exp_name in experiment_dirs
                 ]
 
@@ -126,18 +135,51 @@ class ExperimentLoader:
                     result = future.result()
                     if result:
                         experiments.append(result)
+                        logger.debug(
+                            f"Successfully loaded experiment: {result.get('full_name', 'unknown')}"
+                        )
 
             # Sort by timestamp (newest first)
             experiments.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
             # Cache the results
             self._experiments_cache[cache_key] = experiments
+            logger.debug(f"Cached {len(experiments)} experiments for {model_type}")
 
             return experiments
 
         except Exception as e:
             logger.error(f"Error listing experiments for {model_type}: {e}")
             return []
+
+    def _get_experiment_version_path(self, model_type: str, exp_name: str) -> str:
+        """Get the versioned path for an experiment.
+
+        Args:
+            model_type: The model type.
+            exp_name: The experiment name.
+
+        Returns:
+            The base path including version directory.
+        """
+        # Check if v1 directory exists (most experiments use v1)
+        base_path = f"models/experiments/{model_type}/{exp_name}"
+        v1_path = f"{base_path}/v1"
+
+        try:
+            # Check if v1 directory exists by listing its contents
+            blobs = list(self.bucket.list_blobs(prefix=f"{v1_path}/", max_results=1))
+            if blobs:
+                logger.debug(f"Found v1 directory for {model_type}/{exp_name}")
+                return v1_path
+        except Exception as e:
+            logger.debug(
+                f"Error checking v1 directory for {model_type}/{exp_name}: {e}"
+            )
+
+        # Fall back to base path (for experiments without versioning)
+        logger.debug(f"Using base path for {model_type}/{exp_name}")
+        return base_path
 
     def _load_single_experiment_metadata(
         self, model_type: str, exp_name: str
@@ -151,8 +193,9 @@ class ExperimentLoader:
         Returns:
             Dictionary with experiment metadata.
         """
-        # Try to load the metadata.json file
-        metadata_path = f"models/experiments/{model_type}/{exp_name}/metadata.json"
+        # Get the correct versioned path
+        base_path = self._get_experiment_version_path(model_type, exp_name)
+        metadata_path = f"{base_path}/metadata.json"
 
         try:
             blob = self.bucket.blob(metadata_path)
@@ -168,7 +211,7 @@ class ExperimentLoader:
 
         except google.cloud.exceptions.NotFound:
             # If no metadata.json, create basic metadata from directory structure
-            logger.warning(f"No metadata.json found for {model_type}/{exp_name}")
+            logger.warning(f"No metadata.json found at {metadata_path}")
             return {
                 "full_name": f"{exp_name}",
                 "model_type": model_type,
@@ -176,6 +219,101 @@ class ExperimentLoader:
                 "timestamp": "",
                 "status": "unknown",
             }
+
+    def _load_enriched_experiment_metadata(
+        self, model_type: str, exp_name: str
+    ) -> Dict[str, Any]:
+        """Load enriched metadata for a single experiment including metrics and parameters.
+
+        Args:
+            model_type: The model type.
+            exp_name: The experiment name.
+
+        Returns:
+            Dictionary with enriched experiment metadata.
+        """
+        logger.debug(f"Loading enriched metadata for {model_type}/{exp_name}")
+
+        # Start with basic metadata
+        experiment = self._load_single_experiment_metadata(model_type, exp_name)
+
+        # Initialize nested structures expected by dashboard functions
+        experiment["metrics"] = {}
+        experiment["parameters"] = {}
+        experiment["model_info"] = {}
+
+        # Get the correct versioned path
+        base_path = self._get_experiment_version_path(model_type, exp_name)
+
+        # Load metrics for each dataset
+        for dataset in ["train", "tune", "test"]:
+            metrics_path = f"{base_path}/{dataset}_metrics.json"
+            try:
+                blob = self.bucket.blob(metrics_path)
+                content = blob.download_as_text()
+                metrics_data = json.loads(content)
+                experiment["metrics"][dataset] = metrics_data
+                logger.debug(
+                    f"Loaded {dataset} metrics for {exp_name}: {list(metrics_data.keys())}"
+                )
+            except google.cloud.exceptions.NotFound:
+                logger.debug(f"No {dataset} metrics found at {metrics_path}")
+                experiment["metrics"][dataset] = {}
+            except Exception as e:
+                logger.warning(f"Error loading {dataset} metrics for {exp_name}: {e}")
+                experiment["metrics"][dataset] = {}
+
+        # Load parameters
+        params_path = f"{base_path}/parameters.json"
+        try:
+            blob = self.bucket.blob(params_path)
+            content = blob.download_as_text()
+            params_data = json.loads(content)
+            experiment["parameters"] = params_data
+            logger.debug(
+                f"Loaded parameters for {exp_name}: {list(params_data.keys())}"
+            )
+        except google.cloud.exceptions.NotFound:
+            logger.debug(f"No parameters found at {params_path}")
+        except Exception as e:
+            logger.warning(f"Error loading parameters for {exp_name}: {e}")
+
+        # Load model info
+        model_info_path = f"{base_path}/model_info.json"
+        try:
+            blob = self.bucket.blob(model_info_path)
+            content = blob.download_as_text()
+            model_info_data = json.loads(content)
+            experiment["model_info"] = model_info_data
+            logger.debug(
+                f"Loaded model info for {exp_name}: {list(model_info_data.keys())}"
+            )
+        except google.cloud.exceptions.NotFound:
+            logger.debug(f"No model info found at {model_info_path}")
+        except Exception as e:
+            logger.warning(f"Error loading model info for {exp_name}: {e}")
+
+        # Try to load additional metadata if it exists
+        metadata_path = f"{base_path}/metadata.json"
+        try:
+            blob = self.bucket.blob(metadata_path)
+            content = blob.download_as_text()
+            additional_metadata = json.loads(content)
+            # Merge additional metadata, but don't overwrite our structured data
+            for key, value in additional_metadata.items():
+                if key not in ["metrics", "parameters", "model_info"]:
+                    experiment[key] = value
+            logger.debug(f"Loaded additional metadata for {exp_name}")
+        except google.cloud.exceptions.NotFound:
+            logger.debug(f"No additional metadata found for {exp_name}")
+        except Exception as e:
+            logger.warning(f"Error loading additional metadata for {exp_name}: {e}")
+
+        logger.debug(
+            f"Enriched experiment structure for {exp_name}: metrics={list(experiment['metrics'].keys())}, parameters={bool(experiment['parameters'])}, model_info={bool(experiment['model_info'])}"
+        )
+
+        return experiment
 
     def load_experiment_details(self, model_type: str, exp_name: str) -> Dict[str, Any]:
         """Load detailed experiment information including metrics and parameters.
@@ -193,13 +331,17 @@ class ExperimentLoader:
 
         try:
             details = {}
-            base_path = f"models/experiments/{model_type}/{exp_name}"
+            # Get the correct versioned path
+            base_path = self._get_experiment_version_path(model_type, exp_name)
 
             # Load various experiment files
             files_to_load = {
                 "metadata": "metadata.json",
-                "metrics": "metrics.json",
                 "parameters": "parameters.json",
+                "model_info": "model_info.json",
+                "train_metrics": "train_metrics.json",
+                "tune_metrics": "tune_metrics.json",
+                "test_metrics": "test_metrics.json",
                 "feature_importance": "feature_importance.json",
             }
 
@@ -253,7 +395,9 @@ class ExperimentLoader:
             DataFrame with predictions or None if not found.
         """
         try:
-            predictions_path = f"models/experiments/{model_type}/{exp_name}/predictions_{dataset}.parquet"
+            # Get the correct versioned path
+            base_path = self._get_experiment_version_path(model_type, exp_name)
+            predictions_path = f"{base_path}/{dataset}_predictions.parquet"
 
             blob = self.bucket.blob(predictions_path)
 
@@ -280,9 +424,28 @@ class ExperimentLoader:
             )
             return None
 
+    def load_all_predictions(
+        self, model_type: str, exp_name: str
+    ) -> Dict[str, pd.DataFrame]:
+        """Load all predictions for an experiment.
+
+        Args:
+            model_type: The model type.
+            exp_name: The experiment name.
+
+        Returns:
+            Dictionary with dataset names as keys and DataFrames as values.
+        """
+        predictions_data = {}
+        for dataset in ["tune", "test"]:
+            df = self.load_predictions(model_type, exp_name, dataset)
+            if df is not None:
+                predictions_data[dataset] = df
+        return predictions_data
+
     def load_feature_importance(
         self, model_type: str, exp_name: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[pd.DataFrame]:
         """Load feature importance data for an experiment.
 
         Args:
@@ -290,45 +453,121 @@ class ExperimentLoader:
             exp_name: The experiment name.
 
         Returns:
-            Dictionary with feature importance data or None if not found.
+            DataFrame with feature importance data or None if not found.
         """
         try:
-            # Try JSON first (newer format)
-            importance_path = (
-                f"models/experiments/{model_type}/{exp_name}/feature_importance.json"
-            )
+            # Get the correct versioned path
+            base_path = self._get_experiment_version_path(model_type, exp_name)
 
+            # Try CSV format first (most common format from experiments.py)
+            importance_path = f"{base_path}/feature_importance.csv"
             blob = self.bucket.blob(importance_path)
-            content = blob.download_as_text()
-            return json.loads(content)
+
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
+                blob.download_to_filename(tmp_file.name)
+                df = pd.read_csv(tmp_file.name)
+
+                # Clean up temp file
+                os.unlink(tmp_file.name)
+
+                logger.debug(
+                    f"Loaded feature importance CSV for {exp_name}: {df.shape}"
+                )
+                return df
 
         except google.cloud.exceptions.NotFound:
-            # Try pickle format (older experiments)
+            # Try coefficients.csv (alternative name)
             try:
-                importance_path = (
-                    f"models/experiments/{model_type}/{exp_name}/feature_importance.pkl"
-                )
+                base_path = self._get_experiment_version_path(model_type, exp_name)
+                importance_path = f"{base_path}/coefficients.csv"
                 blob = self.bucket.blob(importance_path)
 
                 import tempfile
 
                 with tempfile.NamedTemporaryFile(
-                    suffix=".pkl", delete=False
+                    suffix=".csv", delete=False
                 ) as tmp_file:
                     blob.download_to_filename(tmp_file.name)
-                    with open(tmp_file.name, "rb") as f:
-                        data = pickle.load(f)
+                    df = pd.read_csv(tmp_file.name)
 
                     # Clean up temp file
                     os.unlink(tmp_file.name)
 
-                    return data
+                    logger.debug(f"Loaded coefficients CSV for {exp_name}: {df.shape}")
+                    return df
 
             except google.cloud.exceptions.NotFound:
-                logger.debug(
-                    f"Feature importance not found for {model_type}/{exp_name}"
-                )
-                return None
+                # Try JSON format (newer format)
+                try:
+                    base_path = self._get_experiment_version_path(model_type, exp_name)
+                    importance_path = f"{base_path}/feature_importance.json"
+
+                    blob = self.bucket.blob(importance_path)
+                    content = blob.download_as_text()
+                    data = json.loads(content)
+
+                    # Convert to DataFrame if it's a list of records
+                    if isinstance(data, list):
+                        df = pd.DataFrame(data)
+                        logger.debug(
+                            f"Loaded feature importance JSON for {exp_name}: {df.shape}"
+                        )
+                        return df
+                    else:
+                        logger.debug(
+                            f"Feature importance JSON not in expected format for {exp_name}"
+                        )
+                        return None
+
+                except google.cloud.exceptions.NotFound:
+                    # Try pickle format (older experiments)
+                    try:
+                        base_path = self._get_experiment_version_path(
+                            model_type, exp_name
+                        )
+                        importance_path = f"{base_path}/feature_importance.pkl"
+                        blob = self.bucket.blob(importance_path)
+
+                        import tempfile
+
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".pkl", delete=False
+                        ) as tmp_file:
+                            blob.download_to_filename(tmp_file.name)
+                            with open(tmp_file.name, "rb") as f:
+                                data = pickle.load(f)
+
+                            # Clean up temp file
+                            os.unlink(tmp_file.name)
+
+                            # Convert to DataFrame if it's not already
+                            if isinstance(data, pd.DataFrame):
+                                logger.debug(
+                                    f"Loaded feature importance pickle for {exp_name}: {data.shape}"
+                                )
+                                return data
+                            elif isinstance(data, dict):
+                                df = pd.DataFrame(
+                                    list(data.items()),
+                                    columns=["feature", "importance"],
+                                )
+                                logger.debug(
+                                    f"Converted feature importance dict to DataFrame for {exp_name}: {df.shape}"
+                                )
+                                return df
+                            else:
+                                logger.debug(
+                                    f"Feature importance pickle not in expected format for {exp_name}"
+                                )
+                                return None
+
+                    except google.cloud.exceptions.NotFound:
+                        logger.debug(
+                            f"Feature importance not found for {model_type}/{exp_name}"
+                        )
+                        return None
         except Exception as e:
             logger.error(
                 f"Error loading feature importance for {model_type}/{exp_name}: {e}"
