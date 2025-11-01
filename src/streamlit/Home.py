@@ -10,8 +10,6 @@ st.title("BGG Models Dashboard")
 
 st.markdown(
     """
-## Welcome to the BGG Models Dashboard
-
 This dashboard provides tools for exploring and analyzing board game predictions and model experiments:
 
 ### 📊 Experiments
@@ -39,6 +37,6 @@ st.divider()
 st.markdown(
     """
 ---
-Made with ❤️ using [Streamlit](https://streamlit.io)
+Models developed by [Phil Henrickson](github.com/phenrickson/bgg-predictive-models)
 """
 )

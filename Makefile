@@ -68,6 +68,10 @@ help:  ## Show this help message
 	@echo '  make stop-scoring                Stop scoring service'
 	@echo '  make scoring-service             Build and run scoring service locally'
 	@echo '  make scoring-service-upload      Build and run scoring service and upload to BigQuery'
+	@echo '  make streamlit-build             Build Streamlit Docker image'
+	@echo '  make streamlit-run               Run Streamlit Docker container'
+	@echo '  make streamlit-stop              Stop Streamlit container'
+	@echo '  make streamlit-test              Build and test Streamlit Docker image interactively'
 
 # requirements
 .PHONY: requirements format lint
@@ -372,3 +376,26 @@ scoring-service-upload:
     --users-rated-model users_rated-v$(CURRENT_YEAR) \
 	--upload-to-bigquery \
 	--download
+
+# Streamlit targets
+.PHONY: streamlit-build streamlit-run streamlit-stop
+
+streamlit-build:  ## Build Streamlit Docker image
+	docker build -f Dockerfile.streamlit -t bgg-streamlit:test .
+
+streamlit-run:  ## Run Streamlit Docker container
+	docker run -d \
+	-p 8080:8080 \
+	--env-file .env \
+	--name bgg-streamlit-container \
+	bgg-streamlit:test
+	@echo "Streamlit available at: http://localhost:8080"
+
+streamlit-stop:  ## Stop Streamlit container
+	@container=$$(docker ps -q --filter name=bgg-streamlit-container); \
+	if [ -n "$$container" ]; then \
+		echo "Stopping Streamlit container: $$container"; \
+		docker stop $$container && docker rm $$container; \
+	else \
+		echo "No running Streamlit container found"; \
+	fi

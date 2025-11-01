@@ -80,7 +80,7 @@ jobs:
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
-            --memory 1Gi \
+            --memory 2Gi \
             --cpu 1 \
             --service-account bgg-data-warehouse@${PROJECT_ID}.iam.gserviceaccount.com \
             --set-env-vars="ENVIRONMENT=${ENVIRONMENT},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
