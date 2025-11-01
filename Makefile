@@ -304,7 +304,7 @@ clean_experiments:
 
 # remove local predictions
 .PHONY: clean_predictions
-clean_predictions:
+clean-predictions:
 	@echo "This will delete all subfolders in data/predictions/"
 	@read -p "Are you sure? (y/n) " confirm; \
 	if [ "$$confirm" = "y" ]; then \
@@ -316,11 +316,11 @@ clean_predictions:
 
 # upload experiments to Google Cloud Storage
 .PHONY: upload_experiments
-upload_experiments:
+upload-experiments:
 	uv run -m src.utils.sync_experiments --create-bucket
 
 .PHONY: download_experiments
-download_experiments:
+download-experiments:
 	uv run -m src.utils.sync_experiments --download
 
 # dockerfile training locally
