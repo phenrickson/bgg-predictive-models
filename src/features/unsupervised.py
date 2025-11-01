@@ -2,17 +2,17 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
-import seaborn as sns
 import plotnine as pn
 import time
 import logging
 
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MiniBatchKMeans
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     silhouette_score,
+    silhouette_samples,
     davies_bouldin_score,
     calinski_harabasz_score,
 )
@@ -520,11 +520,11 @@ def perform_gmm_single(
         # Calculate weighted mean
         weighted_mean = np.average(data, weights=resp_weights, axis=0)
 
-        # Calculate weighted standard deviation
-        weighted_var = np.average(
-            (data - weighted_mean) ** 2, weights=resp_weights, axis=0
-        )
-        weighted_std = np.sqrt(weighted_var)
+        # # Calculate weighted standard deviation
+        # weighted_var = np.average(
+        #     (data - weighted_mean) ** 2, weights=resp_weights, axis=0
+        # )
+        # weighted_std = np.sqrt(weighted_var)
 
         # Calculate overall mean and std for comparison
         overall_mean = np.mean(data, axis=0)

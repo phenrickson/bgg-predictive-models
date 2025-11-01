@@ -1,7 +1,6 @@
 import pytest
 import pandas as pd
 import numpy as np
-import polars as pl
 from src.features.transformers import BaseBGGTransformer
 
 
@@ -98,7 +97,6 @@ def test_feature_names_generation(sample_dataframe):
     # Test with all features enabled
     transformer_all = BaseBGGTransformer()
     transformer_all.fit(sample_dataframe)
-    all_feature_names = transformer_all.get_feature_names_out()
 
     # Test with some features disabled
     transformer_partial = BaseBGGTransformer(

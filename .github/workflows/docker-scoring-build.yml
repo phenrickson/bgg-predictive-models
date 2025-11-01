@@ -4,16 +4,18 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - 'scoring_service/**'
       - 'Dockerfile.scoring'
-      - '.github/workflows/deploy_scoring_service.yml'
+      - '.github/workflows/docker-scoring-build.yml'
   workflow_dispatch:
 
 jobs:
   deploy:
     name: Deploy to Cloud Run
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read
@@ -23,37 +25,61 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Authenticate to Google Cloud
-      id: auth
+    - name: Setup Environment
       run: |
-        gcloud auth activate-service-account --key-file=<(echo '${{ secrets.SERVICE_ACCOUNT_KEY }}')
+        mkdir -p credentials
+        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
     - name: Configure Docker
       run: |
-        gcloud auth configure-docker gcr.io
+        gcloud auth configure-docker us-central1-docker.pkg.dev
+        gcloud artifacts repositories create bgg-predictive-models --repository-format=docker --location=us-central1 --quiet || true
+
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
 
     - name: Build Docker Image
       run: |
-        docker build -f Dockerfile.scoring -t gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} .
+        docker build -f Dockerfile.scoring \
+          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }} \
+          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }} \
+          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          .
 
     - name: Push Docker Image
       run: |
-        docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }}
+        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }}
+        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}
+        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy bgg-model-scoring \
-          --image gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ github.sha }} \
+          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
           --platform managed \
           --region us-central1 \
           --allow-unauthenticated \
           --max-instances 10 \
           --memory 8Gi \
           --cpu 4 \
-          --set-env-vars GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME}}
+          --service-account bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
 
     - name: Verify Deployment
       run: |

@@ -46,6 +46,7 @@ htmlcov/
 
 # Project-specific
 models/
+models.backup/
 logs/
 notebooks/.ipynb_checkpoints/
 credentials/
@@ -65,6 +66,7 @@ $RECYCLE.BIN/
 
 # ignore local data
 /data/
+/data.backup/
 !src/models
 
 # ignore finalized models anywhere in director
@@ -79,3 +81,5 @@ $RECYCLE.BIN/
 
 .act
 act
+
+/scratch/

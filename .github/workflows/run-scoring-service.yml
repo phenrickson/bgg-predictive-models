@@ -12,85 +12,47 @@ on:
         required: false
         default: '2029'
       output_path:
-        description: 'Cloud storage path for predictions'
+        description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
         required: false
-        default: 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet'
+        default: ''
 
-  schedule:
-    # Run daily at 1 AM UTC
-    - cron: '0 1 * * *'
+  # schedule:
+  #   # Run daily at 1 AM UTC
+  #   - cron: '0 1 * * *'
 
 jobs:
-  get-latest-models:
+  setup:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read
       id-token: write
 
     outputs:
-      hurdle_model: ${{ steps.get-models.outputs.hurdle_model }}
-      complexity_model: ${{ steps.get-models.outputs.complexity_model }}
-      rating_model: ${{ steps.get-models.outputs.rating_model }}
-      users_rated_model: ${{ steps.get-models.outputs.users_rated_model }}
+      env_tag: ${{ steps.env-tag.outputs.env_tag }}
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    - name: Setup Environment
-      run: |
-        mkdir -p credentials 
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
-        
-        cat << EOF > .env
-        GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-        GCS_BUCKET_NAME=${{ vars.GCS_BUCKET_NAME }}
-        GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
-        EOF
-        
-    - name: Authenticate to Google Cloud
-      id: auth
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
 
-    - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
 
-    - name: Install UV and dependencies
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        uv venv
-        source .venv/bin/activate
-        uv pip install requests google-cloud-storage python-dotenv
-        
-        sudo apt-get update
-        sudo apt-get install -y jq
-        gcloud config set core/disable_usage_reporting true
-        gcloud config set core/disable_prompts true
-        gcloud components update
-    - name: Get Latest Registered Models
-      id: get-models
-      run: |
-        source .venv/bin/activate
-        
-        # Get service URL
-        SERVICE_URL=$(gcloud run services describe bgg-model-scoring \
-          --region us-central1 \
-          --format 'value(status.url)')
-        
-        # Use Python with requests to get models
-        MODELS_JSON=$(uv run python -c "import requests, json; response = requests.get('${SERVICE_URL}/models'); models = response.json(); latest_models = {}; [latest_models.update({t: sorted(models[t], key=lambda x: x['version'])[-1]['name']}) for t in ['hurdle', 'complexity', 'rating', 'users_rated'] if t in models and models[t]]; print(json.dumps(latest_models))")
-        
-        # Extract and set outputs
-        echo "hurdle_model=$(echo $MODELS_JSON | jq -r '.hurdle')" >> $GITHUB_OUTPUT
-        echo "complexity_model=$(echo $MODELS_JSON | jq -r '.complexity')" >> $GITHUB_OUTPUT
-        echo "rating_model=$(echo $MODELS_JSON | jq -r '.rating')" >> $GITHUB_OUTPUT
-        echo "users_rated_model=$(echo $MODELS_JSON | jq -r '.users_rated')" >> $GITHUB_OUTPUT
+  # Removed get-latest-models job since model names now come from config
 
   trigger-predictions:
-    needs: get-latest-models
+    needs: [setup]
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
     
     permissions:
       contents: read
@@ -127,26 +89,27 @@ jobs:
           --format 'value(status.url)')
         echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
+    - name: Setup Environment
+      run: |
+        cat << EOF > .env
+        GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
+        ENVIRONMENT=${{ needs.setup.outputs.env_tag }}
+        EOF
+
     - name: Trigger Predictions using score.py
       run: |
-        source .venv/bin/activate
-        uv run python scoring_service/score.py \
+        uv run -m scoring_service.score \
           --service-url "${{ steps.get-url.outputs.service_url }}" \
-          --hurdle-model "${{ needs.get-latest-models.outputs.hurdle_model }}" \
-          --complexity-model "${{ needs.get-latest-models.outputs.complexity_model }}" \
-          --rating-model "${{ needs.get-latest-models.outputs.rating_model }}" \
-          --users-rated-model "${{ needs.get-latest-models.outputs.users_rated_model }}" \
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
-          --output-path "${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
+          --upload-to-bigquery \
+          ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
 
     - name: Log Prediction Metadata
       run: |
         echo "Prediction Parameters:"
-        echo "Hurdle Model: ${{ needs.get-latest-models.outputs.hurdle_model }}"
-        echo "Complexity Model: ${{ needs.get-latest-models.outputs.complexity_model }}"
-        echo "Rating Model: ${{ needs.get-latest-models.outputs.rating_model }}"
-        echo "Users Rated Model: ${{ needs.get-latest-models.outputs.users_rated_model }}"
+        echo "Environment: ${{ needs.setup.outputs.env_tag }}"
         echo "Start Year: ${{ github.event.inputs.start_year || 2024 }}"
         echo "End Year: ${{ github.event.inputs.end_year || 2029 }}"
-        echo "Output Path: ${{ github.event.inputs.output_path || 'gs://bgg-predictive-models-dev/predictions/game_predictions.parquet' }}"
+        echo "Output Path: ${{ github.event.inputs.output_path || 'Using environment default' }}"
+        echo "Using model names from config.yaml"

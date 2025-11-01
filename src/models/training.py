@@ -20,7 +20,7 @@ import lightgbm as lgb
 from catboost import CatBoostRegressor
 
 # Project imports
-from src.data.config import load_config
+from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
 from src.features.preprocessor import create_bgg_preprocessor
 from src.models.splitting import time_based_split
@@ -65,7 +65,7 @@ def load_data(
     else:
         try:
             config = load_config()
-            loader = BGGDataLoader(config)
+            loader = BGGDataLoader(config.get_bigquery_config())
             df = loader.load_training_data(
                 end_train_year=end_train_year + 1 if end_train_year else None,
                 min_weights=min_weights,

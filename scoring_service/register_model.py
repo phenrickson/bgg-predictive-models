@@ -2,19 +2,35 @@
 
 import argparse
 import os
+import sys
 from typing import Dict, Any, Optional
-from pathlib import Path
 from dotenv import load_dotenv
 import logging
 
-from src.models.experiments import ExperimentTracker
-from scoring_service.registered_model import RegisteredModel
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
+
+from src.models.experiments import ExperimentTracker  # noqa: E402
+from scoring_service.registered_model import RegisteredModel  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 
 # load environment variables
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info(f"{os.getenv('GCP_PROJECT_ID')}")
+
+
+def validate_environment():
+    """Validate that required environment variables are set."""
+    required_vars = [
+        "GCP_PROJECT_ID"
+    ]  # ENVIRONMENT is optional as it defaults to value in config
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
 
 
 def register_model(
@@ -38,9 +54,14 @@ def register_model(
     Returns:
         Registration details
     """
-    # Get bucket name from environment if not provided
+    # Validate environment variables
+    validate_environment()
+
+    # Get bucket name from config if not provided
     if bucket_name is None:
-        bucket_name = os.getenv("GCS_BUCKET_NAME", "bgg-predictive-models")
+        config = load_config()
+        bucket_name = config.get_bucket_name()
+        logger.info(f"Using bucket from config: {bucket_name}")
 
     # Load experiment
     tracker = ExperimentTracker(model_type)
@@ -73,16 +94,18 @@ def register_model(
             metadata=metadata,
         )
 
-        print(f"\nSuccessfully registered model:")
+        print("\nSuccessfully registered model:")
         print(f"  Name: {registration['name']}")
         print(f"  Version: {registration['version']}")
         print(f"  Description: {registration['description']}")
         print(f"  Registered at: {registration['registered_at']}")
+        print(f"  Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
+        print(f"  Bucket: {bucket_name}")
 
         return registration
 
     except Exception as e:
-        print(f"\nError registering model:")
+        print("\nError registering model:")
         print(f"  {str(e)}")
         raise
 
@@ -113,7 +136,7 @@ def main():
 
     try:
         # Register the model
-        registration = register_model(
+        registration = register_model(  # noqa: F841
             model_type=args.model_type,
             experiment_name=args.experiment,
             registered_name=args.name,

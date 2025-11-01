@@ -1,11 +1,11 @@
 steps:
 # Build the container image using UV
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA', '.']
+  args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/bgg-predictive-models/scoring:$COMMIT_SHA', '.']
 
-# Push the container image to Container Registry
+# Push the container image to Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA']
+  args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/bgg-predictive-models/scoring:$COMMIT_SHA']
 
 # Deploy container image to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -15,7 +15,7 @@ steps:
   - 'deploy'
   - 'bgg-model-scoring'
   - '--image'
-  - 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/bgg-predictive-models/scoring:$COMMIT_SHA'
   - '--platform'
   - 'managed'
   - '--region'
@@ -39,7 +39,7 @@ steps:
 #   - 'curl https://bgg-model-scoring-url/health || exit 1'
 
 images:
-- 'gcr.io/$PROJECT_ID/bgg-model-scoring:$COMMIT_SHA'
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/bgg-predictive-models/scoring:$COMMIT_SHA'
 
 # Optional: Artifacts for storing build outputs
 artifacts:

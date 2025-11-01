@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
-from src.features.transformers import BaseBGGTransformer
+from sklearn.feature_selection import VarianceThreshold
 from src.features.preprocessor import create_bgg_preprocessor
 
 
@@ -69,9 +69,9 @@ def test_create_bgg_preprocessor_model_types(sample_dataframe):
     }
 
     # Verify core features are present
-    assert core_features.issubset(
-        linear_columns
-    ), "Core features missing in linear model"
+    assert core_features.issubset(linear_columns), (
+        "Core features missing in linear model"
+    )
     assert core_features.issubset(tree_columns), "Core features missing in tree model"
 
     # Test invalid model type raises ValueError
@@ -93,12 +93,12 @@ def test_bgg_preprocessor_feature_scaling(sample_dataframe):
     for feature in scaled_features:
         # Verify the feature is scaled (mean close to 0, std close to 1)
         feature_data = linear_transformed[feature]
-        assert np.isclose(
-            feature_data.mean(), 0, atol=1e-2
-        ), f"{feature} mean should be close to 0"
-        assert np.isclose(
-            feature_data.std(), 1, atol=1e-2
-        ), f"{feature} std should be close to 1"
+        assert np.isclose(feature_data.mean(), 0, atol=1e-2), (
+            f"{feature} mean should be close to 0"
+        )
+        assert np.isclose(feature_data.std(), 1, atol=1e-2), (
+            f"{feature} std should be close to 1"
+        )
 
 
 def test_bgg_preprocessor_log_transformation(sample_dataframe):
@@ -129,9 +129,9 @@ def test_bgg_preprocessor_log_transformation(sample_dataframe):
     # Check log-transformed features
     for feature in log_columns:
         # Verify log-transformed feature exists
-        assert (
-            f"{feature}" in linear_transformed.columns
-        ), f"Log transformation missing for {feature}"
+        assert f"{feature}" in linear_transformed.columns, (
+            f"Log transformation missing for {feature}"
+        )
 
         # Verify that log transformation was applied (values should be different)
         original_values = processed_dataframe[feature].dropna()
@@ -172,10 +172,20 @@ def test_bgg_preprocessor_variance_selection():
     linear_variance_selector = linear_preprocessor.named_steps["variance_selector"]
     tree_variance_selector = tree_preprocessor.named_steps["variance_selector"]
 
+    # Assert that variance selectors exist and are the correct type
+    assert linear_variance_selector is not None, "Linear variance selector should exist"
+    assert tree_variance_selector is not None, "Tree variance selector should exist"
+    assert isinstance(linear_variance_selector, VarianceThreshold), (
+        "Linear variance selector should be a VarianceThreshold instance"
+    )
+    assert isinstance(tree_variance_selector, VarianceThreshold), (
+        "Tree variance selector should be a VarianceThreshold instance"
+    )
+
     # Verify different feature sets for linear and tree models
-    assert set(linear_transformed.columns) != set(
-        tree_transformed.columns
-    ), "Linear and tree preprocessors should produce different feature sets"
+    assert set(linear_transformed.columns) != set(tree_transformed.columns), (
+        "Linear and tree preprocessors should produce different feature sets"
+    )
 
     # Verify core features are consistent across model types
     core_features = {
@@ -188,9 +198,9 @@ def test_bgg_preprocessor_variance_selection():
     }
 
     # Verify core features are present in both transformed datasets
-    assert core_features.issubset(
-        linear_transformed.columns
-    ), "Core features missing in linear model"
-    assert core_features.issubset(
-        tree_transformed.columns
-    ), "Core features missing in tree model"
+    assert core_features.issubset(linear_transformed.columns), (
+        "Core features missing in linear model"
+    )
+    assert core_features.issubset(tree_transformed.columns), (
+        "Core features missing in tree model"
+    )

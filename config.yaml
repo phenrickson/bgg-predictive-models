@@ -1,0 +1,98 @@
+# Environment Configuration
+environment:
+  prod:
+    bucket_name: bgg-predictive-models-prod
+    bigquery:
+      dataset: bgg_data_dev
+  dev:
+    bucket_name: bgg-predictive-models-dev
+    bigquery:
+      dataset: bgg_data_dev
+  test:
+    bucket_name: bgg-predictive-models-test
+    bigquery:
+      dataset: bgg_data_dev
+
+# Default environment
+default_environment: dev
+
+# Year Configuration
+years:
+  current: 2025
+  train_end: 2021  # current - 4
+  tune_end: 2022   # train_end + 1
+  test_start: 2023 # tune_end + 1
+  test_end: 2023   # test_start
+  eval:
+    start: 2018
+    end: 2023
+  score:
+    start: 2024    # current - 1
+    end: 2029      # current + 4
+
+# Model Configuration
+models:
+  hurdle:
+    type: lightgbm
+    experiment_name: lightgbm-hurdle
+  complexity:
+    type: catboost
+    experiment_name: catboost-complexity
+    use_sample_weights: true
+    predictions_path: models/experiments/predictions/catboost-complexity.parquet
+  rating:
+    type: catboost
+    experiment_name: catboost-rating
+    use_sample_weights: true
+    min_ratings: 5
+  users_rated:
+    type: ridge
+    experiment_name: ridge-users_rated
+    min_ratings: 0
+
+# evaluate models over time
+evaluate:
+  # Available model types (like Makefile variables)
+  model_types:
+    linear: linear
+    ridge: ridge
+    logistic: logistic
+    catboost: catboost
+    lightgbm: lightgbm
+    lightgbm_linear: lightgbm_linear
+  
+  # Default model assignments 
+  defaults:
+    hurdle_model: lightgbm      
+    complexity_model: catboost
+    rating_model: catboost
+    users_rated_model: ridge
+  
+  # Model-specific settings (like individual Makefile targets)
+  settings:
+    hurdle:
+      # No special settings for hurdle
+    complexity:
+      use_sample_weights: true
+    rating:
+      use_sample_weights: true
+      min_ratings: 5
+    users_rated:
+      min_ratings: 0
+  
+  # Evaluation-specific settings
+  output_dir: "./models/experiments"
+  min_ratings_threshold: 0
+
+# Scoring Configuration
+scoring:
+  models:
+    hurdle: hurdle-v2025  # Name of registered model to use
+    complexity: complexity-v2025
+    rating: rating-v2025
+    users_rated: users_rated-v2025
+  parameters:
+    prior_rating: 5.5
+    prior_weight: 2000
+  output:
+    predictions_path: data/predictions/game_predictions.parquet

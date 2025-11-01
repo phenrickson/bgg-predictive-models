@@ -27,7 +27,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.insert(0, project_root)
 
 from src.data.loader import BGGDataLoader  # noqa: E402
-from src.data.config import load_config  # noqa: E402
+from src.utils.config import load_config  # noqa: E402
 from src.features.preprocessor import create_bgg_preprocessor  # noqa: E402
 from src.features.unsupervised import perform_pca  # noqa: E402
 from src.utils.logging import setup_logging  # noqa: E402
@@ -796,9 +796,7 @@ def main():
                 st.session_state.kmeans_y_component = (
                     available_components[1]
                     if len(available_components) > 1
-                    else available_components[0]
-                    if available_components
-                    else None
+                    else available_components[0] if available_components else None
                 )
 
             # Component selection for scatter plot
@@ -1427,7 +1425,9 @@ def main():
                 color_map = get_cluster_colors(n_clusters)
 
                 # Prepare data for color mapping
-                cluster_colors = [color_map[str(cluster)] for cluster in sample_labels]
+                cluster_colors = [  # noqa: F841
+                    color_map[str(cluster)] for cluster in sample_labels
+                ]
 
                 # Create line plot
                 fig_embeddings = go.Figure()
@@ -2105,9 +2105,7 @@ def main():
                         st.session_state.gmm_y_component = (
                             components[1]
                             if len(components) > 1
-                            else components[0]
-                            if components
-                            else None
+                            else components[0] if components else None
                         )
 
                     def on_x_component_change():

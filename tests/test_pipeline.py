@@ -4,14 +4,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from sklearn.ensemble import RandomForestRegressor
-import lightgbm as lgb
-from catboost import CatBoostRegressor
 
 from src.models.training import create_preprocessing_pipeline, preprocess_data
-from src.features.preprocessor import create_bgg_preprocessor
-from src.features.transformers import BaseBGGTransformer
 
 
 @pytest.fixture
@@ -125,9 +119,9 @@ class TestPipelineStructure:
         auto_steps = [step[0] for step in auto_linear.steps]
         manual_steps = [step[0] for step in manual_linear.steps]
 
-        assert (
-            auto_steps == manual_steps
-        ), "Auto-selected linear pipeline differs from manual"
+        assert auto_steps == manual_steps, (
+            "Auto-selected linear pipeline differs from manual"
+        )
 
         # Test tree model auto-selection
         auto_tree = create_preprocessing_pipeline(
@@ -138,9 +132,9 @@ class TestPipelineStructure:
         auto_steps = [step[0] for step in auto_tree.steps]
         manual_steps = [step[0] for step in manual_tree.steps]
 
-        assert (
-            auto_steps == manual_steps
-        ), "Auto-selected tree pipeline differs from manual"
+        assert auto_steps == manual_steps, (
+            "Auto-selected tree pipeline differs from manual"
+        )
 
 
 class TestPipelineTransformation:
@@ -176,9 +170,9 @@ class TestPipelineTransformation:
         linear_features = set(linear_transformed.columns)
         tree_features = set(tree_transformed.columns)
 
-        assert (
-            linear_features != tree_features
-        ), "Linear and tree pipelines should produce different features"
+        assert linear_features != tree_features, (
+            "Linear and tree pipelines should produce different features"
+        )
 
         # But should have some overlap in core features
         overlap = linear_features.intersection(tree_features)
@@ -213,9 +207,9 @@ class TestPipelineTransformation:
 
                 # Linear should be more standardized (closer to 1) if scaling was applied
                 if tree_std > 1:  # Only test if original data has variance > 1
-                    assert (
-                        linear_std < tree_std
-                    ), f"Linear pipeline should standardize {feature}"
+                    assert linear_std < tree_std, (
+                        f"Linear pipeline should standardize {feature}"
+                    )
 
     def test_pipeline_reproducibility(self, sample_dataframe):
         """Test that pipelines produce consistent results across multiple runs."""
@@ -241,9 +235,9 @@ class TestPipelineTransformation:
         transformed = pipeline.fit_transform(df_with_missing)
 
         # Should not have any NaN values after preprocessing
-        assert (
-            not transformed.isnull().any().any()
-        ), "Pipeline should handle missing values"
+        assert not transformed.isnull().any().any(), (
+            "Pipeline should handle missing values"
+        )
 
 
 class TestPipelineConfiguration:
@@ -287,8 +281,8 @@ class TestPipelineConfiguration:
         )
 
         bgg_preprocessor = pipeline.named_steps["bgg_preprocessor"]
-        assert bgg_preprocessor.create_category_features == False
-        assert bgg_preprocessor.create_mechanic_features == False
+        assert not bgg_preprocessor.create_category_features
+        assert not bgg_preprocessor.create_mechanic_features
         assert bgg_preprocessor.max_designer_features == 100
 
 

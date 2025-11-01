@@ -1,0 +1,83 @@
+name: Release Docker Images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  tag-release-images:
+    name: Tag Release Images
+    runs-on: ubuntu-latest
+    environment: PROD
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set Version
+      id: version
+      run: |
+        if [[ "${{ github.event_name }}" == "release" ]]; then
+          echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker Auth
+      run: |
+        gcloud auth configure-docker gcr.io
+        gcloud auth configure-docker us-central1-docker.pkg.dev
+
+    - name: Tag and Push Scoring Service Release
+      run: |
+        # Pull the latest prod image
+        docker pull gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:prod
+        
+        # Tag with version
+        docker tag gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:prod \
+          gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}
+        
+        # Push version tag
+        docker push gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}
+
+    - name: Tag and Push Training Release
+      run: |
+        # Pull the latest prod image
+        docker pull us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:prod
+        
+        # Tag with version
+        docker tag us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:prod \
+          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.version.outputs.version }}
+        
+        # Push version tag
+        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.version.outputs.version }}
+
+    - name: Update Release Notes
+      run: |
+        echo "## Docker Images" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Scoring Service" >> release_notes.md
+        echo "- \`gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}\`" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Training" >> release_notes.md
+        echo "- \`us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.version.outputs.version }}\`" >> release_notes.md
+        echo "" >> release_notes.md
+        cat release_notes.md
