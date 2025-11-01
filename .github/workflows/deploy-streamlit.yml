@@ -15,6 +15,8 @@ jobs:
   deploy-streamlit:
     name: deploy-streamlit
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
+    
     permissions:
       contents: 'read'
       id-token: 'write'
@@ -23,27 +25,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Install UV
-        run: pip install uv
-
-      - name: Setup Environment
-        run: |
-          mkdir -p credentials
-          echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
-
-          cat << EOF > .env
-          GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-          ENVIRONMENT=${{ vars.ENVIRONMENT || 'dev' }}
-          GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json
-          EOF
-
-      - name: Google Cloud Auth
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
@@ -51,39 +33,47 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Set Environment Tag
+        id: env-tag
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_tag=prod" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            echo "env_tag=dev" >> $GITHUB_OUTPUT
+          else
+            echo "env_tag=test" >> $GITHUB_OUTPUT
+          fi
 
       - name: Configure Docker
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Configure Docker auth for GCR
         run: |
-          gcloud auth configure-docker gcr.io
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+          gcloud artifacts repositories create bgg-predictive-models --repository-format=docker --location=us-central1 --quiet || true
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.streamlit
-          push: true
-          tags: gcr.io/${{ vars.GCP_PROJECT_ID }}/bgg-streamlit:latest
+      - name: Build Docker Image
+        run: |
+          docker build -f Dockerfile.streamlit \
+            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }} \
+            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }} \
+            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+            .
+
+      - name: Push Docker Image
+        run: |
+          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }}
+          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}
+          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
 
       - name: Deploy Streamlit to Cloud Run
         run: |
-          # Get the project ID from the environment
-          PROJECT_ID=${{ vars.GCP_PROJECT_ID }}
-          ENVIRONMENT=${{ vars.ENVIRONMENT || 'dev' }}
-          
-          gcloud run deploy bgg-streamlit \
-            --image gcr.io/${PROJECT_ID}/bgg-streamlit:latest \
+          gcloud run deploy bgg-streamlit-${{ steps.env-tag.outputs.env_tag }} \
+            --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
             --memory 2Gi \
             --cpu 1 \
-            --service-account bgg-data-warehouse@${PROJECT_ID}.iam.gserviceaccount.com \
-            --set-env-vars="ENVIRONMENT=${ENVIRONMENT},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
+            --service-account bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars="ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
             --port=8080 \
             --timeout=300s \
             --min-instances=0 \
@@ -91,4 +81,4 @@ jobs:
 
       - name: Output Streamlit URL
         run: |
-          echo "Streamlit Dashboard deployed to: $(gcloud run services describe bgg-streamlit --platform managed --region us-central1 --format='value(status.url)')"
+          echo "Streamlit Dashboard deployed to: $(gcloud run services describe bgg-streamlit-${{ steps.env-tag.outputs.env_tag }} --platform managed --region us-central1 --format='value(status.url)')"
