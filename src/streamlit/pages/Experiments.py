@@ -1,14 +1,71 @@
 """
 Streamlit dashboard for exploring model experiments.
+
+This module provides a comprehensive interface for viewing and analyzing machine learning
+experiments, including metrics, predictions, parameters, and feature importance visualizations.
+
+Key Features:
+- Interactive experiment selection and filtering
+- Real-time metrics visualization and comparison
+- Prediction analysis with regression and classification support
+- Feature importance plots with category-specific breakdowns
+- Experiment metadata and parameter exploration
+- Efficient caching and data loading
+
+The dashboard is organized into tabs:
+1. Metrics Overview: Compare performance metrics across experiments
+2. Predictions: Analyze model predictions with interactive plots
+3. Parameters: View model hyperparameters and configurations
+4. Feature Importance: Explore feature contributions and importance
+5. Experiment Details: Raw experiment data and configurations
+6. Experiment Metadata: Complete experiment metadata
+
+Dependencies:
+- streamlit: Web application framework
+- plotly: Interactive plotting library
+- pandas/polars: Data manipulation
+- sklearn: Machine learning metrics
+- statsmodels: Statistical analysis (optional, for LOESS smoothing)
+
+Usage:
+    Run with: streamlit run src/streamlit/pages/Experiments.py
 """
 
-import streamlit as st
+# Standard library imports
 import sys
 import os
 import logging
 from pathlib import Path
+from typing import Dict, List, Optional, Any, Tuple
+
+# Third-party imports
+import streamlit as st
 import plotly.express as px
+import plotly.graph_objs as go
+import numpy as np
+import pandas as pd
+import polars as pl
 from dotenv import load_dotenv
+from sklearn.metrics import (
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
+    mean_absolute_percentage_error,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    roc_auc_score,
+)
+
+# Optional import for LOESS smoothing
+try:
+    import statsmodels.nonparametric.smoothers_lowess as lowess
+
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
 
 # Configure logging for debugging
 logging.basicConfig(
@@ -22,10 +79,8 @@ project_root = os.path.abspath(
 )
 sys.path.insert(0, project_root)
 
-# Import efficient experiment loader
+# Local application imports
 from src.utils.experiment_loader import get_experiment_loader
-
-# Import dashboard modules for visualization functions
 from src.monitor.experiment_dashboard import (
     create_metrics_overview,
     create_performance_by_run_visualization,
@@ -34,9 +89,57 @@ from src.monitor.experiment_dashboard import (
     create_category_feature_importance_plots,
     display_predictions as display_experiment_predictions,
 )
-
-# Import ExperimentTracker for direct experiment loading
 from src.models.experiments import ExperimentTracker
+
+# Constants
+CACHE_TTL = 300  # 5 minutes
+TOP_N_FEATURES_DEFAULT = 40
+TOP_N_FEATURES_PER_CATEGORY_DEFAULT = 25
+MIN_USERS_RATED_FILTER_DEFAULT = 5
+
+
+# Utility Functions
+def validate_experiment_data(experiment: Dict[str, Any]) -> bool:
+    """Validate experiment data structure."""
+    required_keys = ["full_name", "experiment_name", "metrics"]
+    return all(key in experiment for key in required_keys)
+
+
+def create_hover_text(row: pd.Series) -> str:
+    """Create hover text for prediction plots."""
+    hover_info = f"Predicted: {row['prediction']:.4f}<br>Actual: {row['actual']:.4f}"
+    if "game_id" in row.index:
+        hover_info += f"<br>Game ID: {row['game_id']}"
+    if "name" in row.index:
+        hover_info += f"<br>Name: {row['name']}"
+    return hover_info
+
+
+def abbreviate_feature(feature: str, n: int = 40) -> str:
+    """Abbreviate feature names for display."""
+    if len(str(feature)) > n:
+        return str(feature)[: n - 3] + "..."
+    return str(feature)
+
+
+def determine_model_type(
+    experiment: Dict[str, Any], predictions_df: pd.DataFrame
+) -> str:
+    """Determine model type from experiment metadata or predictions."""
+    try:
+        # Try to get model type from metadata
+        model_type = experiment.get("model_info", {}).get("model_type", "regression")
+        if not model_type:
+            # Fallback to checking if it's a classification task
+            if "threshold" in predictions_df.columns:
+                model_type = "classification"
+            else:
+                model_type = "regression"
+        return model_type
+    except Exception as e:
+        logger.warning(f"Error determining model type: {e}")
+        return "regression"
+
 
 st.set_page_config(page_title="Experiments | BGG Models Dashboard", layout="wide")
 st.title("Experiment Tracking")
@@ -97,14 +200,8 @@ if experiments:
     if "metrics" in experiments[0]:
         logger.debug(f"Metrics structure: {list(experiments[0]['metrics'].keys())}")
 
-# Show debug info in sidebar
-with st.sidebar:
-    st.subheader("🔍 Debug Info")
-    st.write(f"Experiments loaded: {len(experiments)}")
-    if experiments:
-        st.write(f"Sample experiment keys: {list(experiments[0].keys())}")
-        if "metrics" in experiments[0]:
-            st.write(f"Metrics datasets: {list(experiments[0]['metrics'].keys())}")
+# Note: Debug information removed for cleaner UI
+# Debug information is still logged to console for development purposes
 
 # Check if any experiments were loaded
 if not experiments:
@@ -202,25 +299,10 @@ with tab2:
 
                 if predictions_df is not None:
                     # Convert pandas DataFrame to polars for compatibility
-                    import polars as pl
-
                     display_df = pl.from_pandas(predictions_df)
 
                     # Determine model type from experiment metadata
-                    try:
-                        # Try to get model type from metadata
-                        model_type = selected_exp.get("model_info", {}).get(
-                            "model_type", "regression"
-                        )
-                        if not model_type:
-                            # Fallback to checking if it's a classification task
-                            if "threshold" in predictions_df.columns:
-                                model_type = "classification"
-                            else:
-                                model_type = "regression"
-                    except Exception as e:
-                        logger.warning(f"Error determining model type: {e}")
-                        model_type = "regression"
+                    model_type = determine_model_type(selected_exp, predictions_df)
 
                     # Special handling for geek_rating model type
                     if selected_model_type == "geek_rating":
@@ -312,15 +394,6 @@ with tab2:
                         and "prediction" in display_df.columns
                         and "actual" in display_df.columns
                     ):
-                        from sklearn.metrics import (
-                            mean_squared_error,
-                            mean_absolute_error,
-                            r2_score,
-                            mean_absolute_percentage_error,
-                        )
-                        import plotly.graph_objs as go
-                        import numpy as np
-
                         # Convert to pandas for sklearn metrics
                         df_pandas = display_df.to_pandas()
 
@@ -348,17 +421,9 @@ with tab2:
                             st.metric("MAPE", f"{mape:.2f}%")
 
                         # Prepare hover text with game_id and name if available
-                        hover_text = []
-                        for index, row in df_pandas.iterrows():
-                            hover_info = f"Predicted: {row['prediction']:.4f}<br>Actual: {row['actual']:.4f}"
-
-                            # Add game_id and name if they exist in the columns
-                            if "game_id" in df_pandas.columns:
-                                hover_info += f"<br>Game ID: {row['game_id']}"
-                            if "name" in df_pandas.columns:
-                                hover_info += f"<br>Name: {row['name']}"
-
-                            hover_text.append(hover_info)
+                        hover_text = [
+                            create_hover_text(row) for _, row in df_pandas.iterrows()
+                        ]
 
                         # Scatter plot of predicted vs actual with hover information
                         fig = go.Figure()
@@ -400,31 +465,32 @@ with tab2:
                             )
                         )
 
-                        # Add LOESS trend line using statsmodels
-                        try:
-                            import statsmodels.nonparametric.smoothers_lowess as lowess
+                        # Add LOESS trend line if available
+                        if HAS_STATSMODELS:
+                            try:
+                                # Sort data for LOESS smoothing
+                                sorted_indices = np.argsort(df_pandas["prediction"])
+                                x_sorted = df_pandas["prediction"].iloc[sorted_indices]
+                                y_sorted = df_pandas["actual"].iloc[sorted_indices]
 
-                            # Sort data for LOESS smoothing
-                            sorted_indices = np.argsort(df_pandas["prediction"])
-                            x_sorted = df_pandas["prediction"].iloc[sorted_indices]
-                            y_sorted = df_pandas["actual"].iloc[sorted_indices]
-
-                            # Apply LOESS smoothing
-                            loess_smoothed = lowess.lowess(
-                                y_sorted, x_sorted, frac=2 / 3, it=5
-                            )
-
-                            # Add LOESS line
-                            fig.add_trace(
-                                go.Scatter(
-                                    x=loess_smoothed[:, 0],
-                                    y=loess_smoothed[:, 1],
-                                    mode="lines",
-                                    name="LOESS Trend",
-                                    line=dict(color="green", width=2, dash="dot"),
+                                # Apply LOESS smoothing
+                                loess_smoothed = lowess.lowess(
+                                    y_sorted, x_sorted, frac=2 / 3, it=5
                                 )
-                            )
-                        except ImportError:
+
+                                # Add LOESS line
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x=loess_smoothed[:, 0],
+                                        y=loess_smoothed[:, 1],
+                                        mode="lines",
+                                        name="LOESS Trend",
+                                        line=dict(color="green", width=2, dash="dot"),
+                                    )
+                                )
+                            except Exception as e:
+                                logger.warning(f"Error adding LOESS trend line: {e}")
+                        else:
                             st.info("Install statsmodels for LOESS trend line")
 
                         # Update layout
@@ -442,15 +508,6 @@ with tab2:
                         and "prediction" in display_df.columns
                         and "actual" in display_df.columns
                     ):
-                        from sklearn.metrics import (
-                            accuracy_score,
-                            precision_score,
-                            recall_score,
-                            f1_score,
-                            confusion_matrix,
-                            roc_auc_score,
-                        )
-
                         # Convert to pandas for sklearn metrics
                         df_pandas = display_df.to_pandas()
 
@@ -533,78 +590,315 @@ with tab3:
 with tab4:
     st.header("Feature Importance")
 
-    # Select specific experiment
-    selected_experiment = st.selectbox(
-        "Select Experiment",
-        [exp["full_name"] for exp in experiments],
-        key="feature_importance_experiment",
-    )
-    exp_name = selected_experiment
+    # Load all feature importance data for the selected model type (cached)
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def load_all_feature_importance_cached(model_type):
+        """Load all feature importance data with caching."""
+        return loader.load_all_feature_importance(model_type)
 
-    # Find the selected experiment
-    selected_exp = next(
-        (exp for exp in experiments if exp["full_name"] == selected_experiment),
-        None,
-    )
+    with st.spinner(f"Loading feature importance data for {selected_model_type}..."):
+        all_feature_importance = load_all_feature_importance_cached(selected_model_type)
 
-    # Feature importance configuration for overall plot
-    top_n = st.slider(
-        "Top N Features (Overall)", min_value=5, max_value=250, value=40, step=5
-    )
-
-    if selected_exp:
-        # Overall feature importance plot
-        st.subheader("Overall Feature Importance")
-        feature_fig = create_feature_importance_plot(
-            selected_exp,
-            model_type=selected_model_type,
-            top_n=top_n,
+    # Check if any feature importance data was loaded
+    if not all_feature_importance:
+        st.warning("No feature importance data available for this model type")
+        st.info("This could mean:")
+        st.info("1. Feature importance was not calculated during training")
+        st.info("2. The feature importance files were not saved")
+        st.info(
+            "3. The experiments used model types that don't support feature importance"
         )
+    else:
+        # Select specific experiment from available ones
+        available_experiments = list(all_feature_importance.keys())
+        experiment_display_names = [
+            exp["full_name"]
+            for exp in experiments
+            if exp["experiment_name"] in available_experiments
+        ]
 
-        if feature_fig:
-            st.plotly_chart(feature_fig, use_container_width=True)
+        if not experiment_display_names:
+            st.warning("No experiments with feature importance data found")
         else:
-            st.warning("No feature importance data available for this experiment")
-            st.info("This could mean:")
-            st.info("1. Feature importance was not calculated during training")
-            st.info("2. The feature importance file was not saved")
-            st.info(
-                "3. The experiment used a model type that doesn't support feature importance"
+            selected_experiment = st.selectbox(
+                "Select Experiment",
+                experiment_display_names,
+                key="feature_importance_experiment",
             )
 
-        # Category-specific feature importance plots
-        st.subheader("Feature Importance by Category")
+            # Find the selected experiment
+            selected_exp = next(
+                (exp for exp in experiments if exp["full_name"] == selected_experiment),
+                None,
+            )
 
-        # Configuration for category plots
-        top_n_per_category = st.slider(
-            "Top N Features (Per Category)",
-            min_value=5,
-            max_value=100,
-            value=25,
-            step=5,
-        )
+            # Feature importance configuration for overall plot
+            top_n = st.slider(
+                "Top N Features (Overall)", min_value=5, max_value=250, value=40, step=5
+            )
 
-        category_plots = create_category_feature_importance_plots(
-            selected_exp,
-            model_type=selected_model_type,
-            top_n_per_category=top_n_per_category,
-        )
+            if (
+                selected_exp
+                and selected_exp["experiment_name"] in all_feature_importance
+            ):
+                # Get feature importance data from the cached batch load
+                feature_importance_df = all_feature_importance[
+                    selected_exp["experiment_name"]
+                ]
 
-        if category_plots:
-            # Create tabs for each category
-            category_names = list(category_plots.keys())
-            if len(category_names) > 0:
-                category_tabs = st.tabs(category_names)
+                if feature_importance_df is not None:
+                    # Overall feature importance plot
+                    st.subheader("Overall Feature Importance")
 
-                for i, (category_name, fig) in enumerate(category_plots.items()):
-                    with category_tabs[i]:
+                    # Determine the importance column name
+                    importance_col = None
+                    if "feature_importance" in feature_importance_df.columns:
+                        importance_col = "feature_importance"
+                    elif "coefficient" in feature_importance_df.columns:
+                        importance_col = "coefficient"
+                    elif "abs_feature_importance" in feature_importance_df.columns:
+                        importance_col = "abs_feature_importance"
+                    elif "abs_coefficient" in feature_importance_df.columns:
+                        importance_col = "abs_coefficient"
+
+                    if importance_col:
+                        # Sort by absolute importance and take top N
+                        if importance_col in ["coefficient"]:
+                            # For coefficients, sort by absolute value
+                            sorted_df = feature_importance_df.copy()
+                            sorted_df["abs_importance"] = sorted_df[
+                                importance_col
+                            ].abs()
+                            sorted_df = sorted_df.nlargest(top_n, "abs_importance")
+                        else:
+                            # For feature importance, sort directly
+                            sorted_df = feature_importance_df.nlargest(
+                                top_n, importance_col
+                            )
+
+                        # Create horizontal bar plot
+                        sorted_df["abbreviated_feature"] = sorted_df["feature"].apply(
+                            abbreviate_feature
+                        )
+
+                        # Create the plot
+                        if importance_col == "coefficient":
+                            # For coefficients, use signed values with color scale
+                            fig = px.bar(
+                                sorted_df.sort_values(importance_col),
+                                y="abbreviated_feature",
+                                x=importance_col,
+                                orientation="h",
+                                color=importance_col,
+                                color_continuous_scale="RdBu",
+                                color_continuous_midpoint=0,
+                                title=f"Top {top_n} Features - {selected_exp['experiment_name']} (Coefficients)",
+                            )
+                            # Add zero line
+                            fig.add_vline(
+                                x=0, line_width=2, line_dash="dash", line_color="gray"
+                            )
+                        else:
+                            # For feature importance, use positive values
+                            fig = px.bar(
+                                sorted_df.sort_values(importance_col, ascending=True),
+                                y="abbreviated_feature",
+                                x=importance_col,
+                                orientation="h",
+                                color=importance_col,
+                                color_continuous_scale="Viridis",
+                                title=f"Top {top_n} Features - {selected_exp['experiment_name']} (Feature Importance)",
+                            )
+
+                        # Update layout
+                        fig.update_layout(
+                            height=max(400, len(sorted_df) * 20),
+                            width=800,
+                            yaxis_title="Feature",
+                            xaxis_title=(
+                                "Importance"
+                                if importance_col != "coefficient"
+                                else "Effect"
+                            ),
+                            title_x=0.5,
+                            coloraxis_colorbar=dict(title=""),
+                        )
+
+                        # Add hover text with full feature names
+                        fig.update_traces(
+                            hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>"
+                            + (
+                                f"{importance_col.replace('_', ' ').title()}: %{{x:.4f}}<extra></extra>"
+                            ),
+                            text=sorted_df["feature"],
+                            texttemplate="",
+                            textposition="none",
+                        )
+
                         st.plotly_chart(fig, use_container_width=True)
+
+                        # Category-specific feature importance plots
+                        st.subheader("Feature Importance by Category")
+
+                        # Configuration for category plots
+                        top_n_per_category = st.slider(
+                            "Top N Features (Per Category)",
+                            min_value=5,
+                            max_value=100,
+                            value=25,
+                            step=5,
+                        )
+
+                        # Define categories to look for
+                        categories = {
+                            "Publisher": "publisher_",
+                            "Designer": "designer_",
+                            "Artist": "artist_",
+                            "Mechanic": "mechanic_",
+                            "Category": "category_",
+                            "Family": "family_",
+                        }
+
+                        category_plots = {}
+
+                        for category_name, prefix in categories.items():
+                            # Filter features for this category
+                            category_features = feature_importance_df[
+                                feature_importance_df["feature"].str.startswith(prefix)
+                            ]
+
+                            if len(category_features) == 0:
+                                continue
+
+                            # Sort and select top N features
+                            if importance_col == "coefficient":
+                                category_features["abs_importance"] = category_features[
+                                    importance_col
+                                ].abs()
+                                category_sorted = category_features.nlargest(
+                                    top_n_per_category, "abs_importance"
+                                )
+                                category_sorted = category_sorted.sort_values(
+                                    importance_col
+                                )
+                            else:
+                                category_sorted = category_features.nlargest(
+                                    top_n_per_category, importance_col
+                                )
+                                category_sorted = category_sorted.sort_values(
+                                    importance_col, ascending=True
+                                )
+
+                            # Abbreviate feature names (remove prefix)
+                            category_sorted["abbreviated_feature"] = category_sorted[
+                                "feature"
+                            ].apply(
+                                lambda x: abbreviate_feature(
+                                    str(x).replace(prefix, ""), 30
+                                )
+                            )
+
+                            # Create plot for this category
+                            if importance_col == "coefficient":
+                                cat_fig = px.bar(
+                                    category_sorted,
+                                    y="abbreviated_feature",
+                                    x=importance_col,
+                                    orientation="h",
+                                    color=importance_col,
+                                    color_continuous_scale="RdBu",
+                                    color_continuous_midpoint=0,
+                                    title=f"Top {min(top_n_per_category, len(category_sorted))} {category_name} Features",
+                                )
+                                cat_fig.add_vline(
+                                    x=0,
+                                    line_width=2,
+                                    line_dash="dash",
+                                    line_color="gray",
+                                )
+                            else:
+                                cat_fig = px.bar(
+                                    category_sorted,
+                                    y="abbreviated_feature",
+                                    x=importance_col,
+                                    orientation="h",
+                                    color=importance_col,
+                                    color_continuous_scale="Viridis",
+                                    title=f"Top {min(top_n_per_category, len(category_sorted))} {category_name} Features",
+                                )
+
+                            cat_fig.update_layout(
+                                height=max(400, len(category_sorted) * 25),
+                                width=800,
+                                yaxis_title="Feature",
+                                xaxis_title=(
+                                    "Importance"
+                                    if importance_col != "coefficient"
+                                    else "Effect"
+                                ),
+                                title_x=0.5,
+                                coloraxis_colorbar=dict(title=""),
+                            )
+
+                            cat_fig.update_traces(
+                                hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>"
+                                + (
+                                    f"{importance_col.replace('_', ' ').title()}: %{{x:.4f}}<extra></extra>"
+                                ),
+                                text=category_sorted["feature"],
+                                texttemplate="",
+                                textposition="none",
+                            )
+
+                            category_plots[category_name] = cat_fig
+
+                        if category_plots:
+                            # Create tabs for each category
+                            category_names = list(category_plots.keys())
+                            if len(category_names) > 0:
+                                category_tabs = st.tabs(category_names)
+
+                                for i, (category_name, fig) in enumerate(
+                                    category_plots.items()
+                                ):
+                                    with category_tabs[i]:
+                                        st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info(
+                                    "No category-specific features found in this experiment."
+                                )
+                        else:
+                            st.info(
+                                "No category-specific features found in this experiment."
+                            )
+
+                    else:
+                        st.warning(
+                            "Could not determine importance column in feature importance data"
+                        )
+                        st.write(
+                            "Available columns:", list(feature_importance_df.columns)
+                        )
+
+                else:
+                    st.warning(
+                        "No feature importance data available for this experiment"
+                    )
+                    st.info("This could mean:")
+                    st.info("1. Feature importance was not calculated during training")
+                    st.info("2. The feature importance file was not saved")
+                    st.info(
+                        "3. The experiment used a model type that doesn't support feature importance"
+                    )
+
             else:
-                st.info("No category-specific features found in this experiment.")
-        else:
-            st.info("No category-specific features found in this experiment.")
-    else:
-        st.error("Could not find the selected experiment")
+                st.warning("No feature importance data available for this experiment")
+                st.info("This could mean:")
+                st.info("1. Feature importance was not calculated during training")
+                st.info("2. The feature importance file was not saved")
+                st.info(
+                    "3. The experiment used a model type that doesn't support feature importance"
+                )
 
 with tab5:
     st.header("Experiment Details")
@@ -624,5 +918,5 @@ with tab5:
 with tab6:
     st.header("Experiment Metadata")
     for exp in experiments:
-        with st.expander(f"{exp['full_name']} Metadata"):
+        with st.expander(f"{exp['full_name']}"):
             st.json(exp)

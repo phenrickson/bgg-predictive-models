@@ -342,7 +342,7 @@ class ExperimentLoader:
                 "train_metrics": "train_metrics.json",
                 "tune_metrics": "tune_metrics.json",
                 "test_metrics": "test_metrics.json",
-                "feature_importance": "feature_importance.json",
+                "feature_importance": "feature_importance.csv",
             }
 
             def load_file(file_info):
@@ -350,8 +350,24 @@ class ExperimentLoader:
                 file_path = f"{base_path}/{filename}"
                 try:
                     blob = self.bucket.blob(file_path)
-                    content = blob.download_as_text()
-                    return file_key, json.loads(content)
+
+                    # Handle CSV files differently
+                    if filename.endswith(".csv"):
+                        import tempfile
+
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".csv", delete=False
+                        ) as tmp_file:
+                            blob.download_to_filename(tmp_file.name)
+                            df = pd.read_csv(tmp_file.name)
+                            # Clean up temp file
+                            os.unlink(tmp_file.name)
+                            return file_key, df
+                    else:
+                        # Handle JSON files
+                        content = blob.download_as_text()
+                        return file_key, json.loads(content)
+
                 except google.cloud.exceptions.NotFound:
                     logger.debug(f"File not found: {file_path}")
                     return file_key, None
@@ -367,7 +383,7 @@ class ExperimentLoader:
 
                 for future in as_completed(futures):
                     file_key, content = future.result()
-                    if content:
+                    if content is not None:
                         details[file_key] = content
 
             # Cache the results
@@ -573,6 +589,91 @@ class ExperimentLoader:
                 f"Error loading feature importance for {model_type}/{exp_name}: {e}"
             )
             return None
+
+    def load_all_feature_importance(
+        self, model_type: str, experiment_names: List[str] = None
+    ) -> Dict[str, pd.DataFrame]:
+        """Load feature importance data for all experiments of a given model type.
+
+        Args:
+            model_type: The model type.
+            experiment_names: Optional list of specific experiment names to load.
+                            If None, loads for all experiments.
+
+        Returns:
+            Dictionary with experiment names as keys and feature importance DataFrames as values.
+        """
+        cache_key = f"all_feature_importance_{model_type}"
+        if cache_key in self._metadata_cache:
+            logger.debug(f"Using cached feature importance for {model_type}")
+            cached_data = self._metadata_cache[cache_key]
+
+            # If specific experiment names requested, filter the cached data
+            if experiment_names:
+                return {
+                    name: cached_data[name]
+                    for name in experiment_names
+                    if name in cached_data
+                }
+            return cached_data
+
+        try:
+            logger.debug(f"Loading all feature importance for model type: {model_type}")
+
+            # Get experiment names if not provided
+            if experiment_names is None:
+                prefix = f"models/experiments/{model_type}/"
+                blobs = self.bucket.list_blobs(prefix=prefix, delimiter="/")
+                experiment_names = []
+                for page in blobs.pages:
+                    experiment_names.extend(
+                        [prefix.rstrip("/").split("/")[-1] for prefix in page.prefixes]
+                    )
+
+            feature_importance_data = {}
+
+            def load_single_feature_importance(exp_name):
+                """Load feature importance for a single experiment."""
+                try:
+                    df = self.load_feature_importance(model_type, exp_name)
+                    if df is not None:
+                        # Add experiment name column for identification
+                        df = df.copy()
+                        df["experiment_name"] = exp_name
+                        return exp_name, df
+                    return exp_name, None
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load feature importance for {exp_name}: {e}"
+                    )
+                    return exp_name, None
+
+            # Load feature importance for all experiments in parallel
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(load_single_feature_importance, exp_name)
+                    for exp_name in experiment_names
+                ]
+
+                for future in as_completed(futures):
+                    exp_name, df = future.result()
+                    if df is not None:
+                        feature_importance_data[exp_name] = df
+                        logger.debug(
+                            f"Successfully loaded feature importance for {exp_name}: {df.shape}"
+                        )
+
+            # Cache the results
+            self._metadata_cache[cache_key] = feature_importance_data
+            logger.debug(
+                f"Cached feature importance for {len(feature_importance_data)} experiments"
+            )
+
+            return feature_importance_data
+
+        except Exception as e:
+            logger.error(f"Error loading all feature importance for {model_type}: {e}")
+            return {}
 
     def clear_cache(self):
         """Clear all cached data."""
