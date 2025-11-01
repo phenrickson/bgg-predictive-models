@@ -73,7 +73,7 @@ jobs:
             --memory 2Gi \
             --cpu 1 \
             --service-account bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-            --set-env-vars="ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json,PYTHONPATH=/app" \
+            --set-env-vars="ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},PYTHONPATH=/app" \
             --port=8080 \
             --timeout=300s \
             --min-instances=0 \
