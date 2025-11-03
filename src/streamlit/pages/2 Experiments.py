@@ -90,6 +90,7 @@ from src.monitor.experiment_dashboard import (
     display_predictions as display_experiment_predictions,
 )
 from src.models.experiments import ExperimentTracker
+from src.streamlit.components.footer import render_footer
 
 # Constants
 CACHE_TTL = 300  # 5 minutes
@@ -920,3 +921,6 @@ with tab6:
     for exp in experiments:
         with st.expander(f"{exp['full_name']}"):
             st.json(exp)
+
+# Add footer with BGG logo
+render_footer()
