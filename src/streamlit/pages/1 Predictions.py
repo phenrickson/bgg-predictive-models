@@ -22,6 +22,7 @@ from src.monitor.predictions_dashboard import (
     load_predictions_for_job,
     load_predictions_for_selected_job,
 )
+from src.streamlit.components.footer import render_footer
 
 st.set_page_config(page_title="Predictions | BGG Models Dashboard", layout="wide")
 st.title("Board Game Predictions")
@@ -267,3 +268,6 @@ with tab4:
             if "avg_predicted_rating" in jobs_df.columns:
                 overall_avg = jobs_df["avg_predicted_rating"].mean()
                 st.metric("Overall Avg Rating", f"{overall_avg:.3f}")
+
+# Add footer with BGG logo
+render_footer()
