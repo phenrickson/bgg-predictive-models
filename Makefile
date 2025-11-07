@@ -95,6 +95,12 @@ test:
 data: 
 	uv run -m src.data.get_raw_data
 
+.PHONY: create-view
+create-view:
+	uv run -m src.data.create_view
+
+
+
 # model types
 LINEAR ?= linear
 RIDGE ?= ridge

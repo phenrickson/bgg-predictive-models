@@ -68,10 +68,10 @@ def create_games_features_view(
 def main():
     """
     Main function to demonstrate creating the games features view.
-    Uses configuration from config.py
+    Uses configuration from config.yaml
     """
     import argparse
-    from .config import load_config
+    from ..utils.config import load_config
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
@@ -88,11 +88,14 @@ def main():
     # Load configuration
     config = load_config()
 
+    # Get BigQuery configuration for current environment
+    bigquery_config = config.get_bigquery_config()
+
     # Create BigQuery client using configuration
-    client = config.get_client()
+    client = bigquery_config.get_client()
 
     # Use dataset from configuration
-    dataset_id = config.dataset
+    dataset_id = bigquery_config.dataset
 
     # Create the view with the specified type
     view_type = ViewType(args.type)
