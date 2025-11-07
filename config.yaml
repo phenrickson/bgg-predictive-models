@@ -3,7 +3,7 @@ environment:
   prod:
     bucket_name: bgg-predictive-models-prod
     bigquery:
-      dataset: bgg_data_prod
+      dataset: bgg_data_dev
   dev:
     bucket_name: bgg-predictive-models-dev
     bigquery:
