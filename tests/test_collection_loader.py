@@ -4,6 +4,7 @@ import pytest
 import polars as pl
 from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
+import os
 
 from src.data.collection_loader import BGGCollectionLoader
 
@@ -11,6 +12,7 @@ from src.data.collection_loader import BGGCollectionLoader
 class TestBGGCollectionLoader:
     """Test cases for BGGCollectionLoader."""
 
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_init_valid_username(self):
         """Test initialization with valid username."""
         loader = BGGCollectionLoader("phenrickson")
@@ -18,17 +20,29 @@ class TestBGGCollectionLoader:
         assert loader.base_url == "https://boardgamegeek.com/xmlapi2"
         assert loader.timeout == 30
         assert loader.max_retries == 3
+        assert loader.api_token == "test_token_123"
 
+    def test_init_missing_token(self):
+        """Test initialization without BGG_API_TOKEN raises ValueError."""
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(
+                ValueError, match="BGG_API_TOKEN environment variable is required"
+            ):
+                BGGCollectionLoader("phenrickson")
+
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_init_empty_username(self):
         """Test initialization with empty username raises ValueError."""
         with pytest.raises(ValueError, match="Username cannot be empty"):
             BGGCollectionLoader("")
 
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_init_whitespace_username(self):
         """Test initialization strips whitespace from username."""
         loader = BGGCollectionLoader("  phenrickson  ")
         assert loader.username == "phenrickson"
 
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_init_custom_parameters(self):
         """Test initialization with custom timeout and retries."""
         loader = BGGCollectionLoader("phenrickson", timeout=60, max_retries=5)
@@ -36,6 +50,7 @@ class TestBGGCollectionLoader:
         assert loader.max_retries == 5
 
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_success(self, mock_get):
         """Test successful collection verification."""
         # Mock successful response
@@ -50,7 +65,14 @@ class TestBGGCollectionLoader:
         assert result is True
         mock_get.assert_called_once()
 
+        # Verify that the request was made with authentication headers
+        call_args = mock_get.call_args
+        headers = call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer test_token_123"
+        assert "User-Agent" in headers
+
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_error_response(self, mock_get):
         """Test collection verification with error response."""
         # Mock error response
@@ -65,6 +87,7 @@ class TestBGGCollectionLoader:
         assert result is False
 
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_network_error(self, mock_get):
         """Test collection verification with network error."""
         mock_get.side_effect = Exception("Network error")
@@ -75,6 +98,7 @@ class TestBGGCollectionLoader:
         assert result is False
 
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_get_collection_success(self, mock_get):
         """Test successful collection retrieval."""
         # Mock successful response with sample data
@@ -135,6 +159,7 @@ class TestBGGCollectionLoader:
         )
 
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_get_collection_empty_response(self, mock_get):
         """Test collection retrieval with empty collection."""
         mock_response = Mock()
@@ -148,6 +173,7 @@ class TestBGGCollectionLoader:
         assert df is None
 
     @patch("src.data.collection_loader.requests.get")
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_get_collection_with_filters(self, mock_get):
         """Test collection retrieval with filters."""
         mock_response = Mock()
@@ -165,6 +191,7 @@ class TestBGGCollectionLoader:
         assert params["subtype"] == "boardgame"  # No expansions
         assert params["own"] == "1"  # Only owned games
 
+    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_parse_collection_xml_basic(self):
         """Test XML parsing with basic item data."""
         xml_content = """
