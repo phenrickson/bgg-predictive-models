@@ -1,5 +1,6 @@
 """BGG Collection data loading for BGG predictive models."""
 
+import os
 import time
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Union
@@ -7,6 +8,10 @@ from urllib.parse import urlencode
 
 import polars as pl
 import requests
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class BGGCollectionLoader:
@@ -19,11 +24,19 @@ class BGGCollectionLoader:
             username: BGG username to load collection for
             timeout: Request timeout in seconds (default: 30)
             max_retries: Maximum number of retry attempts (default: 3)
+
+        Raises:
+            ValueError: If username is empty or BGG_API_TOKEN is not set
         """
         self.username = username.strip()
         self.base_url = "https://boardgamegeek.com/xmlapi2"
         self.timeout = timeout
         self.max_retries = max_retries
+
+        # Load BGG API token from environment
+        self.api_token = os.getenv("BGG_API_TOKEN")
+        if not self.api_token:
+            raise ValueError("BGG_API_TOKEN environment variable is required")
 
         if not self.username:
             raise ValueError("Username cannot be empty")
@@ -153,6 +166,12 @@ class BGGCollectionLoader:
         """
         url = f"{self.base_url}{endpoint}"
 
+        # Add authentication headers
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "User-Agent": "BGG-Predictive-Models/1.0",
+        }
+
         for attempt in range(self.max_retries + 1):
             try:
                 # Add delay between requests to be respectful to BGG API
@@ -163,7 +182,9 @@ class BGGCollectionLoader:
                     )
                     time.sleep(delay)
 
-                response = requests.get(url, params=params, timeout=self.timeout)
+                response = requests.get(
+                    url, params=params, headers=headers, timeout=self.timeout
+                )
 
                 # Handle BGG-specific status codes
                 if response.status_code == 202:
