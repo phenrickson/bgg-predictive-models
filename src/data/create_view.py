@@ -1,4 +1,5 @@
 from google.cloud import bigquery
+from google.cloud import bigquery_datatransfer
 import os
 import logging
 from enum import Enum
@@ -12,6 +13,42 @@ class ViewType(Enum):
     """Enum for materialized view implementation."""
 
     MATERIALIZED = "materialized"
+
+
+def schedule_view_refresh(
+    project_id: str,
+    dataset_id: str,
+    schedule: str = "every day 07:30",
+) -> None:
+    """
+    Schedule automatic refresh of the materialized view.
+
+    Args:
+        project_id (str): GCP project ID
+        dataset_id (str): BigQuery dataset ID
+        schedule (str): Schedule in cron format or using 'every X hours/days'
+    """
+    transfer_client = bigquery_datatransfer.DataTransferServiceClient()
+    parent = transfer_client.common_project_path(project_id)
+
+    transfer_config = {
+        "display_name": "Refresh games features materialized view",
+        "data_source_id": "scheduled_query",
+        "destination_dataset_id": dataset_id,
+        "params": {
+            "query": f"CALL `{project_id}.{dataset_id}.refresh_games_features_materialized`();"
+        },
+        "schedule": schedule,
+    }
+
+    try:
+        transfer_client.create_transfer_config(
+            parent=parent, transfer_config=transfer_config
+        )
+        logger.info(f"Successfully scheduled view refresh: {schedule}")
+    except Exception as e:
+        logger.error(f"Error scheduling view refresh: {e}")
+        raise
 
 
 def create_games_features_view(
@@ -83,6 +120,12 @@ def main():
         default="materialized",
         help="Type of view to create (materialized)",
     )
+    parser.add_argument(
+        "--schedule",
+        type=str,
+        default="every day 07:30",
+        help="Schedule for view refresh (default: every day 07:30)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -100,6 +143,13 @@ def main():
     # Create the view with the specified type
     view_type = ViewType(args.type)
     create_games_features_view(client, dataset_id, view_type)
+
+    # Schedule the view refresh
+    schedule_view_refresh(
+        project_id=bigquery_config.project_id,
+        dataset_id=dataset_id,
+        schedule=args.schedule,
+    )
 
 
 if __name__ == "__main__":
