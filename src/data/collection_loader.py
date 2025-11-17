@@ -84,18 +84,8 @@ class BGGCollectionLoader:
             print(f"Error verifying collection for user '{self.username}': {e}")
             return False
 
-    def get_collection(
-        self,
-        include_expansions: bool = True,
-        include_accessories: bool = False,
-        own_only: bool = False,
-    ) -> Optional[pl.DataFrame]:
+    def get_collection(self) -> Optional[pl.DataFrame]:
         """Retrieve the user's collection and return as a polars DataFrame.
-
-        Args:
-            include_expansions: Include expansions in collection (default: True)
-            include_accessories: Include accessories in collection (default: False)
-            own_only: Only include games marked as owned (default: False)
 
         Returns:
             polars DataFrame with collection data, or None if failed
@@ -105,17 +95,7 @@ class BGGCollectionLoader:
             params = {
                 "username": self.username,
                 "stats": "1",  # Include game statistics
-                "own": "1" if own_only else "0",
             }
-
-            # Add subtype filters
-            subtypes = ["boardgame"]
-            if include_expansions:
-                subtypes.append("boardgameexpansion")
-            if include_accessories:
-                subtypes.append("boardgameaccessory")
-
-            params["subtype"] = ",".join(subtypes)
 
             print(f"Fetching collection for user '{self.username}'...")
             response = self._make_request("/collection", params)
@@ -189,8 +169,10 @@ class BGGCollectionLoader:
                 # Handle BGG-specific status codes
                 if response.status_code == 202:
                     # BGG has queued the request, need to retry
-                    print("BGG has queued the request, retrying...")
-                    time.sleep(3)  # Wait a bit longer for queued requests
+                    print(
+                        "BGG has queued the request, waiting 5 seconds before retry..."
+                    )
+                    time.sleep(5)  # Wait longer for queued requests
                     continue
                 elif response.status_code == 429:
                     print("Rate limited by BGG API, waiting before retry...")
@@ -200,6 +182,10 @@ class BGGCollectionLoader:
                     print(f"Server error {response.status_code}, retrying...")
                     continue
                 elif response.status_code == 200:
+                    # Check if we got an error response in XML
+                    if b"<error" in response.content:
+                        print(f"BGG API error in response: {response.text}")
+                        return None
                     return response
                 elif response.status_code == 401:
                     print(
