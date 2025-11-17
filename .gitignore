@@ -83,3 +83,6 @@ $RECYCLE.BIN/
 act
 
 /scratch/
+
+# ignore claude instructions
+.claude

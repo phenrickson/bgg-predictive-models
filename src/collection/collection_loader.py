@@ -313,33 +313,25 @@ class BGGCollectionLoader:
                     # Rating statistics
                     rating = stats.find("rating")
                     if rating is not None:
+                        # Helper to get value from child elements
+                        def get_rating_value(element_name, value_type=float):
+                            elem = rating.find(element_name)
+                            if elem is not None:
+                                val = elem.get("value")
+                                if val and val != "N/A":
+                                    try:
+                                        return value_type(val)
+                                    except (ValueError, TypeError):
+                                        return None
+                            return None
+
                         game_data.update(
                             {
-                                "users_rated": (
-                                    int(rating.get("usersrated"))
-                                    if rating.get("usersrated")
-                                    else None
-                                ),
-                                "average_rating": (
-                                    float(rating.get("average"))
-                                    if rating.get("average")
-                                    else None
-                                ),
-                                "bayes_average": (
-                                    float(rating.get("bayesaverage"))
-                                    if rating.get("bayesaverage")
-                                    else None
-                                ),
-                                "std_dev": (
-                                    float(rating.get("stddev"))
-                                    if rating.get("stddev")
-                                    else None
-                                ),
-                                "median": (
-                                    float(rating.get("median"))
-                                    if rating.get("median")
-                                    else None
-                                ),
+                                "users_rated": get_rating_value("usersrated", int),
+                                "average_rating": get_rating_value("average", float),
+                                "bayes_average": get_rating_value("bayesaverage", float),
+                                "std_dev": get_rating_value("stddev", float),
+                                "median": get_rating_value("median", float),
                             }
                         )
 

@@ -102,7 +102,7 @@ class CollectionProcessor:
         """
         return (
             self.df.filter(pl.col("user_rating").is_not_null())
-            .groupby("user_rating")
+            .group_by("user_rating")
             .agg(pl.count().alias("count"))
             .sort("user_rating")
         )
