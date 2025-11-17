@@ -169,6 +169,90 @@ tables:
     time_partitioning: load_timestamp
     clustering_fields: [game_id]
 
+  # User Collections
+  collections:
+    name: collections
+    description: "User collection data from BGG"
+    time_partitioning: loaded_at
+    clustering_fields: [username, game_id]
+    schema:
+      - name: username
+        type: STRING
+        mode: REQUIRED
+        description: "BGG username"
+      - name: game_id
+        type: INTEGER
+        mode: REQUIRED
+        description: "BGG game ID"
+      - name: game_name
+        type: STRING
+        mode: REQUIRED
+        description: "Game name"
+      - name: subtype
+        type: STRING
+        mode: REQUIRED
+        description: "Item type (boardgame, boardgameexpansion)"
+      - name: collection_id
+        type: INTEGER
+        mode: NULLABLE
+        description: "BGG collection item ID"
+      - name: owned
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether user owns this game"
+      - name: previously_owned
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether user previously owned this game"
+      - name: for_trade
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether game is for trade"
+      - name: want
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether user wants this game"
+      - name: want_to_play
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether user wants to play this game"
+      - name: want_to_buy
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether user wants to buy this game"
+      - name: wishlist
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether game is on wishlist"
+      - name: wishlist_priority
+        type: INTEGER
+        mode: NULLABLE
+        description: "Wishlist priority (1-5)"
+      - name: preordered
+        type: BOOLEAN
+        mode: REQUIRED
+        description: "Whether game is preordered"
+      - name: last_modified
+        type: TIMESTAMP
+        mode: NULLABLE
+        description: "When collection item was last modified on BGG"
+      - name: user_rating
+        type: FLOAT
+        mode: NULLABLE
+        description: "User's rating of the game"
+      - name: user_comment
+        type: STRING
+        mode: NULLABLE
+        description: "User's comment on the game"
+      - name: loaded_at
+        type: TIMESTAMP
+        mode: REQUIRED
+        description: "When this collection snapshot was loaded"
+      - name: collection_version
+        type: STRING
+        mode: REQUIRED
+        description: "Version identifier for this collection snapshot"
+
   # Predictions
   predictions:
     name: predictions

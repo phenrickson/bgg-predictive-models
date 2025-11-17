@@ -1,5 +1,6 @@
 """BGG Collection data loading for BGG predictive models."""
 
+import logging
 import os
 import time
 import xml.etree.ElementTree as ET
@@ -12,6 +13,8 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class BGGCollectionLoader:
@@ -65,7 +68,7 @@ class BGGCollectionLoader:
 
                 # Check if we got an error response
                 if root.tag == "errors":
-                    print(
+                    logger.error(
                         f"BGG API error for user '{self.username}': {root.find('error').get('message', 'Unknown error')}"
                     )
                     return False
@@ -77,11 +80,11 @@ class BGGCollectionLoader:
                 return False
 
             except ET.ParseError as e:
-                print(f"Error parsing XML response: {e}")
+                logger.error(f"Error parsing XML response: {e}")
                 return False
 
         except Exception as e:
-            print(f"Error verifying collection for user '{self.username}': {e}")
+            logger.error(f"Error verifying collection for user '{self.username}': {e}")
             return False
 
     def get_collection(self) -> Optional[pl.DataFrame]:
@@ -94,10 +97,9 @@ class BGGCollectionLoader:
             # Build parameters for collection request
             params = {
                 "username": self.username,
-                "stats": "1",  # Include game statistics
             }
 
-            print(f"Fetching collection for user '{self.username}'...")
+            logger.info(f"Fetching collection for user '{self.username}'")
             response = self._make_request("/collection", params)
 
             if response is None:
@@ -110,28 +112,30 @@ class BGGCollectionLoader:
                 # Check for errors
                 if root.tag == "errors":
                     error_msg = root.find("error").get("message", "Unknown error")
-                    print(f"BGG API error: {error_msg}")
+                    logger.error(f"BGG API error: {error_msg}")
                     return None
 
                 # Parse collection items
                 items = self._parse_collection_xml(root)
 
                 if not items:
-                    print(f"No items found in collection for user '{self.username}'")
+                    logger.warning(
+                        f"No items found in collection for user '{self.username}'"
+                    )
                     return None
 
                 # Convert to polars DataFrame
                 df = pl.DataFrame(items)
-                print(f"Successfully loaded {len(df)} items from collection")
+                logger.info(f"Successfully loaded {len(df)} items from collection")
 
                 return df
 
             except ET.ParseError as e:
-                print(f"Error parsing XML response: {e}")
+                logger.error(f"Error parsing XML response: {e}")
                 return None
 
         except Exception as e:
-            print(f"Error retrieving collection for user '{self.username}': {e}")
+            logger.error(f"Error retrieving collection for user '{self.username}': {e}")
             return None
 
     def _make_request(self, endpoint: str, params: Dict) -> Optional[requests.Response]:
@@ -157,7 +161,7 @@ class BGGCollectionLoader:
                 # Add delay between requests to be respectful to BGG API
                 if attempt > 0:
                     delay = min(2**attempt, 10)  # Exponential backoff, max 10 seconds
-                    print(
+                    logger.info(
                         f"Retrying request in {delay} seconds... (attempt {attempt + 1})"
                     )
                     time.sleep(delay)
@@ -169,41 +173,41 @@ class BGGCollectionLoader:
                 # Handle BGG-specific status codes
                 if response.status_code == 202:
                     # BGG has queued the request, need to retry
-                    print(
+                    logger.info(
                         "BGG has queued the request, waiting 5 seconds before retry..."
                     )
                     time.sleep(5)  # Wait longer for queued requests
                     continue
                 elif response.status_code == 429:
-                    print("Rate limited by BGG API, waiting before retry...")
+                    logger.warning("Rate limited by BGG API, waiting before retry...")
                     time.sleep(5)
                     continue
                 elif response.status_code >= 500:
-                    print(f"Server error {response.status_code}, retrying...")
+                    logger.warning(f"Server error {response.status_code}, retrying...")
                     continue
                 elif response.status_code == 200:
                     # Check if we got an error response in XML
                     if b"<error" in response.content:
-                        print(f"BGG API error in response: {response.text}")
+                        logger.error(f"BGG API error in response: {response.text}")
                         return None
                     return response
                 elif response.status_code == 401:
-                    print(
+                    logger.error(
                         f"Unauthorized access (401) - check username '{self.username}'"
                     )
                     return None
                 else:
-                    print(f"HTTP error {response.status_code}: {response.text}")
+                    logger.error(f"HTTP error {response.status_code}: {response.text}")
                     return None
 
             except requests.exceptions.Timeout:
-                print(f"Request timeout (attempt {attempt + 1})")
+                logger.warning(f"Request timeout (attempt {attempt + 1})")
                 continue
             except requests.exceptions.RequestException as e:
-                print(f"Request error (attempt {attempt + 1}): {e}")
+                logger.warning(f"Request error (attempt {attempt + 1}): {e}")
                 continue
 
-        print(f"Failed to make request after {self.max_retries + 1} attempts")
+        logger.error(f"Failed to make request after {self.max_retries + 1} attempts")
         return None
 
     def _parse_collection_xml(self, root: ET.Element) -> List[Dict]:
@@ -272,93 +276,12 @@ class BGGCollectionLoader:
                     }
                 )
 
-                # Game statistics (if available)
-                stats = item.find("stats")
-                if stats is not None:
-                    game_data.update(
-                        {
-                            "min_players": (
-                                int(stats.get("minplayers"))
-                                if stats.get("minplayers")
-                                else None
-                            ),
-                            "max_players": (
-                                int(stats.get("maxplayers"))
-                                if stats.get("maxplayers")
-                                else None
-                            ),
-                            "min_play_time": (
-                                int(stats.get("minplaytime"))
-                                if stats.get("minplaytime")
-                                else None
-                            ),
-                            "max_play_time": (
-                                int(stats.get("maxplaytime"))
-                                if stats.get("maxplaytime")
-                                else None
-                            ),
-                            "playing_time": (
-                                int(stats.get("playingtime"))
-                                if stats.get("playingtime")
-                                else None
-                            ),
-                            "num_owned": (
-                                int(stats.get("numowned"))
-                                if stats.get("numowned")
-                                else None
-                            ),
-                        }
-                    )
-
-                    # Rating statistics
-                    rating = stats.find("rating")
-                    if rating is not None:
-                        # Helper to get value from child elements
-                        def get_rating_value(element_name, value_type=float):
-                            elem = rating.find(element_name)
-                            if elem is not None:
-                                val = elem.get("value")
-                                if val and val != "N/A":
-                                    try:
-                                        return value_type(val)
-                                    except (ValueError, TypeError):
-                                        return None
-                            return None
-
-                        game_data.update(
-                            {
-                                "users_rated": get_rating_value("usersrated", int),
-                                "average_rating": get_rating_value("average", float),
-                                "bayes_average": get_rating_value("bayesaverage", float),
-                                "std_dev": get_rating_value("stddev", float),
-                                "median": get_rating_value("median", float),
-                            }
-                        )
-
-                        # Ranks
-                        ranks = rating.find("ranks")
-                        if ranks is not None:
-                            for rank in ranks.findall("rank"):
-                                rank_type = rank.get("type")
-                                rank_name = rank.get("name")
-                                rank_value = rank.get("value")
-
-                                if rank_value and rank_value != "Not Ranked":
-                                    if (
-                                        rank_type == "subtype"
-                                        and rank_name == "boardgame"
-                                    ):
-                                        game_data["bgg_rank"] = int(rank_value)
-                                    elif rank_type == "family":
-                                        # Store family ranks with prefix
-                                        game_data[
-                                            f'rank_{rank_name.lower().replace(" ", "_")}'
-                                        ] = int(rank_value)
-
                 items.append(game_data)
 
             except (ValueError, AttributeError) as e:
-                print(f"Error parsing item {item.get('objectid', 'unknown')}: {e}")
+                logger.warning(
+                    f"Error parsing item {item.get('objectid', 'unknown')}: {e}"
+                )
                 continue
 
         return items
@@ -398,11 +321,6 @@ class BGGCollectionLoader:
                     if "user_rating" in df.columns
                     else None
                 ),
-                "avg_bgg_rating": (
-                    df.select(pl.col("average_rating").mean()).item()
-                    if "average_rating" in df.columns
-                    else None
-                ),
                 "top_rated_game": None,
             }
 
@@ -422,5 +340,5 @@ class BGGCollectionLoader:
             return summary
 
         except Exception as e:
-            print(f"Error generating collection summary: {e}")
+            logger.error(f"Error generating collection summary: {e}")
             return None
