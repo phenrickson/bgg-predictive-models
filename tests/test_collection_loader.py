@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 import os
 
-from src.data.collection_loader import BGGCollectionLoader
+from src.collection.collection_loader import BGGCollectionLoader
 
 
 class TestBGGCollectionLoader:
@@ -49,7 +49,7 @@ class TestBGGCollectionLoader:
         assert loader.timeout == 60
         assert loader.max_retries == 5
 
-    @patch("src.data.collection_loader.requests.get")
+    @patch("src.collection.collection_loader.requests.get")
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_success(self, mock_get):
         """Test successful collection verification."""
@@ -71,7 +71,7 @@ class TestBGGCollectionLoader:
         assert headers["Authorization"] == "Bearer test_token_123"
         assert "User-Agent" in headers
 
-    @patch("src.data.collection_loader.requests.get")
+    @patch("src.collection.collection_loader.requests.get")
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_error_response(self, mock_get):
         """Test collection verification with error response."""
@@ -86,7 +86,7 @@ class TestBGGCollectionLoader:
 
         assert result is False
 
-    @patch("src.data.collection_loader.requests.get")
+    @patch("src.collection.collection_loader.requests.get")
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_verify_collection_exists_network_error(self, mock_get):
         """Test collection verification with network error."""
@@ -97,7 +97,7 @@ class TestBGGCollectionLoader:
 
         assert result is False
 
-    @patch("src.data.collection_loader.requests.get")
+    @patch("src.collection.collection_loader.requests.get")
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_get_collection_success(self, mock_get):
         """Test successful collection retrieval."""
@@ -158,7 +158,7 @@ class TestBGGCollectionLoader:
             df.filter(pl.col("game_id") == 174430).select("user_rating").item() == 9.5
         )
 
-    @patch("src.data.collection_loader.requests.get")
+    @patch("src.collection.collection_loader.requests.get")
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_get_collection_empty_response(self, mock_get):
         """Test collection retrieval with empty collection."""
@@ -171,25 +171,6 @@ class TestBGGCollectionLoader:
         df = loader.get_collection()
 
         assert df is None
-
-    @patch("src.data.collection_loader.requests.get")
-    @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
-    def test_get_collection_with_filters(self, mock_get):
-        """Test collection retrieval with filters."""
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.content = b'<items totalitems="1"><item objectid="1" /></items>'
-        mock_get.return_value = mock_response
-
-        loader = BGGCollectionLoader("phenrickson")
-        loader.get_collection(include_expansions=False, own_only=True)
-
-        # Verify the request was made with correct parameters
-        call_args = mock_get.call_args
-        params = call_args[1]["params"]
-
-        assert params["subtype"] == "boardgame"  # No expansions
-        assert params["own"] == "1"  # Only owned games
 
     @patch.dict(os.environ, {"BGG_API_TOKEN": "test_token_123"})
     def test_parse_collection_xml_basic(self):
@@ -247,7 +228,6 @@ class TestBGGCollectionLoader:
                 "subtype": ["boardgame", "boardgame", "boardgameexpansion"],
                 "owned": [True, True, False],
                 "user_rating": [8.0, 9.0, None],
-                "average_rating": [7.5, 8.5, 7.0],
             }
         )
         mock_get_collection.return_value = mock_df
@@ -305,7 +285,7 @@ class TestBGGCollectionLoaderIntegration:
     def test_get_collection_real_user(self):
         """Test collection retrieval with real BGG user 'phenrickson'."""
         loader = BGGCollectionLoader("phenrickson")
-        df = loader.get_collection(own_only=True)
+        df = loader.get_collection()
 
         if df is not None:
             assert isinstance(df, pl.DataFrame)
@@ -315,10 +295,6 @@ class TestBGGCollectionLoaderIntegration:
             expected_columns = ["game_id", "game_name", "owned"]
             for col in expected_columns:
                 assert col in df.columns
-
-            # All games should be owned since we used own_only=True
-            if "owned" in df.columns:
-                assert df.select(pl.col("owned").all()).item()
 
     @pytest.mark.integration
     def test_get_collection_summary_real_user(self):
