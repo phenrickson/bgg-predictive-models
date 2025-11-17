@@ -71,11 +71,6 @@ class CollectionProcessor:
                 if "user_rating" in self.df.columns
                 else None
             ),
-            "avg_bgg_rating": (
-                self.df.select(pl.col("average_rating").mean()).item()
-                if "average_rating" in self.df.columns
-                else None
-            ),
             "top_rated_game": None,
         }
 
@@ -125,5 +120,5 @@ class CollectionProcessor:
             self.df.filter(query)
             .sort("user_rating", descending=True)
             .head(n)
-            .select(["game_name", "user_rating", "average_rating", "bayes_average"])
+            .select(["game_name", "user_rating"])
         )
