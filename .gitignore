@@ -83,3 +83,6 @@ $RECYCLE.BIN/
 act
 
 /scratch/
+
+# claude settings
+settings.local.json

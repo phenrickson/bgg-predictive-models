@@ -19,6 +19,7 @@ def schedule_view_refresh(
     project_id: str,
     dataset_id: str,
     schedule: str = "every day 07:30",
+    location: str = "US",
 ) -> None:
     """
     Schedule automatic refresh of the materialized view.
@@ -27,14 +28,14 @@ def schedule_view_refresh(
         project_id (str): GCP project ID
         dataset_id (str): BigQuery dataset ID
         schedule (str): Schedule in cron format or using 'every X hours/days'
+        location (str): BigQuery location/region (default: US)
     """
     transfer_client = bigquery_datatransfer.DataTransferServiceClient()
-    parent = transfer_client.common_project_path(project_id)
+    parent = transfer_client.common_location_path(project_id, location)
 
     transfer_config = {
         "display_name": "Refresh games features materialized view",
         "data_source_id": "scheduled_query",
-        "destination_dataset_id": dataset_id,
         "params": {
             "query": f"CALL `{project_id}.{dataset_id}.refresh_games_features_materialized`();"
         },
@@ -149,6 +150,7 @@ def main():
         project_id=bigquery_config.project_id,
         dataset_id=dataset_id,
         schedule=args.schedule,
+        location=bigquery_config.location,
     )
 
 
