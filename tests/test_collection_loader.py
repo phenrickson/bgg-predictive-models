@@ -107,10 +107,9 @@ class TestBGGCollectionLoader:
             <item objectid="174430" subtype="boardgame" collid="12345">
                 <name>Gloomhaven</name>
                 <status own="1" prevowned="0" fortrade="0" want="0" wanttoplay="0" wanttobuy="0" wishlist="0" preordered="0" lastmodified="2023-01-01 12:00:00" />
-                <rating value="9.5" />
                 <comment>Amazing game!</comment>
                 <stats minplayers="1" maxplayers="4" minplaytime="60" maxplaytime="120" playingtime="90" numowned="50000">
-                    <rating usersrated="45000" average="8.8" bayesaverage="8.7" stddev="1.2" median="9.0">
+                    <rating value="9.5" usersrated="45000" average="8.8" bayesaverage="8.7" stddev="1.2" median="9.0">
                         <ranks>
                             <rank type="subtype" name="boardgame" value="1" />
                         </ranks>
@@ -120,9 +119,8 @@ class TestBGGCollectionLoader:
             <item objectid="161936" subtype="boardgame" collid="12346">
                 <name>Pandemic Legacy: Season 1</name>
                 <status own="1" prevowned="0" fortrade="0" want="0" wanttoplay="0" wanttobuy="0" wishlist="0" preordered="0" lastmodified="2023-01-02 12:00:00" />
-                <rating value="8.0" />
                 <stats minplayers="2" maxplayers="4" minplaytime="60" maxplaytime="60" playingtime="60" numowned="30000">
-                    <rating usersrated="25000" average="8.6" bayesaverage="8.5" stddev="1.1" median="8.5">
+                    <rating value="8.0" usersrated="25000" average="8.6" bayesaverage="8.5" stddev="1.1" median="8.5">
                         <ranks>
                             <rank type="subtype" name="boardgame" value="5" />
                         </ranks>
@@ -180,7 +178,9 @@ class TestBGGCollectionLoader:
             <item objectid="174430" subtype="boardgame" collid="12345">
                 <name>Gloomhaven</name>
                 <status own="1" />
-                <rating value="9.5" />
+                <stats>
+                    <rating value="9.5" />
+                </stats>
             </item>
         </items>
         """

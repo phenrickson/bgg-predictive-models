@@ -1,18 +1,14 @@
 """Verify collection loader and processor work end-to-end."""
 
 import sys
-import os
+import polars as pl
 from pathlib import Path
-
-str(Path.cwd())
 
 # Add src to path
 try:
     sys.path.insert(0, str(Path(__file__).parent))
 except Exception as e:
     sys.path.insert(0, str(Path.cwd()))
-
-os.getcwd()
 
 # load modules
 from src.collection.collection_loader import BGGCollectionLoader
@@ -54,11 +50,9 @@ try:
     print(f"  Columns: {collection_df.columns}")
 except Exception as e:
     print(f"✗ Failed to load collection: {e}")
-    import traceback
 
-    traceback.print_exc()
-
-collection_df
+# view
+collection_df.head()
 
 
 # Step 4: Process collection
@@ -73,9 +67,9 @@ try:
     print(f"✓ Processor initialized successfully")
     print(f"  Owned games: {len(games)}")
     print(f"  Owned expansions: {len(expansions)}")
-
 except Exception as e:
     print(f"✗ Failed to process collection: {e}")
+
 # Step 5: Generate summary
 print("\n[5/5] Generating collection summary...")
 try:
@@ -91,17 +85,10 @@ try:
         if summary["avg_user_rating"]
         else "  Avg user rating: N/A"
     )
-    print(
-        f"  Avg BGG rating: {summary['avg_bgg_rating']:.2f}"
-        if summary["avg_bgg_rating"]
-        else "  Avg BGG rating: N/A"
-    )
-
     if summary["top_rated_game"]:
         print(
             f"  Top rated: {summary['top_rated_game']['name']} ({summary['top_rated_game']['rating']})"
         )
-
     # Show top rated games
     print("\nTop 5 Rated Games:")
     top_rated = processor.get_top_rated(n=5)
@@ -114,10 +101,6 @@ try:
 
 except Exception as e:
     print(f"✗ Failed to generate summary: {e}")
-    import traceback
-
-    traceback.print_exc()
-    return False
 
 print("\n" + "=" * 80)
 print("✓ VERIFICATION COMPLETE - All steps passed!")

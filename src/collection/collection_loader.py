@@ -97,6 +97,8 @@ class BGGCollectionLoader:
             # Build parameters for collection request
             params = {
                 "username": self.username,
+                "subtype": "boardgame",  # only retrieve data on boardgames
+                "stats": "1",  # Include game statistics
             }
 
             logger.info(f"Fetching collection for user '{self.username}'")
@@ -260,12 +262,15 @@ class BGGCollectionLoader:
                     )
 
                 # User rating and comments
+                # Note: User rating is inside <stats><rating value="X"> when stats=1
+                rating_elem = item.find("stats/rating")
                 game_data.update(
                     {
                         "user_rating": (
-                            float(item.find("rating").get("value"))
-                            if item.find("rating") is not None
-                            and item.find("rating").get("value") != "N/A"
+                            float(rating_elem.get("value"))
+                            if rating_elem is not None
+                            and rating_elem.get("value")
+                            and rating_elem.get("value") != "N/A"
                             else None
                         ),
                         "user_comment": (
