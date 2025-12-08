@@ -23,6 +23,7 @@ def schedule_view_refresh(
 ) -> None:
     """
     Schedule automatic refresh of the materialized view.
+    Checks for existing schedules and deletes duplicates before creating a new one.
 
     Args:
         project_id (str): GCP project ID
@@ -33,8 +34,33 @@ def schedule_view_refresh(
     transfer_client = bigquery_datatransfer.DataTransferServiceClient()
     parent = transfer_client.common_location_path(project_id, location)
 
+    display_name = "Refresh games features materialized view"
+
+    # Check for existing schedules with the same display name
+    try:
+        request = bigquery_datatransfer.ListTransferConfigsRequest(
+            parent=parent,
+        )
+        existing_configs = transfer_client.list_transfer_configs(request=request)
+
+        # Find and delete any existing configs with the same display name
+        deleted_count = 0
+        for config in existing_configs:
+            if config.display_name == display_name:
+                logger.info(f"Found existing schedule: {config.name}")
+                transfer_client.delete_transfer_config(name=config.name)
+                deleted_count += 1
+                logger.info(f"Deleted existing schedule: {config.name}")
+
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} existing schedule(s)")
+    except Exception as e:
+        logger.warning(f"Error checking for existing schedules: {e}")
+        # Continue anyway - we'll try to create the new schedule
+
+    # Create new transfer config
     transfer_config = {
-        "display_name": "Refresh games features materialized view",
+        "display_name": display_name,
         "data_source_id": "scheduled_query",
         "params": {
             "query": f"CALL `{project_id}.{dataset_id}.refresh_games_features_materialized`();"

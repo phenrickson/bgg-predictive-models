@@ -111,9 +111,13 @@ LEFT JOIN families_agg f ON g.game_id = f.game_id;
 -- Create a stored procedure to refresh the materialized view
 CREATE OR REPLACE PROCEDURE `{dataset}.refresh_games_features_materialized`()
 BEGIN
-  -- Create a temporary table with the new data
-  CREATE OR REPLACE TEMP TABLE temp_games_features AS
-  WITH 
+  -- Use CREATE OR REPLACE TABLE for atomic replacement (prevents race conditions)
+  CREATE OR REPLACE TABLE `{dataset}.games_features_materialized`
+  OPTIONS(
+    description="Materialized view of game features for predictive models",
+    expiration_timestamp=NULL
+  ) AS
+  WITH
   -- Pre-aggregate categories to avoid multiple joins
   categories_agg AS (
       SELECT
@@ -215,16 +219,10 @@ BEGIN
   LEFT JOIN artists_agg a ON g.game_id = a.game_id
   LEFT JOIN families_agg f ON g.game_id = f.game_id;
 
-  -- Replace the materialized view with the new data
-  TRUNCATE TABLE `{dataset}.games_features_materialized`;
-  
-  INSERT INTO `{dataset}.games_features_materialized`
-  SELECT * FROM temp_games_features;
-  
   -- Log the refresh
   INSERT INTO `{dataset}.materialized_view_refresh_log` (view_name, refresh_timestamp, status)
   VALUES ('games_features_materialized', CURRENT_TIMESTAMP(), 'SUCCESS');
-  
+
   EXCEPTION WHEN ERROR THEN
     -- Log the error
     INSERT INTO `{dataset}.materialized_view_refresh_log` (view_name, refresh_timestamp, status, error_message)
