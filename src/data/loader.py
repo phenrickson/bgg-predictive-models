@@ -52,14 +52,7 @@ class BGGDataLoader:
         """
         # Build query with optional WHERE clause
         query = f"""
-        SELECT
-            *,
-            CASE WHEN users_rated >= 25 THEN 1 ELSE 0 END as hurdle,
-            bayes_average as geek_rating,
-            average_weight as complexity,
-            average_rating as rating,
-            LN(users_rated + 1) as log_users_rated
-        FROM `{self.project_id}.{self.dataset}.{self.table}`
+        SELECT * FROM `{self.project_id}.{self.dataset}.{self.table}`
         """
 
         # Add year_published IS NOT NULL filter
