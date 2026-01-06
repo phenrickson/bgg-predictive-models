@@ -1,17 +1,33 @@
-# Environment Configuration
+# Data Warehouse Configuration (read data source, write predictions)
+# Note: No environment suffix - single project with simplified dataset names
+data_warehouse:
+  project_id: bgg-data-warehouse
+  location: US
+  datasets:
+    raw: raw
+    core: core
+    analytics: analytics
+  features_table: games_features_materialized
+  features_dataset: core
+
+# Predictions Destination (landing table for Dataform processing)
+predictions:
+  project_id: bgg-data-warehouse
+  dataset: raw
+  table: ml_predictions_landing
+
+# ML Project Configuration
+ml_project:
+  project_id: bgg-predictive-models
+
+# Environment Configuration (for ML artifacts - buckets)
 environment:
   prod:
     bucket_name: bgg-predictive-models-prod
-    bigquery:
-      dataset: bgg_data_prod
   dev:
     bucket_name: bgg-predictive-models-dev
-    bigquery:
-      dataset: bgg_data_dev
   test:
     bucket_name: bgg-predictive-models-test
-    bigquery:
-      dataset: bgg_data_dev
 
 # Default environment
 default_environment: dev

@@ -15,46 +15,63 @@ load_dotenv()
 
 
 @dataclass
+class DataWarehouseConfig:
+    """Configuration for reading from bgg-data-warehouse."""
+
+    project_id: str
+    location: str = "US"
+    features_dataset: str = "core"
+    features_table: str = "games_features_materialized"
+    datasets: Optional[Dict[str, str]] = None
+
+    def get_client(self) -> bigquery.Client:
+        """Get authenticated BigQuery client for data warehouse."""
+        credentials, _ = default()
+        return bigquery.Client(credentials=credentials, project=self.project_id)
+
+
+@dataclass
+class PredictionsDestinationConfig:
+    """Configuration for writing predictions to data warehouse landing table."""
+
+    project_id: str
+    dataset: str
+    table: str
+
+    def get_client(self) -> bigquery.Client:
+        """Get authenticated BigQuery client for predictions destination."""
+        credentials, _ = default()
+        return bigquery.Client(credentials=credentials, project=self.project_id)
+
+    def get_table_id(self) -> str:
+        """Get fully qualified table ID."""
+        return f"{self.project_id}.{self.dataset}.{self.table}"
+
+
+@dataclass
 class BigQueryConfig:
-    """Configuration for BigQuery connection."""
+    """Configuration for BigQuery connection (legacy, for backwards compatibility)."""
 
     project_id: str
     dataset: str
     credentials_path: Optional[str] = None
-    location: str = "US"  # Default to US
-    datasets: Optional[Dict[str, str]] = None  # Make datasets optional
+    location: str = "US"
+    datasets: Optional[Dict[str, str]] = None
 
     def get_client(self) -> bigquery.Client:
-        """Get authenticated BigQuery client using Google Application Default Credentials.
-
-        Uses google.auth.default() to automatically discover credentials in the following order:
-        1. Service account key file specified in GOOGLE_APPLICATION_CREDENTIALS environment variable
-        2. Google Cloud SDK credentials (for local development)
-        3. Compute Engine/Cloud Run service account (for cloud deployment)
-
-        Returns:
-            Authenticated BigQuery client
-
-        Raises:
-            Exception: If credentials cannot be found or authenticated
-        """
+        """Get authenticated BigQuery client using Google Application Default Credentials."""
         try:
-            # Get credentials using google.auth.default()
             credentials, _ = default()
-
-            # Create BigQuery client with explicit credentials and project
             return bigquery.Client(credentials=credentials, project=self.project_id)
-
         except Exception:
             raise
 
 
 @dataclass
 class EnvironmentConfig:
-    """Configuration for environment-specific settings."""
+    """Configuration for environment-specific ML artifact settings."""
 
     bucket_name: str
-    bigquery: BigQueryConfig
 
 
 @dataclass
@@ -100,6 +117,9 @@ class Config:
     default_environment: str
     years: YearConfig
     models: Dict[str, ModelConfig]
+    data_warehouse: DataWarehouseConfig
+    predictions: PredictionsDestinationConfig
+    ml_project_id: str
     scoring: Optional[ScoringConfig] = None
 
     def get_current_environment(self) -> str:
@@ -113,12 +133,25 @@ class Config:
             raise ValueError(f"Unknown environment: {env_name}")
         return self.environment[env_name].bucket_name
 
+    def get_data_warehouse_config(self) -> DataWarehouseConfig:
+        """Get the data warehouse configuration for reading data."""
+        return self.data_warehouse
+
+    def get_predictions_destination(self) -> PredictionsDestinationConfig:
+        """Get the predictions destination configuration."""
+        return self.predictions
+
     def get_bigquery_config(self) -> BigQueryConfig:
-        """Get the BigQuery configuration for the current environment."""
-        env_name = self.get_current_environment()
-        if env_name not in self.environment:
-            raise ValueError(f"Unknown environment: {env_name}")
-        return self.environment[env_name].bigquery
+        """Get BigQuery configuration (legacy, maps to data warehouse).
+
+        This method is kept for backwards compatibility with existing code.
+        New code should use get_data_warehouse_config() instead.
+        """
+        return BigQueryConfig(
+            project_id=self.data_warehouse.project_id,
+            dataset=self.data_warehouse.features_dataset,
+            location=self.data_warehouse.location,
+        )
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -142,23 +175,53 @@ def load_config(config_path: Optional[str] = None) -> Config:
         config = yaml.safe_load(f)
 
     # Validate required sections
-    if not all(section in config for section in ["environment", "years", "models"]):
-        raise ValueError("Missing required config sections: environment, years, models")
+    required_sections = ["environment", "years", "models", "data_warehouse", "predictions"]
+    if not all(section in config for section in required_sections):
+        raise ValueError(f"Missing required config sections: {required_sections}")
 
-    # Get project ID from environment variable
-    project_id = os.getenv("GCP_PROJECT_ID")
-    if not project_id:
-        raise ValueError("GCP_PROJECT_ID environment variable must be set")
+    # Get project IDs from environment variables
+    # Support both new env vars and legacy GCP_PROJECT_ID for backwards compatibility
+    data_warehouse_project_id = os.getenv(
+        "DATA_WAREHOUSE_PROJECT_ID",
+        os.getenv("GCP_PROJECT_ID"),  # Fallback for backwards compatibility
+    )
+    ml_project_id = os.getenv(
+        "ML_PROJECT_ID",
+        os.getenv("GCP_PROJECT_ID"),  # Fallback for backwards compatibility
+    )
 
-    # Create environment configs
+    if not data_warehouse_project_id:
+        raise ValueError(
+            "DATA_WAREHOUSE_PROJECT_ID (or GCP_PROJECT_ID) environment variable must be set"
+        )
+    if not ml_project_id:
+        raise ValueError(
+            "ML_PROJECT_ID (or GCP_PROJECT_ID) environment variable must be set"
+        )
+
+    # Create data warehouse config
+    dw_config = config["data_warehouse"]
+    data_warehouse_config = DataWarehouseConfig(
+        project_id=dw_config.get("project_id", data_warehouse_project_id),
+        location=dw_config.get("location", "US"),
+        features_dataset=dw_config.get("features_dataset", "core"),
+        features_table=dw_config.get("features_table", "games_features_materialized"),
+        datasets=dw_config.get("datasets"),
+    )
+
+    # Create predictions destination config
+    pred_config = config["predictions"]
+    predictions_config = PredictionsDestinationConfig(
+        project_id=pred_config.get("project_id", data_warehouse_project_id),
+        dataset=pred_config.get("dataset", "raw"),
+        table=pred_config.get("table", "ml_predictions_landing"),
+    )
+
+    # Create environment configs (for ML artifacts - buckets only)
     environment_configs = {}
     for env_name, env_config in config["environment"].items():
         environment_configs[env_name] = EnvironmentConfig(
             bucket_name=env_config["bucket_name"],
-            bigquery=BigQueryConfig(
-                project_id=project_id,
-                dataset=env_config["bigquery"]["dataset"],
-            ),
         )
 
     # Create years config
@@ -199,5 +262,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         default_environment=config.get("default_environment", "dev"),
         years=years_config,
         models=model_configs,
+        data_warehouse=data_warehouse_config,
+        predictions=predictions_config,
+        ml_project_id=ml_project_id,
         scoring=scoring_config,
     )
