@@ -50,10 +50,11 @@ class PredictionsDestinationConfig:
 
 @dataclass
 class BigQueryConfig:
-    """Configuration for BigQuery connection (legacy, for backwards compatibility)."""
+    """Configuration for BigQuery connection."""
 
     project_id: str
     dataset: str
+    table: str
     credentials_path: Optional[str] = None
     location: str = "US"
     datasets: Optional[Dict[str, str]] = None
@@ -146,14 +147,11 @@ class Config:
         return self.predictions
 
     def get_bigquery_config(self) -> BigQueryConfig:
-        """Get BigQuery configuration (legacy, maps to data warehouse).
-
-        This method is kept for backwards compatibility with existing code.
-        New code should use get_data_warehouse_config() instead.
-        """
+        """Get BigQuery configuration for data warehouse access."""
         return BigQueryConfig(
             project_id=self.data_warehouse.project_id,
             dataset=self.data_warehouse.features_dataset,
+            table=self.data_warehouse.features_table,
             location=self.data_warehouse.location,
         )
 

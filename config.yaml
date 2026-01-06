@@ -7,8 +7,8 @@ data_warehouse:
     raw: raw
     core: core
     analytics: analytics
-  features_table: games_features_materialized
-  features_dataset: core
+  features_table: games_features
+  features_dataset: analytics
 
 # Predictions Destination (landing table for Dataform processing)
 predictions:

@@ -47,6 +47,12 @@ resource "google_project_iam_member" "workload_dw_job_user" {
   member  = "serviceAccount:${google_service_account.workload.email}"
 }
 
+resource "google_project_iam_member" "workload_dw_read_session" {
+  project = var.data_warehouse_project_id
+  role    = "roles/bigquery.readSessionUser"
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
+
 # CROSS-PROJECT: Write access to raw dataset (for predictions landing table)
 resource "google_bigquery_dataset_iam_member" "workload_dw_raw_write" {
   project    = var.data_warehouse_project_id

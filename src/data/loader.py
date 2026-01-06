@@ -26,10 +26,10 @@ class BGGDataLoader:
             self.dataset = config.features_dataset
             self.table = config.features_table
         else:
-            # Legacy BigQueryConfig support
+            # BigQueryConfig
             self.project_id = config.project_id
             self.dataset = config.dataset
-            self.table = "games_features_materialized"
+            self.table = config.table
 
     def load_data(
         self,
