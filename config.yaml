@@ -19,15 +19,9 @@ predictions:
 # ML Project Configuration
 ml_project:
   project_id: bgg-predictive-models
-
-# Environment Configuration (for ML artifacts - buckets)
-environment:
-  prod:
-    bucket_name: bgg-predictive-models-prod
-  dev:
-    bucket_name: bgg-predictive-models-dev
-  test:
-    bucket_name: bgg-predictive-models-test
+  bucket_name: bgg-predictive-models
+  # Models stored at: gs://bgg-predictive-models/{environment}/models/...
+  # Predictions at: gs://bgg-predictive-models/{environment}/predictions/...
 
 # Default environment
 default_environment: dev

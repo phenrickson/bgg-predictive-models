@@ -1,5 +1,0 @@
-environment               = "prod"
-project_id                = "bgg-predictive-models"
-data_warehouse_project_id = "bgg-data-warehouse"
-region                    = "us-central1"
-location                  = "US"

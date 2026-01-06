@@ -42,9 +42,10 @@ try:
     authenticator = GCPAuthenticator()
     GCP_PROJECT_ID = authenticator.project_id
 
-    # Get bucket name from config
+    # Get bucket name and environment prefix from config
     config = load_config()
     BUCKET_NAME = config.get_bucket_name()
+    ENVIRONMENT_PREFIX = config.get_environment_prefix()
 
     # Verify bucket access
     if not authenticator.verify_bucket_access(BUCKET_NAME):
@@ -59,6 +60,7 @@ try:
     logger.info(f"  Credentials Source: {auth_info['credentials_source']}")
     logger.info(f"  Running on GCP: {auth_info.get('running_on_gcp', False)}")
     logger.info(f"  Bucket Name: {BUCKET_NAME}")
+    logger.info(f"  Environment: {ENVIRONMENT_PREFIX}")
 
 except AuthenticationError as e:
     logger.error(f"Authentication failed: {str(e)}")
@@ -355,8 +357,8 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         storage_client = authenticator.get_storage_client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
-        # Construct GCS path for predictions
-        gcs_output_path = f"predictions/{job_id}_predictions.parquet"
+        # Construct GCS path for predictions (with environment prefix)
+        gcs_output_path = f"{ENVIRONMENT_PREFIX}/predictions/{job_id}_predictions.parquet"
         blob = bucket.blob(gcs_output_path)
         blob.upload_from_filename(local_output_path)
 

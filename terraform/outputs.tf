@@ -8,17 +8,17 @@ output "models_bucket_url" {
   value       = google_storage_bucket.models.url
 }
 
-output "service_account_email" {
-  description = "Email of the ML service account"
-  value       = google_service_account.ml_service.email
+output "workload_service_account_email" {
+  description = "Email of the workload service account (used by Cloud Run)"
+  value       = google_service_account.workload.email
+}
+
+output "terraform_admin_service_account_email" {
+  description = "Email of the Terraform Admin service account (created manually)"
+  value       = local.terraform_admin_sa
 }
 
 output "project_id" {
   description = "GCP project ID"
   value       = var.project_id
-}
-
-output "environment" {
-  description = "Environment name"
-  value       = var.environment
 }

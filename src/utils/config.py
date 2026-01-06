@@ -68,13 +68,6 @@ class BigQueryConfig:
 
 
 @dataclass
-class EnvironmentConfig:
-    """Configuration for environment-specific ML artifact settings."""
-
-    bucket_name: str
-
-
-@dataclass
 class ScoringConfig:
     """Configuration for scoring settings."""
 
@@ -113,7 +106,7 @@ class YearConfig:
 class Config:
     """Main configuration class."""
 
-    environment: Dict[str, EnvironmentConfig]
+    bucket_name: str
     default_environment: str
     years: YearConfig
     models: Dict[str, ModelConfig]
@@ -127,11 +120,22 @@ class Config:
         return os.getenv("ENVIRONMENT", self.default_environment)
 
     def get_bucket_name(self) -> str:
-        """Get the bucket name for the current environment."""
-        env_name = self.get_current_environment()
-        if env_name not in self.environment:
-            raise ValueError(f"Unknown environment: {env_name}")
-        return self.environment[env_name].bucket_name
+        """Get the bucket name (single bucket for all environments)."""
+        return self.bucket_name
+
+    def get_environment_prefix(self) -> str:
+        """Get the environment prefix for GCS paths (e.g., 'dev', 'prod')."""
+        return self.get_current_environment()
+
+    def get_gcs_path(self, *path_parts: str) -> str:
+        """Get a GCS path with environment prefix.
+
+        Example: get_gcs_path("models", "hurdle-v2025") returns
+        "gs://bgg-predictive-models/dev/models/hurdle-v2025"
+        """
+        env = self.get_environment_prefix()
+        path = "/".join([env] + list(path_parts))
+        return f"gs://{self.bucket_name}/{path}"
 
     def get_data_warehouse_config(self) -> DataWarehouseConfig:
         """Get the data warehouse configuration for reading data."""
@@ -175,7 +179,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         config = yaml.safe_load(f)
 
     # Validate required sections
-    required_sections = ["environment", "years", "models", "data_warehouse", "predictions"]
+    required_sections = ["ml_project", "years", "models", "data_warehouse", "predictions"]
     if not all(section in config for section in required_sections):
         raise ValueError(f"Missing required config sections: {required_sections}")
 
@@ -217,12 +221,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         table=pred_config.get("table", "ml_predictions_landing"),
     )
 
-    # Create environment configs (for ML artifacts - buckets only)
-    environment_configs = {}
-    for env_name, env_config in config["environment"].items():
-        environment_configs[env_name] = EnvironmentConfig(
-            bucket_name=env_config["bucket_name"],
-        )
+    # Get bucket name from ml_project config
+    ml_project_config = config["ml_project"]
+    bucket_name = ml_project_config.get("bucket_name", "bgg-predictive-models")
 
     # Create years config
     years_config = YearConfig(
@@ -258,7 +259,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         )
 
     return Config(
-        environment=environment_configs,
+        bucket_name=bucket_name,
         default_environment=config.get("default_environment", "dev"),
         years=years_config,
         models=model_configs,

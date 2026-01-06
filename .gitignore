@@ -89,3 +89,6 @@ settings.local.json
 
 # ignore claude instructions
 .claude
+
+# terraform
+terraform-admin-key.json

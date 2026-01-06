@@ -16,11 +16,6 @@ variable "location" {
   default     = "US"
 }
 
-variable "environment" {
-  description = "Environment (dev/prod/test)"
-  type        = string
-}
-
 variable "data_warehouse_project_id" {
   description = "Project ID of the data warehouse for cross-project access"
   type        = string

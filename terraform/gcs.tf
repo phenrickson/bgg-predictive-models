@@ -1,6 +1,6 @@
-# Model storage bucket (per environment)
+# Single model storage bucket with environment prefixes
 resource "google_storage_bucket" "models" {
-  name     = "bgg-predictive-models-${var.environment}"
+  name     = "bgg-predictive-models"
   location = var.location
   project  = var.project_id
 
@@ -21,8 +21,7 @@ resource "google_storage_bucket" "models" {
   }
 
   labels = {
-    environment = var.environment
-    purpose     = "ml-models"
+    purpose = "ml-models"
   }
 
   depends_on = [google_project_service.apis]
