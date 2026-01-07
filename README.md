@@ -189,6 +189,72 @@ flowchart TD
 
 ## Production Deployment
 
+### Architecture Overview
+
+The system uses a two-project GCP architecture:
+
+| Project | Purpose |
+|---------|---------|
+| `bgg-data-warehouse` | Data storage (BigQuery), feature tables, prediction landing |
+| `bgg-predictive-models` | ML models (GCS), experiment tracking, scoring service |
+
+```mermaid
+flowchart TD
+    subgraph Trigger
+        GHA[GitHub Actions<br/>daily @ 7 AM UTC]
+    end
+
+    subgraph Scoring Service
+        CLI[score.py CLI]
+        API[FastAPI on Cloud Run<br/>/predict_games endpoint]
+        CLI --> API
+    end
+
+    subgraph Data Sources
+        GCS_Models[(GCS: Registered Models)]
+        BQ_Features[(BigQuery: games_features)]
+    end
+
+    subgraph Prediction Output
+        GCS_Pred[(GCS Parquet File)]
+        BQ_Landing[(BigQuery Landing Table<br/>ml_predictions_landing)]
+    end
+
+    subgraph Downstream
+        Dataform[Dataform Processing]
+        Analytics[(Analytics Tables)]
+    end
+
+    GHA --> CLI
+    GCS_Models --> API
+    BQ_Features --> API
+    API --> GCS_Pred
+    API --> BQ_Landing
+    BQ_Landing --> Dataform
+    Dataform --> Analytics
+```
+
+### Prediction Output
+
+The scoring service generates predictions with these columns:
+
+| Column | Description |
+|--------|-------------|
+| `game_id` | BGG game identifier |
+| `game_name` | Game name |
+| `year_published` | Publication year |
+| `predicted_hurdle_prob` | Probability game will receive ratings (0-1) |
+| `predicted_complexity` | Predicted complexity/weight score |
+| `predicted_rating` | Predicted average rating |
+| `predicted_users_rated` | Predicted number of raters (min 25, rounded to 50) |
+| `predicted_geek_rating` | Bayesian weighted rating (the "BGG Rank" score) |
+| `model_versions` | JSON metadata with model names/versions |
+| `score_ts` | Timestamp of prediction |
+
+Predictions are stored in:
+1. **GCS**: `gs://bgg-predictive-models/{env}/predictions/{job_id}_predictions.parquet`
+2. **BigQuery**: `bgg-data-warehouse.raw.ml_predictions_landing` (partitioned by `score_ts`, clustered by `game_id`)
+
 ### Model Registration
 
 ```bash
@@ -216,6 +282,16 @@ make docker-training
 gcloud builds submit --config scoring_service/cloudbuild.yaml
 ```
 
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with auth status |
+| `/auth/status` | GET | Detailed authentication info |
+| `/predict_games` | POST | Generate predictions |
+| `/models` | GET | List registered models |
+| `/model/{type}/{name}/info` | GET | Model details |
+
 ### API Usage
 
 ```python
@@ -223,16 +299,22 @@ import requests
 
 # Score new games
 response = requests.post(
-    "http://localhost:8080/score",
+    "http://localhost:8080/predict_games",
     json={
-        "model_type": "rating",
-        "model_name": "rating-v2025",
-        "start_year": 2024,
-        "end_year": 2029
+        "hurdle_model_name": "hurdle-v2026",
+        "complexity_model_name": "complexity-v2026",
+        "rating_model_name": "rating-v2026",
+        "users_rated_model_name": "users_rated-v2026",
+        "start_year": 2025,
+        "end_year": 2030,
+        "prior_rating": 5.5,
+        "prior_weight": 2000,
+        "upload_to_data_warehouse": True
     }
 )
 
-predictions = response.json()
+result = response.json()
+# Returns: job_id, model_details, output_location, data_warehouse_job_id
 ```
 
 ## Configuration
