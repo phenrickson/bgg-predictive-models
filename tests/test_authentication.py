@@ -274,25 +274,25 @@ class TestIntegrationAuthentication:
             )
 
     @pytest.mark.integration
-    def test_bigquery_uploader_connection(self):
-        """Test BigQuery uploader connection (requires valid credentials)."""
+    def test_data_warehouse_uploader_connection(self):
+        """Test data warehouse uploader connection (requires valid credentials)."""
         # Skip if no project ID set
-        project_id = os.getenv("GCP_PROJECT_ID")
+        project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("DATA_WAREHOUSE_PROJECT_ID")
         if not project_id:
-            pytest.skip("GCP_PROJECT_ID not set - skipping integration test")
+            pytest.skip("GCP_PROJECT_ID or DATA_WAREHOUSE_PROJECT_ID not set - skipping integration test")
 
         try:
-            from src.data.bigquery_uploader import BigQueryUploader
+            from src.data.bigquery_uploader import DataWarehousePredictionUploader
 
-            uploader = BigQueryUploader(environment="dev")
+            uploader = DataWarehousePredictionUploader()
 
-            # Test getting prediction summary (should work even with empty table)
-            summary = uploader.get_prediction_summary()
-            assert isinstance(summary, type(summary))  # pandas DataFrame
+            # Test querying latest predictions (should work even with empty table)
+            df = uploader.query_latest_predictions(limit=1)
+            assert hasattr(df, 'columns')  # pandas DataFrame
 
         except Exception as e:
             pytest.skip(
-                f"BigQuery uploader integration test failed (expected if no credentials): {e}"
+                f"Data warehouse uploader integration test failed (expected if no credentials): {e}"
             )
 
 

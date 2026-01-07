@@ -97,10 +97,10 @@ evaluate:
 # Scoring Configuration
 scoring:
   models:
-    hurdle: hurdle-v2025  # Name of registered model to use
-    complexity: complexity-v2025
-    rating: rating-v2025
-    users_rated: users_rated-v2025
+    hurdle: hurdle-v2026  # Name of registered model to use
+    complexity: complexity-v2026
+    rating: rating-v2026
+    users_rated: users_rated-v2026
   parameters:
     prior_rating: 5.5
     prior_weight: 2000

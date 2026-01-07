@@ -14,13 +14,14 @@ from src.utils.config import load_config  # noqa: E402
 load_dotenv()
 
 
-def verify_model_registration(bucket_name, model_types, project_id=None):
+def verify_model_registration(bucket_name, model_types, environment_prefix, project_id=None):
     """
     Verify model registration in the specified bucket.
 
     Args:
         bucket_name (str): Name of the GCS bucket
         model_types (list): List of model types to verify
+        environment_prefix (str): Environment prefix for GCS paths (e.g., 'dev', 'prod')
         project_id (str, optional): Google Cloud Project ID
     """
     # Use project_id if provided, otherwise try to get from environment
@@ -34,13 +35,14 @@ def verify_model_registration(bucket_name, model_types, project_id=None):
     bucket = storage_client.bucket(bucket_name)
 
     print(f"Verifying models in bucket: {bucket_name}")
+    print(f"Environment: {environment_prefix}")
     print(f"Using Project ID: {project_id}")
 
     for model_type in model_types:
         print(f"\nChecking {model_type} models:")
 
-        # Construct the prefix for the model type
-        prefix = f"models/registered/{model_type}/"
+        # Construct the prefix for the model type (with environment prefix)
+        prefix = f"{environment_prefix}/models/registered/{model_type}/"
 
         # List blobs with this prefix
         blobs = list(bucket.list_blobs(prefix=prefix))
@@ -89,14 +91,15 @@ def verify_model_registration(bucket_name, model_types, project_id=None):
 
 
 def main():
-    # Get bucket name from config
+    # Get bucket name and environment from config
     config = load_config()
     bucket_name = config.get_bucket_name()
+    environment_prefix = config.get_environment_prefix()
 
     # Model types to verify
     model_types = ["hurdle", "complexity", "rating", "users_rated"]
 
-    verify_model_registration(bucket_name, model_types)
+    verify_model_registration(bucket_name, model_types, environment_prefix)
 
 
 if __name__ == "__main__":

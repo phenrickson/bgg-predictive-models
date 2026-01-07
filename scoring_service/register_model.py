@@ -21,15 +21,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def get_project_id():
+    """Get the ML project ID from environment or config."""
+    # Try environment variables first
+    project_id = os.getenv("ML_PROJECT_ID") or os.getenv("GCP_PROJECT_ID")
+    if project_id:
+        return project_id
+
+    # Fall back to config
+    config = load_config()
+    return config.ml_project_id
+
+
 def validate_environment():
-    """Validate that required environment variables are set."""
-    required_vars = [
-        "GCP_PROJECT_ID"
-    ]  # ENVIRONMENT is optional as it defaults to value in config
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
+    """Validate that we can get a project ID."""
+    project_id = get_project_id()
+    if not project_id:
         raise ValueError(
-            f"Missing required environment variables: {', '.join(missing)}"
+            "Could not determine ML project ID from environment or config"
         )
 
 
@@ -80,7 +89,7 @@ def register_model(
     )
 
     # Create registered model manager
-    project_id = os.getenv("GCP_PROJECT_ID")
+    project_id = get_project_id()
     registered_model = RegisteredModel(
         model_type=model_type, bucket_name=bucket_name, project_id=project_id
     )
@@ -99,7 +108,7 @@ def register_model(
         print(f"  Version: {registration['version']}")
         print(f"  Description: {registration['description']}")
         print(f"  Registered at: {registration['registered_at']}")
-        print(f"  Environment: {os.getenv('ENVIRONMENT', 'unknown')}")
+        print(f"  Project: {project_id}")
         print(f"  Bucket: {bucket_name}")
 
         return registration
