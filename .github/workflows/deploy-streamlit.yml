@@ -11,6 +11,9 @@ on:
       - '.github/workflows/deploy-streamlit.yml'
   workflow_dispatch:  # Allow manual triggers for testing
 
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
 jobs:
   deploy-streamlit:
     name: deploy-streamlit
@@ -50,28 +53,28 @@ jobs:
       - name: Build Docker Image
         run: |
           docker build -f docker/streamlit.Dockerfile \
-            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }} \
-            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }} \
-            -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
             .
 
       - name: Push Docker Image
         run: |
-          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }}
-          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}
-          docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }}
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
 
       - name: Deploy Streamlit to Cloud Run
         run: |
           gcloud run deploy bgg-streamlit-${{ steps.env-tag.outputs.env_tag }} \
-            --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+            --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
             --platform managed \
             --region us-central1 \
             --allow-unauthenticated \
             --memory 2Gi \
             --cpu 1 \
-            --service-account bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-            --set-env-vars="ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},PYTHONPATH=/app" \
+            --service-account bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars="ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},PYTHONPATH=/app" \
             --port=8080 \
             --timeout=300s \
             --min-instances=0 \

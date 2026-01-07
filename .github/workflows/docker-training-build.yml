@@ -9,6 +9,9 @@ on:
       - 'docker/training.Dockerfile'
       - '.github/workflows/docker-training-build.yml'
 
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -61,8 +64,8 @@ jobs:
         file: docker/training.Dockerfile
         push: true
         tags: |
-          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}
-          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.env-tag.outputs.env_tag }}
-          us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
+          us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}
+          us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.env-tag.outputs.env_tag }}
+          us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max

@@ -11,6 +11,9 @@ on:
       - '.github/workflows/docker-scoring-build.yml'
   workflow_dispatch:
 
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
 jobs:
   deploy:
     name: Deploy to Cloud Run
@@ -57,29 +60,29 @@ jobs:
     - name: Build Docker Image
       run: |
         docker build -f docker/scoring.Dockerfile \
-          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }} \
-          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }} \
-          -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }} \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }} \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
           .
 
     - name: Push Docker Image
       run: |
-        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }}
-        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}
-        docker push us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ github.sha }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy bgg-model-scoring \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
           --platform managed \
           --region us-central1 \
           --allow-unauthenticated \
           --max-instances 10 \
           --memory 8Gi \
           --cpu 4 \
-          --service-account bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
+          --service-account bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
 
     - name: Verify Deployment
       run: |

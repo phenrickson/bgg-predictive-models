@@ -6,6 +6,9 @@ on:
       - 'model/*'
   workflow_dispatch:
 
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
 jobs:
   setup:
     runs-on: ubuntu-latest
@@ -74,14 +77,14 @@ jobs:
         
         # Create and execute training job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
+          --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
           --region us-central1 \
           --memory 16Gi \
           --cpu 8 \
           --max-retries 0 \
           --task-timeout 3600 \
-          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --service-account=bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
           --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
           --args="-c,uv run train.py; uv run python -m src.utils.sync_experiments"
@@ -128,14 +131,14 @@ jobs:
         
         # Create and execute registration job with streaming logs
         gcloud run jobs create ${JOB_NAME} \
-          --image us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
+          --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ needs.setup.outputs.env_tag }} \
           --region us-central1 \
           --memory 4Gi \
           --cpu 2 \
           --max-retries 0 \
           --task-timeout 1800 \
-          --service-account=bgg-predictive-models@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
-          --set-env-vars GCP_PROJECT_ID=${{ vars.GCP_PROJECT_ID }} \
+          --service-account=bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
           --set-env-vars ENVIRONMENT=${{ needs.setup.outputs.env_tag }} \
           --command="bash" \
           --args="-c,uv run python -m src.utils.sync_experiments --download && uv run register.py"

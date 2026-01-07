@@ -39,7 +39,7 @@ bgg-predictive-models/
 
 ## Current Capabilities
 
-### ✅ Implemented Features
+### Implemented Features
 
 - **Data Pipeline**: Automated BGG data extraction and materialized views in BigQuery
 - **Feature Engineering**: Comprehensive preprocessing pipeline with multiple transformer types
@@ -56,7 +56,7 @@ bgg-predictive-models/
 - **Interactive Dashboards**: Real-time monitoring and visualization tools
 - **Cloud Deployment**: Docker containers and Google Cloud Run deployment
 
-### 🔄 Current Development Focus
+### Current Development Focus
 
 - **Model Performance Optimization**: Continuous improvement of prediction accuracy
 - **Feature Engineering**: Advanced feature transformations and selection
