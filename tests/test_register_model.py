@@ -10,26 +10,24 @@ from scoring_service.register_model import validate_environment, register_model
 class TestEnvironmentValidation:
     """Test environment validation functionality."""
 
-    def test_validate_environment_success(self):
-        """Test successful environment validation with required vars."""
-        with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
+    def test_validate_environment_success_with_env(self):
+        """Test successful environment validation with env vars."""
+        with patch.dict(os.environ, {"ML_PROJECT_ID": "test-project", "GCP_PROJECT_ID": "test-project"}):
             # Should not raise an exception
             validate_environment()
 
-    def test_validate_environment_missing_required(self):
-        """Test environment validation fails when required vars missing."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError) as exc_info:
-                validate_environment()
-            assert "Missing required environment variables: GCP_PROJECT_ID" in str(
-                exc_info.value
-            )
+    def test_validate_environment_success_with_config_fallback(self):
+        """Test environment validation with config fallback."""
+        # When GCP_PROJECT_ID is set, config can be loaded and ml_project_id obtained
+        with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
+            # Should not raise - config provides ml_project_id as fallback
+            validate_environment()
 
     def test_validate_environment_with_optional(self):
         """Test environment validation succeeds with optional vars."""
         with patch.dict(
             os.environ,
-            {"GCP_PROJECT_ID": "test-project", "ENVIRONMENT": "test"},  # Optional var
+            {"ML_PROJECT_ID": "test-project", "GCP_PROJECT_ID": "test-project", "ENVIRONMENT": "test"},
         ):
             # Should not raise an exception
             validate_environment()
@@ -49,14 +47,16 @@ def mock_experiment():
 class TestModelRegistration:
     """Test model registration functionality."""
 
+    @patch("scoring_service.register_model.get_project_id")
     @patch("scoring_service.register_model.load_config")
     @patch("scoring_service.register_model.ExperimentTracker")
     @patch("scoring_service.register_model.RegisteredModel")
     def test_register_model_with_config_bucket(
-        self, mock_registered_model_cls, mock_tracker_cls, mock_load_config
+        self, mock_registered_model_cls, mock_tracker_cls, mock_load_config, mock_get_project_id
     ):
         """Test model registration using bucket from config."""
         # Setup mocks
+        mock_get_project_id.return_value = "test-project"
         mock_config = MagicMock()
         mock_config.get_bucket_name.return_value = "test-bucket"
         mock_load_config.return_value = mock_config
@@ -77,14 +77,12 @@ class TestModelRegistration:
         }
         mock_registered_model_cls.return_value = mock_registered_model
 
-        # Test registration
-        with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
-            result = register_model(
-                model_type="test",
-                experiment_name="test-exp",
-                registered_name="test-model",
-                description="test description",
-            )
+        result = register_model(
+            model_type="test",
+            experiment_name="test-exp",
+            registered_name="test-model",
+            description="test description",
+        )
 
         # Verify bucket name was obtained from config
         mock_config.get_bucket_name.assert_called_once()
@@ -95,14 +93,16 @@ class TestModelRegistration:
         assert result["name"] == "test-model"
         assert result["version"] == 1
 
+    @patch("scoring_service.register_model.get_project_id")
     @patch("scoring_service.register_model.load_config")
     @patch("scoring_service.register_model.ExperimentTracker")
     @patch("scoring_service.register_model.RegisteredModel")
     def test_register_model_with_provided_bucket(
-        self, mock_registered_model_cls, mock_tracker_cls, mock_load_config
+        self, mock_registered_model_cls, mock_tracker_cls, mock_load_config, mock_get_project_id
     ):
         """Test model registration using provided bucket name."""
         # Setup mocks
+        mock_get_project_id.return_value = "test-project"
         mock_tracker = MagicMock()
         mock_tracker.list_experiments.return_value = [
             {"name": "test-exp", "version": 1}
@@ -119,18 +119,14 @@ class TestModelRegistration:
         }
         mock_registered_model_cls.return_value = mock_registered_model
 
-        # Test registration with explicit bucket
-        with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
-            result = register_model(
-                model_type="test",
-                experiment_name="test-exp",
-                registered_name="test-model",
-                description="test description",
-                bucket_name="provided-bucket",
-            )
+        result = register_model(
+            model_type="test",
+            experiment_name="test-exp",
+            registered_name="test-model",
+            description="test description",
+            bucket_name="provided-bucket",
+        )
 
-        # Verify provided bucket was used
-        mock_load_config.assert_not_called()  # Config not loaded since bucket provided
         mock_registered_model_cls.assert_called_once_with(
             model_type="test", bucket_name="provided-bucket", project_id="test-project"
         )
@@ -138,16 +134,15 @@ class TestModelRegistration:
         assert result["name"] == "test-model"
         assert result["version"] == 1
 
-    def test_register_model_missing_project_id(self):
+    @patch("scoring_service.register_model.get_project_id")
+    def test_register_model_missing_project_id(self, mock_get_project_id):
         """Test model registration fails without project ID."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError) as exc_info:
-                register_model(
-                    model_type="test",
-                    experiment_name="test-exp",
-                    registered_name="test-model",
-                    description="test description",
-                )
-            assert "Missing required environment variables: GCP_PROJECT_ID" in str(
-                exc_info.value
+        mock_get_project_id.return_value = None
+
+        with pytest.raises(ValueError, match="Could not determine ML project ID"):
+            register_model(
+                model_type="test",
+                experiment_name="test-exp",
+                registered_name="test-model",
+                description="test description",
             )

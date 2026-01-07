@@ -5,11 +5,9 @@ from src.features.transformers import BaseBGGTransformer
 
 
 @pytest.fixture
-def sample_dataframe():
-    """Create a sample DataFrame for testing transformer features."""
-    return pd.read_parquet("data/raw/game_features.parquet").sample(
-        n=10000, random_state=42
-    )
+def sample_dataframe(sample_games_path):
+    """Load sample DataFrame from test fixtures for testing transformer features."""
+    return pd.read_parquet(sample_games_path)
 
 
 def test_mechanics_count(sample_dataframe):

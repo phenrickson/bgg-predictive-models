@@ -9,11 +9,9 @@ from src.models.training import create_preprocessing_pipeline, preprocess_data
 
 
 @pytest.fixture
-def sample_dataframe():
-    """Create a sample DataFrame for testing pipeline features."""
-    return pd.read_parquet("data/raw/game_features.parquet").sample(
-        n=1000, random_state=42
-    )
+def sample_dataframe(sample_games_path):
+    """Load sample DataFrame from test fixtures for testing pipeline."""
+    return pd.read_parquet(sample_games_path)
 
 
 class TestAutoPreprocessorSelection:

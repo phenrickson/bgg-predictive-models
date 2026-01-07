@@ -7,11 +7,9 @@ from src.features.preprocessor import create_bgg_preprocessor
 
 
 @pytest.fixture
-def sample_dataframe():
-    """Create a sample DataFrame for testing transformer features."""
-    return pd.read_parquet("data/raw/game_features.parquet").sample(
-        n=10000, random_state=42
-    )
+def sample_dataframe(sample_games_path):
+    """Load sample DataFrame from test fixtures for testing preprocessor."""
+    return pd.read_parquet(sample_games_path)
 
 
 def test_create_bgg_preprocessor_model_types(sample_dataframe):
@@ -153,13 +151,8 @@ def test_bgg_preprocessor_log_transformation(sample_dataframe):
                 ), f"Log transformation did not change values for {feature}"
 
 
-def test_bgg_preprocessor_variance_selection():
+def test_bgg_preprocessor_variance_selection(sample_dataframe):
     """Test variance-based feature selection and feature differences between model types."""
-    # Use the sample dataframe to test variance selection
-    sample_dataframe = pd.read_parquet("data/raw/game_features.parquet").sample(
-        n=10000, random_state=42
-    )
-
     # Test both linear and tree preprocessors
     linear_preprocessor = create_bgg_preprocessor(model_type="linear")
     tree_preprocessor = create_bgg_preprocessor(model_type="tree")

@@ -28,33 +28,35 @@ def bigquery_config():
 @pytest.fixture
 def data_loader(bigquery_config):
     """Create a BGGDataLoader for testing."""
-    return BGGDataLoader(bigquery_config)
+    return BGGDataLoader(bigquery_config.data_warehouse)
 
 
 def test_games_features_view_exists(bigquery_config):
-    """Test that the games_features_materialized view exists and is accessible."""
-    client = bigquery_config.get_client()
+    """Test that the games_features view exists and is accessible."""
+    dw = bigquery_config.data_warehouse
+    client = dw.get_client()
 
     # Query to check if view exists using proper information schema
     query = f"""
     SELECT table_name
-    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.INFORMATION_SCHEMA.TABLES`
-    WHERE table_name = 'games_features_materialized'
+    FROM `{dw.project_id}.{dw.features_dataset}.INFORMATION_SCHEMA.TABLES`
+    WHERE table_name = '{dw.features_table}'
     """
 
     # Convert pandas DataFrame to Polars DataFrame
     result = pl.from_pandas(client.query(query).to_dataframe())
-    assert len(result) == 1, "games_features_materialized view does not exist"
+    assert len(result) == 1, f"{dw.features_table} view does not exist"
 
 
 def test_games_features_view_structure(bigquery_config):
     """Test the structure of the games_features view."""
-    client = bigquery_config.get_client()
+    dw = bigquery_config.data_warehouse
+    client = dw.get_client()
 
     # Query to get a sample row
     query = f"""
     SELECT *
-    FROM `{bigquery_config.project_id}.{bigquery_config.dataset}.games_features_materialized`
+    FROM `{dw.project_id}.{dw.features_dataset}.{dw.features_table}`
     LIMIT 1
     """
 

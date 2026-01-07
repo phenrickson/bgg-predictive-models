@@ -20,8 +20,8 @@ class DataWarehouseConfig:
 
     project_id: str
     location: str = "US"
-    features_dataset: str = "core"
-    features_table: str = "games_features_materialized"
+    features_dataset: str = "analytics"
+    features_table: str = "games_features"
     datasets: Optional[Dict[str, str]] = None
 
     def get_client(self) -> bigquery.Client:
@@ -206,8 +206,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
     data_warehouse_config = DataWarehouseConfig(
         project_id=dw_config.get("project_id", data_warehouse_project_id),
         location=dw_config.get("location", "US"),
-        features_dataset=dw_config.get("features_dataset", "core"),
-        features_table=dw_config.get("features_table", "games_features_materialized"),
+        features_dataset=dw_config.get("features_dataset", "analytics"),
+        features_table=dw_config.get("features_table", "games_features"),
         datasets=dw_config.get("datasets"),
     )
 
