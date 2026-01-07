@@ -59,28 +59,26 @@ def mock_config_file(tmp_path, sample_config):
 class TestConfigLoading:
     """Test configuration loading functionality"""
 
-    def test_load_config_success(self, mock_config_file, sample_config):
-        """Test successful config loading"""
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        os.chdir(mock_config_file.parent)
+    def test_load_training_config_returns_expected_structure(self):
+        """Test that load_training_config returns expected structure"""
+        # This tests the actual function with real config
+        config = train.load_training_config()
 
-        try:
-            config = train.load_config()
-            assert config == sample_config
-        finally:
-            os.chdir(original_cwd)
+        # Verify expected keys exist
+        assert "current_year" in config
+        assert "train_end_year" in config
+        assert "tune_end_year" in config
+        assert "test_start_year" in config
+        assert "test_end_year" in config
+        assert "models" in config
+        assert "experiments" in config
+        assert "model_settings" in config
+        assert "paths" in config
 
-    def test_load_config_file_not_found(self, tmp_path):
-        """Test config loading when file doesn't exist"""
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-
-        try:
-            with pytest.raises(FileNotFoundError, match="model_config.yml not found"):
-                train.load_config()
-        finally:
-            os.chdir(original_cwd)
+        # Verify model types exist
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            assert model_type in config["models"]
+            assert model_type in config["experiments"]
 
 
 class TestCommandExecution:
@@ -183,7 +181,7 @@ class TestModelTrainingFunctions:
 class TestMainPipeline:
     """Test the main training pipeline"""
 
-    @patch("train.load_config")
+    @patch("train.load_training_config")
     @patch("train.train_hurdle")
     @patch("train.finalize_hurdle")
     @patch("train.score_hurdle")
@@ -239,7 +237,7 @@ class TestMainPipeline:
 
         mock_geek.assert_called_once_with(sample_config)
 
-    @patch("train.load_config")
+    @patch("train.load_training_config")
     @patch("sys.exit")
     def test_main_pipeline_config_error(self, mock_exit, mock_load_config):
         """Test main pipeline with config loading error"""

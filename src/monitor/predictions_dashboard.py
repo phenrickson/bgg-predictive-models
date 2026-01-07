@@ -1,7 +1,7 @@
 """
 Streamlit dashboard for exploring board game predictions.
 
-This dashboard loads the latest predictions from BigQuery and provides interactive
+This dashboard loads the latest predictions from the data warehouse and provides interactive
 visualizations for exploring predicted geek ratings, complexity, ratings, and other metrics.
 """
 
@@ -18,20 +18,37 @@ load_dotenv()
 # Add project root to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
-from src.data.bigquery_uploader import BigQueryUploader  # noqa: E402
+from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_prediction_jobs() -> pd.DataFrame:
     """
-    Get prediction jobs summary from BigQuery with caching.
+    Get prediction jobs summary from data warehouse with caching.
 
     Returns:
         DataFrame with job information
     """
     try:
-        uploader = BigQueryUploader(environment="dev")
-        jobs = uploader.get_prediction_summary()
+        uploader = DataWarehousePredictionUploader()
+        query = f"""
+        SELECT
+            job_id,
+            COUNT(*) as num_predictions,
+            MIN(score_ts) as earliest_prediction,
+            MAX(score_ts) as latest_prediction,
+            MIN(year_published) as min_year,
+            MAX(year_published) as max_year,
+            AVG(predicted_geek_rating) as avg_predicted_rating,
+            ANY_VALUE(JSON_VALUE(model_versions, '$.hurdle')) as hurdle_experiment,
+            ANY_VALUE(JSON_VALUE(model_versions, '$.complexity')) as complexity_experiment,
+            ANY_VALUE(JSON_VALUE(model_versions, '$.rating')) as rating_experiment,
+            ANY_VALUE(JSON_VALUE(model_versions, '$.users_rated')) as users_rated_experiment
+        FROM `{uploader.table_id}`
+        GROUP BY job_id
+        ORDER BY latest_prediction DESC
+        """
+        jobs = uploader.client.query(query).to_dataframe()
         return jobs
     except Exception as e:
         st.error(f"Error loading prediction jobs: {e}")
@@ -50,8 +67,30 @@ def load_predictions_for_job(job_id: str) -> pd.DataFrame:
         DataFrame with predictions
     """
     try:
-        uploader = BigQueryUploader(environment="dev")
-        df = uploader.query_predictions(job_id=job_id)
+        uploader = DataWarehousePredictionUploader()
+        query = f"""
+        SELECT
+            job_id,
+            game_id,
+            game_name as name,
+            year_published,
+            predicted_hurdle_prob,
+            predicted_complexity,
+            predicted_rating,
+            predicted_users_rated,
+            predicted_geek_rating,
+            score_ts
+        FROM `{uploader.table_id}`
+        WHERE job_id = @job_id
+        ORDER BY predicted_geek_rating DESC
+        """
+        from google.cloud import bigquery
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("job_id", "STRING", job_id)
+            ]
+        )
+        df = uploader.client.query(query, job_config=job_config).to_dataframe()
         return df
     except Exception as e:
         st.error(f"Error loading predictions for job {job_id}: {e}")
@@ -83,7 +122,7 @@ def main():
         jobs_df = get_prediction_jobs()
 
     if jobs_df.empty:
-        st.error("No prediction jobs found in BigQuery.")
+        st.error("No prediction jobs found in data warehouse.")
         return
 
     # Job selection in sidebar
@@ -145,7 +184,7 @@ def main():
 
     # Tabs for different views
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["Predictions Table", "Geek Rating Distribution", "Analysis", "BigQuery Jobs"]
+        ["Predictions Table", "Geek Rating Distribution", "Analysis", "Prediction Jobs"]
     )
 
     with tab1:
@@ -290,13 +329,13 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
 
     with tab4:
-        st.header("BigQuery Jobs")
+        st.header("Prediction Jobs")
 
         # Load jobs data (cached)
         jobs_df = get_prediction_jobs()
 
         if jobs_df.empty:
-            st.warning("No BigQuery jobs found.")
+            st.warning("No prediction jobs found.")
         else:
             st.subheader("Prediction Job History")
 

@@ -7,7 +7,7 @@ on:
         - develop
     paths:
       - 'src/streamlit/**'
-      - 'Dockerfile.streamlit'
+      - 'docker/streamlit.Dockerfile'
       - '.github/workflows/deploy-streamlit.yml'
   workflow_dispatch:  # Allow manual triggers for testing
 
@@ -15,7 +15,7 @@ jobs:
   deploy-streamlit:
     name: deploy-streamlit
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     
     permissions:
       contents: 'read'
@@ -28,7 +28,7 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -38,10 +38,8 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "env_tag=prod" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
-            echo "env_tag=dev" >> $GITHUB_OUTPUT
           else
-            echo "env_tag=test" >> $GITHUB_OUTPUT
+            echo "env_tag=dev" >> $GITHUB_OUTPUT
           fi
 
       - name: Configure Docker
@@ -51,7 +49,7 @@ jobs:
 
       - name: Build Docker Image
         run: |
-          docker build -f Dockerfile.streamlit \
+          docker build -f docker/streamlit.Dockerfile \
             -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ github.sha }} \
             -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }} \
             -t us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/streamlit:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \

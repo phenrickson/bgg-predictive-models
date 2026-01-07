@@ -59,28 +59,20 @@ def mock_config_file(tmp_path, sample_config):
 class TestConfigLoading:
     """Test configuration loading functionality"""
 
-    def test_load_config_success(self, mock_config_file, sample_config):
-        """Test successful config loading"""
-        # Change to the temp directory
-        original_cwd = os.getcwd()
-        os.chdir(mock_config_file.parent)
+    def test_load_registration_config_returns_expected_structure(self):
+        """Test that load_registration_config returns expected structure"""
+        # This tests the actual function with real config
+        config = register.load_registration_config()
 
-        try:
-            config = register.load_config()
-            assert config == sample_config
-        finally:
-            os.chdir(original_cwd)
+        # Verify expected keys exist
+        assert "current_year" in config
+        assert "experiments" in config
+        assert isinstance(config["current_year"], int)
+        assert isinstance(config["experiments"], dict)
 
-    def test_load_config_file_not_found(self, tmp_path):
-        """Test config loading when file doesn't exist"""
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-
-        try:
-            with pytest.raises(FileNotFoundError, match="model_config.yml not found"):
-                register.load_config()
-        finally:
-            os.chdir(original_cwd)
+        # Verify experiment names exist
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            assert model_type in config["experiments"]
 
 
 class TestCommandExecution:
@@ -192,7 +184,7 @@ class TestModelRegistrationFunctions:
 class TestMainPipeline:
     """Test the main registration pipeline"""
 
-    @patch("register.load_config")
+    @patch("register.load_registration_config")
     @patch("register.register_complexity")
     @patch("register.register_rating")
     @patch("register.register_users_rated")
@@ -217,7 +209,7 @@ class TestMainPipeline:
         mock_register_users_rated.assert_called_once_with(sample_config)
         mock_register_hurdle.assert_called_once_with(sample_config)
 
-    @patch("register.load_config")
+    @patch("register.load_registration_config")
     @patch("sys.exit")
     def test_main_pipeline_config_error(self, mock_exit, mock_load_config):
         """Test main pipeline with config loading error"""
@@ -227,7 +219,7 @@ class TestMainPipeline:
 
         mock_exit.assert_called_once_with(1)
 
-    @patch("register.load_config")
+    @patch("register.load_registration_config")
     @patch("register.register_complexity")
     @patch("sys.exit")
     def test_main_pipeline_registration_error(
@@ -317,7 +309,7 @@ class TestIntegration:
         # This test ensures our main() function follows the same order
 
         with (
-            patch("register.load_config") as mock_load_config,
+            patch("register.load_registration_config") as mock_load_config,
             patch("register.register_complexity") as mock_complexity,
             patch("register.register_rating") as mock_rating,
             patch("register.register_users_rated") as mock_users_rated,
@@ -345,7 +337,7 @@ class TestIntegration:
 class TestErrorHandling:
     """Test error handling scenarios"""
 
-    @patch("register.load_config")
+    @patch("register.load_registration_config")
     @patch("register.register_complexity")
     @patch("sys.exit")
     def test_handles_subprocess_error(
@@ -359,7 +351,7 @@ class TestErrorHandling:
 
         mock_exit.assert_called_once_with(1)
 
-    @patch("register.load_config")
+    @patch("register.load_registration_config")
     @patch("sys.exit")
     def test_handles_yaml_error(self, mock_exit, mock_load_config):
         """Test that YAML parsing errors are handled properly"""

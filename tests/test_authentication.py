@@ -16,10 +16,10 @@ class TestBigQueryAuthentication:
     """Test BigQuery authentication using Application Default Credentials."""
 
     def test_load_config_requires_project_id(self):
-        """Test that load_config requires GCP_PROJECT_ID environment variable."""
+        """Test that load_config requires project ID environment variable."""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(
-                ValueError, match="GCP_PROJECT_ID environment variable must be set"
+                ValueError, match="DATA_WAREHOUSE_PROJECT_ID.*environment variable must be set"
             ):
                 load_config()
 
@@ -27,10 +27,11 @@ class TestBigQueryAuthentication:
         """Test successful config loading with project ID."""
         with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
             config = load_config()
-            assert config.project_id == "test-project"
-            assert config.credentials_path is None  # Always use ADC
+            # ml_project_id comes from config.yaml ml_project section, not env var
+            assert config.ml_project_id is not None
+            assert config.data_warehouse.project_id is not None
 
-    @patch("src.data.config.default")
+    @patch("src.utils.config.default")
     def test_bigquery_client_creation_success(self, mock_default):
         """Test successful BigQuery client creation with ADC."""
         # Mock credentials
@@ -40,15 +41,16 @@ class TestBigQueryAuthentication:
         with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
             config = load_config()
 
-            with patch("src.data.config.bigquery.Client") as mock_client:
-                client = config.get_client()  # noqa: F841
+            with patch("src.utils.config.bigquery.Client") as mock_client:
+                # Use data_warehouse config which has get_client()
+                client = config.data_warehouse.get_client()  # noqa: F841
 
                 # Verify client was created with correct parameters
                 mock_client.assert_called_once_with(
-                    credentials=mock_credentials, project="test-project"
+                    credentials=mock_credentials, project=config.data_warehouse.project_id
                 )
 
-    @patch("src.data.config.default")
+    @patch("src.utils.config.default")
     def test_bigquery_client_creation_failure(self, mock_default):
         """Test BigQuery client creation failure."""
         mock_default.side_effect = DefaultCredentialsError("No credentials found")
@@ -57,16 +59,17 @@ class TestBigQueryAuthentication:
             config = load_config()
 
             with pytest.raises(DefaultCredentialsError):
-                config.get_client()
+                config.data_warehouse.get_client()
 
     def test_bigquery_config_dataclass(self):
         """Test BigQueryConfig dataclass properties."""
         config = BigQueryConfig(
-            project_id="test-project", dataset="test-dataset", credentials_path=None
+            project_id="test-project", dataset="test-dataset", table="test-table", credentials_path=None
         )
 
         assert config.project_id == "test-project"
         assert config.dataset == "test-dataset"
+        assert config.table == "test-table"
         assert config.credentials_path is None
 
 
@@ -136,13 +139,12 @@ class TestGCPAuthenticator:
     @patch("scoring_service.auth.storage.Client")
     def test_get_storage_client_auth_failure(self, mock_storage_client):
         """Test storage client creation with authentication failure."""
-        mock_client = MagicMock()
-        mock_storage_client.return_value = mock_client
-        mock_client.list_buckets.side_effect = Forbidden("Access denied")
+        # Client creation itself fails
+        mock_storage_client.side_effect = Exception("Authentication failed")
 
         auth = GCPAuthenticator(project_id="test-project")
 
-        with pytest.raises(AuthenticationError, match="Authentication test failed"):
+        with pytest.raises(AuthenticationError, match="Failed to authenticate to GCP"):
             auth.get_storage_client()
 
     @patch("scoring_service.auth.storage.Client")
@@ -152,13 +154,14 @@ class TestGCPAuthenticator:
         mock_bucket = MagicMock()
         mock_storage_client.return_value = mock_client
         mock_client.bucket.return_value = mock_bucket
-        mock_client.list_buckets.return_value = []
+        # list_blobs returns an iterator
+        mock_bucket.list_blobs.return_value = iter([])
 
         auth = GCPAuthenticator(project_id="test-project")
         result = auth.verify_bucket_access("test-bucket")
 
         assert result is True
-        mock_bucket.reload.assert_called_once()
+        mock_bucket.list_blobs.assert_called_once_with(max_results=1)
 
     @patch("scoring_service.auth.storage.Client")
     def test_verify_bucket_access_failure(self, mock_storage_client):
@@ -167,8 +170,7 @@ class TestGCPAuthenticator:
         mock_bucket = MagicMock()
         mock_storage_client.return_value = mock_client
         mock_client.bucket.return_value = mock_bucket
-        mock_client.list_buckets.return_value = []
-        mock_bucket.reload.side_effect = NotFound("Bucket not found")
+        mock_bucket.list_blobs.side_effect = NotFound("Bucket not found")
 
         auth = GCPAuthenticator(project_id="test-project")
         result = auth.verify_bucket_access("test-bucket")
@@ -274,25 +276,25 @@ class TestIntegrationAuthentication:
             )
 
     @pytest.mark.integration
-    def test_bigquery_uploader_connection(self):
-        """Test BigQuery uploader connection (requires valid credentials)."""
+    def test_data_warehouse_uploader_connection(self):
+        """Test data warehouse uploader connection (requires valid credentials)."""
         # Skip if no project ID set
-        project_id = os.getenv("GCP_PROJECT_ID")
+        project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("DATA_WAREHOUSE_PROJECT_ID")
         if not project_id:
-            pytest.skip("GCP_PROJECT_ID not set - skipping integration test")
+            pytest.skip("GCP_PROJECT_ID or DATA_WAREHOUSE_PROJECT_ID not set - skipping integration test")
 
         try:
-            from src.data.bigquery_uploader import BigQueryUploader
+            from src.data.bigquery_uploader import DataWarehousePredictionUploader
 
-            uploader = BigQueryUploader(environment="dev")
+            uploader = DataWarehousePredictionUploader()
 
-            # Test getting prediction summary (should work even with empty table)
-            summary = uploader.get_prediction_summary()
-            assert isinstance(summary, type(summary))  # pandas DataFrame
+            # Test querying latest predictions (should work even with empty table)
+            df = uploader.query_latest_predictions(limit=1)
+            assert hasattr(df, 'columns')  # pandas DataFrame
 
         except Exception as e:
             pytest.skip(
-                f"BigQuery uploader integration test failed (expected if no credentials): {e}"
+                f"Data warehouse uploader integration test failed (expected if no credentials): {e}"
             )
 
 
@@ -317,26 +319,27 @@ class TestAuthenticationErrorHandling:
 
         os.unlink(f.name)
 
-    def test_missing_bigquery_section(self):
-        """Test behavior when bigquery section is missing from config."""
+    def test_missing_required_section(self):
+        """Test behavior when required sections are missing from config."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("other_section: value")
             f.flush()
 
             with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
-                with pytest.raises(ValueError, match="Missing bigquery section"):
+                with pytest.raises(ValueError, match="Missing required config sections"):
                     load_config(config_path=f.name)
 
         os.unlink(f.name)
 
-    def test_missing_dataset_in_config(self):
-        """Test behavior when dataset is missing from bigquery config."""
+    def test_missing_data_warehouse_in_config(self):
+        """Test behavior when data_warehouse section is missing."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("bigquery:\n  other_field: value")
+            # Missing data_warehouse section
+            f.write("ml_project:\n  project_id: test\nyears:\n  current: 2025")
             f.flush()
 
             with patch.dict(os.environ, {"GCP_PROJECT_ID": "test-project"}):
-                with pytest.raises(ValueError, match="Missing dataset"):
+                with pytest.raises(ValueError, match="Missing required config sections"):
                     load_config(config_path=f.name)
 
         os.unlink(f.name)

@@ -1,9 +1,11 @@
 import json
+import os
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from google.cloud import storage
 from src.models.experiments import ExperimentTracker, Experiment
+from src.utils.config import load_config
 
 
 class CloudExperimentTracker(ExperimentTracker):
@@ -12,21 +14,34 @@ class CloudExperimentTracker(ExperimentTracker):
     """
 
     def __init__(
-        self, model_type: str, bucket_name: str, base_prefix: str = "models/experiments"
+        self,
+        model_type: str,
+        bucket_name: Optional[str] = None,
+        environment_prefix: Optional[str] = None,
+        base_prefix: str = "models/experiments",
     ):
         """
         Initialize Cloud Experiment Tracker
 
         Args:
             model_type: Type of model (hurdle, complexity, etc.)
-            bucket_name: Google Cloud Storage bucket name
+            bucket_name: Google Cloud Storage bucket name (uses config if not provided)
+            environment_prefix: Environment prefix for paths (uses config if not provided)
             base_prefix: Base prefix for model storage in bucket
         """
         super().__init__(model_type)
 
+        # Get bucket name and environment from config if not provided
+        if bucket_name is None or environment_prefix is None:
+            config = load_config()
+            if bucket_name is None:
+                bucket_name = config.get_bucket_name()
+            if environment_prefix is None:
+                environment_prefix = config.get_environment_prefix()
+
         self.storage_client = storage.Client()
         self.bucket = self.storage_client.bucket(bucket_name)
-        self.base_prefix = f"{base_prefix}/{model_type}"
+        self.base_prefix = f"{environment_prefix}/{base_prefix}/{model_type}"
 
     def list_experiments(self) -> List[Dict[str, Any]]:
         """

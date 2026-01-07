@@ -298,27 +298,25 @@ unsupervised_dashboard:
 	uv run streamlit run src/monitor/unsupervised_dashboard.py
 
 
-clean_experiments:
-	@echo "This will delete all subfolders in models/experiments/"
-	@read -p "Are you sure? (y/n) " confirm; \
-	if [ "$$confirm" = "y" ]; then \
-		rm -rf models/experiments/*/; \
-		echo "Subfolders deleted."; \
-	else \
-		echo "Aborted."; \
-	fi
+clean-experiments:
+	@uv run python -c "import shutil; from pathlib import Path; \
+		p = Path('models/experiments'); \
+		dirs = [d for d in p.iterdir() if d.is_dir()] if p.exists() else []; \
+		print(f'This will delete {len(dirs)} subfolders in models/experiments/'); \
+		confirm = input('Are you sure? (y/n) ') if dirs else 'n'; \
+		[shutil.rmtree(d) for d in dirs] if confirm == 'y' else None; \
+		print('Subfolders deleted.' if confirm == 'y' and dirs else 'Aborted.' if dirs else 'No subfolders found.')"
 
 # remove local predictions
 .PHONY: clean_predictions
-clean-predictions:
-	@echo "This will delete all subfolders in data/predictions/"
-	@read -p "Are you sure? (y/n) " confirm; \
-	if [ "$$confirm" = "y" ]; then \
-		rm -rf data/predictions/*/; \
-		echo "Subfolders deleted."; \
-	else \
-		echo "Aborted."; \
-	fi
+clean-data:
+	@uv run python -c "import shutil; from pathlib import Path; \
+		p = Path('data/predictions'); \
+		dirs = [d for d in p.iterdir() if d.is_dir()] if p.exists() else []; \
+		print(f'This will delete {len(dirs)} subfolders in data/predictions/'); \
+		confirm = input('Are you sure? (y/n) ') if dirs else 'n'; \
+		[shutil.rmtree(d) for d in dirs] if confirm == 'y' else None; \
+		print('Subfolders deleted.' if confirm == 'y' and dirs else 'Aborted.' if dirs else 'No subfolders found.')"
 
 # upload experiments to Google Cloud Storage
 .PHONY: upload_experiments

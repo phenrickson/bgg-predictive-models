@@ -238,6 +238,11 @@ def finalize_rating(config: Dict[str, Any]) -> None:
 
 def score_rating(config: Dict[str, Any]) -> None:
     """Score rating model"""
+    # Use scoring complexity predictions (not training predictions)
+    complexity_experiment = config["experiments"]["complexity"]
+    scoring_complexity_path = (
+        f"data/predictions/complexity/{complexity_experiment}_predictions.parquet"
+    )
     cmd = [
         "uv",
         "run",
@@ -248,7 +253,7 @@ def score_rating(config: Dict[str, Any]) -> None:
         "--experiment",
         config["experiments"]["rating"],
         "--complexity-predictions",
-        config["paths"]["complexity_predictions"],
+        scoring_complexity_path,
     ]
     run_command(cmd, "Scoring rating model")
 
@@ -301,6 +306,11 @@ def finalize_users_rated(config: Dict[str, Any]) -> None:
 
 def score_users_rated(config: Dict[str, Any]) -> None:
     """Score users_rated model"""
+    # Use scoring complexity predictions (not training predictions)
+    complexity_experiment = config["experiments"]["complexity"]
+    scoring_complexity_path = (
+        f"data/predictions/complexity/{complexity_experiment}_predictions.parquet"
+    )
     cmd = [
         "uv",
         "run",
@@ -311,7 +321,7 @@ def score_users_rated(config: Dict[str, Any]) -> None:
         "--experiment",
         config["experiments"]["users_rated"],
         "--complexity-predictions",
-        config["paths"]["complexity_predictions"],
+        scoring_complexity_path,
     ]
     run_command(cmd, "Scoring users_rated model")
 
@@ -359,32 +369,30 @@ def main():
             f"Testing period: {config['test_start_year']} to {config['test_end_year']}"
         )
 
-        # Train models in sequence (matches Makefile order)
-        # 1. Hurdle model
-        logger.info(f"\n🚀 Training hurdle model ({config['models']['hurdle']})")
+        # Training models
+        logger.info("Training models")
+        logger.info(f"Training hurdle model ({config['models']['hurdle']})")
         train_hurdle(config)
+        logger.info(f"Training complexity model ({config['models']['complexity']})")
+        train_complexity(config)
+        logger.info(f"Training complexity model ({config['models']['rating']})")
+        train_rating(config)
+        logger.info(f"Training complexity model ({config['models']['users_rated']})")
+        train_users_rated(config)
+
+        # finalize models on training set
         finalize_hurdle(config)
         score_hurdle(config)
 
-        # 2. Complexity model
-        logger.info(
-            f"\n🚀 Training complexity model ({config['models']['complexity']})"
-        )
-        train_complexity(config)
+        # finalize complexity
         finalize_complexity(config)
         score_complexity(config)
 
         # 3. Rating model
-        logger.info(f"\n🚀 Training rating model ({config['models']['rating']})")
-        train_rating(config)
         finalize_rating(config)
         score_rating(config)
 
         # 4. Users rated model
-        logger.info(
-            f"\n🚀 Training users_rated model ({config['models']['users_rated']})"
-        )
-        train_users_rated(config)
         finalize_users_rated(config)
         score_users_rated(config)
 

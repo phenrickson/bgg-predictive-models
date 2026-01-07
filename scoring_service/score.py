@@ -33,7 +33,7 @@ def submit_scoring_request(
     output_path: Optional[str] = None,
     prior_rating: Optional[float] = None,
     prior_weight: Optional[float] = None,
-    upload_to_bigquery: bool = False,
+    upload_to_data_warehouse: bool = True,
 ) -> dict:
     """
     Submit request to scoring service and return response.
@@ -49,7 +49,7 @@ def submit_scoring_request(
         output_path: Optional override for predictions output path
         prior_rating: Optional override for prior mean rating
         prior_weight: Optional override for prior weight
-        upload_to_bigquery: Whether to upload results to BigQuery
+        upload_to_data_warehouse: Whether to upload results to data warehouse
 
     Returns:
         Response from scoring service
@@ -73,7 +73,7 @@ def submit_scoring_request(
             "end_year": end_year,
             "prior_rating": prior_rating or param_config.get("prior_rating", 5.5),
             "prior_weight": prior_weight or param_config.get("prior_weight", 2000),
-            "upload_to_bigquery": upload_to_bigquery,
+            "upload_to_data_warehouse": upload_to_data_warehouse,
         }
 
         if output_path:
@@ -91,17 +91,10 @@ def submit_scoring_request(
             "end_year": end_year,
             "prior_rating": prior_rating or 5.5,
             "prior_weight": prior_weight or 2000,
-            "upload_to_bigquery": upload_to_bigquery,
+            "upload_to_data_warehouse": upload_to_data_warehouse,
         }
         if output_path:
             payload["output_path"] = output_path
-
-    # Add BigQuery environment from config if uploading to BigQuery
-    if upload_to_bigquery:
-        config = load_config()
-        environment = config.get_current_environment()
-        payload["bigquery_environment"] = environment
-        logger.info(f"BigQuery upload enabled for environment: {environment}")
 
     try:
         logger.info(f"Submitting scoring request to {service_url}")
@@ -202,11 +195,17 @@ def main():
         "--download", action="store_true", help="Download predictions after scoring"
     )
 
-    # BigQuery arguments
+    # Data warehouse arguments
     parser.add_argument(
-        "--upload-to-bigquery",
+        "--upload-to-data-warehouse",
         action="store_true",
-        help="Upload predictions to BigQuery",
+        default=True,
+        help="Upload predictions to data warehouse (default: True)",
+    )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip uploading predictions to data warehouse",
     )
 
     # Prior rating arguments
@@ -223,6 +222,9 @@ def main():
     # Parse arguments
     args = parser.parse_args()
 
+    # Determine upload setting
+    upload_to_data_warehouse = args.upload_to_data_warehouse and not args.no_upload
+
     try:
         # Submit scoring request
         logger.info("Submitting scoring request...")
@@ -237,7 +239,7 @@ def main():
             output_path=args.output_path,
             prior_rating=args.prior_rating,
             prior_weight=args.prior_weight,
-            upload_to_bigquery=args.upload_to_bigquery,
+            upload_to_data_warehouse=upload_to_data_warehouse,
         )
 
         # Log job details
@@ -255,10 +257,10 @@ def main():
 
         logger.info(f"Predictions Location: {response['output_location']}")
 
-        # Log BigQuery information if available
-        if response.get("bigquery_job_id"):
-            logger.info(f"BigQuery Job ID: {response['bigquery_job_id']}")
-            logger.info(f"BigQuery Table: {response['bigquery_table']}")
+        # Log data warehouse information if available
+        if response.get("data_warehouse_job_id"):
+            logger.info(f"Data Warehouse Job ID: {response['data_warehouse_job_id']}")
+            logger.info(f"Data Warehouse Table: {response['data_warehouse_table']}")
 
         # Download predictions if requested
         if args.download:

@@ -6,13 +6,13 @@ on:
     branches: [main]
     paths:
       - 'pyproject.toml'
-      - 'Dockerfile.training'
+      - 'docker/training.Dockerfile'
       - '.github/workflows/docker-training-build.yml'
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || github.ref == 'refs/heads/develop' && 'DEV' || 'TEST' }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     
     permissions:
       contents: read
@@ -25,12 +25,12 @@ jobs:
     - name: Setup Environment
       run: |
         mkdir -p credentials 
-        echo '${{ secrets.SERVICE_ACCOUNT_KEY }}' > credentials/service-account-key.json
+        echo '${{ secrets.GCP_SA_KEY_BGG_ML }}' > credentials/service-account-key.json
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+        credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
@@ -58,7 +58,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: Dockerfile.training
+        file: docker/training.Dockerfile
         push: true
         tags: |
           us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}

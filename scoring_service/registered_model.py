@@ -53,20 +53,22 @@ class RegisteredModel(ExperimentTracker):
         # Initialize base tracker with local directory
         super().__init__(model_type)
 
-        # Get bucket name from config if not provided
+        # Get bucket name and environment prefix from config if not provided
+        config = load_config()
         if bucket_name is None:
-            config = load_config()
             bucket_name = config.get_bucket_name()
+
+        # Get environment prefix for path construction
+        environment_prefix = config.get_environment_prefix()
 
         # Initialize GCS client using new authentication
         try:
             self.storage_client = get_authenticated_storage_client(project_id)
             self.bucket = self.storage_client.bucket(bucket_name)
-            self.base_prefix = f"{base_prefix}/{model_type}"
-
-            # Verify bucket exists and we have access
-            if not self.bucket.exists():
-                raise ValueError(f"Bucket {bucket_name} does not exist")
+            # Include environment prefix in path: {env}/models/registered/{model_type}
+            self.base_prefix = f"{environment_prefix}/{base_prefix}/{model_type}"
+            # Note: We don't verify bucket existence here as it requires storage.buckets.get
+            # permission. The bucket access will be validated on first object operation.
 
         except AuthenticationError as e:
             raise ValueError(f"Authentication failed: {str(e)}")

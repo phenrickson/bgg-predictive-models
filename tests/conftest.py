@@ -1,6 +1,5 @@
 import os
 import sys
-import subprocess
 import dotenv
 import pytest
 from pathlib import Path
@@ -20,53 +19,51 @@ logger = setup_logging()
 
 
 @pytest.fixture(scope="session")
+def test_fixtures_path():
+    """
+    Return path to test fixtures directory.
+
+    The fixtures directory contains sample_games.parquet with real BGG data
+    pulled from BigQuery for testing purposes.
+    """
+    return Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def sample_games_path(test_fixtures_path):
+    """
+    Return path to sample games parquet file.
+
+    This fixture provides the path to sample_games.parquet containing
+    real BGG game data for testing transformers and preprocessors.
+    """
+    data_file = test_fixtures_path / "sample_games.parquet"
+    if not data_file.exists():
+        pytest.skip(
+            f"Test fixture {data_file} not found. "
+            "Run 'python tests/fixtures/generate_test_data.py' to create it."
+        )
+    return data_file
+
+
+@pytest.fixture(scope="session")
 def raw_data_path():
     """
-    Ensure raw data exists, generating it if missing.
+    Legacy fixture - returns path to data/raw directory.
 
-    This fixture checks for the existence of game_features.parquet in data/raw.
-    If the file doesn't exist, it runs the data generation script.
-
-    Scope is 'session' to run only once per test session.
+    Note: Most tests should use sample_games_path instead for the test fixture.
+    This fixture is kept for backwards compatibility with integration tests
+    that need the full raw data.
     """
     project_root = Path(__file__).parent.parent
-    data_file = project_root / "data" / "raw" / "game_features.parquet"
-
-    # Check if the raw data file exists
-    if not data_file.exists():
-        try:
-            logger.info(f"Raw data file {data_file} not found. Loading raw data...")
-            # Run the data generation script
-            result = subprocess.run(
-                [sys.executable, "-m", "src.data.get_raw_data"],
-                cwd=project_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info("Raw data loaded successfully.")
-            if result.stdout.strip():
-                logger.debug(f"Output: {result.stdout}")
-
-            # Verify the file was created
-            if not data_file.exists():
-                pytest.fail(
-                    f"Data generation script completed but {data_file} was not created"
-                )
-
-        except subprocess.CalledProcessError as e:
-            pytest.fail(f"Failed to generate raw data: {e.stderr}")
-        except Exception as e:
-            pytest.fail(f"Unexpected error during data generation: {str(e)}")
-
-    return data_file.parent
+    data_dir = project_root / "data" / "raw"
+    return data_dir
 
 
 @pytest.fixture
 def raw_data(raw_data_path):
     """
     Provides access to raw data for tests.
-    Depends on raw_data_path to ensure data is generated first.
 
     Returns the path to the raw data directory.
     """

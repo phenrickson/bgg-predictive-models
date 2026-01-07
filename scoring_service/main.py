@@ -23,7 +23,7 @@ sys.path.insert(0, project_root)
 from registered_model import RegisteredModel  # noqa: E402
 from src.data.loader import BGGDataLoader  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
-from src.data.bigquery_uploader import BigQueryUploader  # noqa: E402
+from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
 from src.models.geek_rating import calculate_geek_rating  # noqa: E402
 from auth import GCPAuthenticator, AuthenticationError  # noqa: E402
 
@@ -42,9 +42,10 @@ try:
     authenticator = GCPAuthenticator()
     GCP_PROJECT_ID = authenticator.project_id
 
-    # Get bucket name from config
+    # Get bucket name and environment prefix from config
     config = load_config()
     BUCKET_NAME = config.get_bucket_name()
+    ENVIRONMENT_PREFIX = config.get_environment_prefix()
 
     # Verify bucket access
     if not authenticator.verify_bucket_access(BUCKET_NAME):
@@ -59,6 +60,7 @@ try:
     logger.info(f"  Credentials Source: {auth_info['credentials_source']}")
     logger.info(f"  Running on GCP: {auth_info.get('running_on_gcp', False)}")
     logger.info(f"  Bucket Name: {BUCKET_NAME}")
+    logger.info(f"  Environment: {ENVIRONMENT_PREFIX}")
 
 except AuthenticationError as e:
     logger.error(f"Authentication failed: {str(e)}")
@@ -86,8 +88,7 @@ class PredictGamesRequest(BaseModel):
     prior_rating: float = 5.5
     prior_weight: float = 2000
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
-    upload_to_bigquery: bool = False
-    bigquery_environment: str = "dev"
+    upload_to_data_warehouse: bool = True
 
 
 class PredictGamesResponse(BaseModel):
@@ -95,8 +96,8 @@ class PredictGamesResponse(BaseModel):
     model_details: Dict[str, Any]
     scoring_parameters: Dict[str, Any]
     output_location: str
-    bigquery_job_id: Optional[str] = None
-    bigquery_table: Optional[str] = None
+    data_warehouse_job_id: Optional[str] = None
+    data_warehouse_table: Optional[str] = None
 
 
 def construct_year_filter(
@@ -118,11 +119,12 @@ def load_game_data(
     start_year: Optional[int] = None, end_year: Optional[int] = None
 ) -> pd.DataFrame:
     """
-    Load game data with optional year filtering.
+    Load game data from data warehouse with optional year filtering.
     """
     config = load_config()
-    bigquery_config = config.get_bigquery_config()
-    loader = BGGDataLoader(bigquery_config)
+    # Use data warehouse config for reading game data
+    data_warehouse_config = config.get_data_warehouse_config()
+    loader = BGGDataLoader(data_warehouse_config)
 
     where_clause = construct_year_filter(start_year, end_year)
     df = loader.load_data(where_clause=where_clause, preprocessor=None)
@@ -347,43 +349,66 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         storage_client = authenticator.get_storage_client()
         bucket = storage_client.bucket(BUCKET_NAME)
 
-        # Construct GCS path for predictions
-        gcs_output_path = f"predictions/{job_id}_predictions.parquet"
+        # Construct GCS path for predictions (with environment prefix)
+        gcs_output_path = f"{ENVIRONMENT_PREFIX}/predictions/{job_id}_predictions.parquet"
         blob = bucket.blob(gcs_output_path)
         blob.upload_from_filename(local_output_path)
 
         # Use GCS path as output location
         output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
 
-        # Upload to BigQuery if requested
-        bigquery_job_id = None
-        bigquery_table = None
-        if request.upload_to_bigquery:
+        # Upload to data warehouse landing table (recommended)
+        data_warehouse_job_id = None
+        data_warehouse_table = None
+        if request.upload_to_data_warehouse:
             try:
-                logger.info(
-                    f"Uploading predictions to BigQuery ({request.bigquery_environment} environment)"
-                )
-                uploader = BigQueryUploader(environment=request.bigquery_environment)
-                bigquery_job_id = uploader.upload_predictions(results, job_id)
+                logger.info("Uploading predictions to data warehouse landing table")
 
-                # Construct table reference using uploader's actual configuration
-                bigquery_table = (
-                    f"{uploader.project_id}.{uploader.dataset_id}.predictions"
+                # Prepare model versions for metadata
+                model_versions = {
+                    "hurdle": hurdle_registration["name"],
+                    "hurdle_version": hurdle_registration["version"],
+                    "complexity": complexity_registration["name"],
+                    "complexity_version": complexity_registration["version"],
+                    "rating": rating_registration["name"],
+                    "rating_version": rating_registration["version"],
+                    "users_rated": users_rated_registration["name"],
+                    "users_rated_version": users_rated_registration["version"],
+                }
+
+                # Prepare predictions DataFrame for data warehouse
+                dw_predictions = results[
+                    [
+                        "game_id",
+                        "name",
+                        "year_published",
+                        "predicted_hurdle_prob",
+                        "predicted_complexity",
+                        "predicted_rating",
+                        "predicted_users_rated",
+                        "predicted_geek_rating",
+                    ]
+                ].copy()
+                dw_predictions = dw_predictions.rename(columns={"name": "game_name"})
+
+                dw_uploader = DataWarehousePredictionUploader()
+                data_warehouse_job_id = dw_uploader.upload_predictions(
+                    dw_predictions, job_id, model_versions=model_versions
                 )
+                data_warehouse_table = dw_uploader.table_id
 
                 logger.info(
-                    f"Successfully uploaded to BigQuery table: {bigquery_table}"
+                    f"Successfully uploaded to data warehouse: {data_warehouse_table}"
                 )
-                logger.info(f"BigQuery job ID: {bigquery_job_id}")
+                logger.info(f"Data warehouse job ID: {data_warehouse_job_id}")
             except Exception as e:
                 import traceback
 
-                logger.error(f"Failed to upload to BigQuery: {str(e)}")
-                logger.error(f"BigQuery error traceback: {traceback.format_exc()}")
-                # Raise HTTP exception to inform the client of BigQuery upload failure
+                logger.error(f"Failed to upload to data warehouse: {str(e)}")
+                logger.error(f"Data warehouse error traceback: {traceback.format_exc()}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to upload predictions to BigQuery: {str(e)}",
+                    detail=f"Failed to upload predictions to data warehouse: {str(e)}",
                 )
 
         # Prepare model details
@@ -422,8 +447,8 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 "prior_weight": request.prior_weight,
             },
             output_location=output_path,
-            bigquery_job_id=bigquery_job_id,
-            bigquery_table=bigquery_table,
+            data_warehouse_job_id=data_warehouse_job_id,
+            data_warehouse_table=data_warehouse_table,
         )
 
         return response

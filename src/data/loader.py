@@ -4,20 +4,32 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import polars as pl
 
-from src.utils.config import BigQueryConfig
+from src.utils.config import BigQueryConfig, DataWarehouseConfig
 
 
 class BGGDataLoader:
-    """Simple loader for BGG data from BigQuery warehouse."""
+    """Simple loader for BGG data from BigQuery data warehouse."""
 
-    def __init__(self, config: BigQueryConfig):
+    def __init__(self, config: Union[DataWarehouseConfig, BigQueryConfig]):
         """Initialize loader.
 
         Args:
-            config: BigQuery configuration
+            config: Data warehouse configuration (or legacy BigQueryConfig for
+                backwards compatibility)
         """
         self.config = config
         self.client = config.get_client()
+
+        # Handle both new DataWarehouseConfig and legacy BigQueryConfig
+        if isinstance(config, DataWarehouseConfig):
+            self.project_id = config.project_id
+            self.dataset = config.features_dataset
+            self.table = config.features_table
+        else:
+            # BigQueryConfig
+            self.project_id = config.project_id
+            self.dataset = config.dataset
+            self.table = config.table
 
     def load_data(
         self,
@@ -40,14 +52,7 @@ class BGGDataLoader:
         """
         # Build query with optional WHERE clause
         query = f"""
-        SELECT 
-            *,
-            CASE WHEN users_rated >= 25 THEN 1 ELSE 0 END as hurdle,
-            bayes_average as geek_rating,
-            average_weight as complexity,
-            average_rating as rating,
-            LN(users_rated + 1) as log_users_rated
-        FROM `{self.config.project_id}.{self.config.dataset}.games_features_materialized`
+        SELECT * FROM `{self.project_id}.{self.dataset}.{self.table}`
         """
 
         # Add year_published IS NOT NULL filter

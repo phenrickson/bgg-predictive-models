@@ -1,29 +1,53 @@
-"""Test the raw data fixture functionality."""
+"""Test the test fixtures functionality."""
 
 from pathlib import Path
+import pandas as pd
 
 
-def test_raw_data_fixture_provides_path(raw_data):
-    """Test that the raw_data fixture provides a valid path."""
-    assert isinstance(raw_data, Path)
-    assert raw_data.exists()
-    assert raw_data.is_dir()
+def test_fixtures_path_provides_directory(test_fixtures_path):
+    """Test that the test_fixtures_path fixture provides a valid directory."""
+    assert isinstance(test_fixtures_path, Path)
+    assert test_fixtures_path.exists()
+    assert test_fixtures_path.is_dir()
 
 
-def test_raw_data_contains_parquet_file(raw_data):
-    """Test that the raw data directory contains the expected parquet file."""
-    parquet_file = raw_data / "game_features.parquet"
-    assert parquet_file.exists()
-    assert parquet_file.is_file()
-    assert parquet_file.suffix == ".parquet"
+def test_sample_games_path_provides_file(sample_games_path):
+    """Test that the sample_games_path fixture provides a valid parquet file."""
+    assert isinstance(sample_games_path, Path)
+    assert sample_games_path.exists()
+    assert sample_games_path.is_file()
+    assert sample_games_path.suffix == ".parquet"
 
 
-def test_raw_data_path_fixture_provides_path(raw_data_path):
-    """Test that the raw_data_path fixture provides a valid path."""
-    assert isinstance(raw_data_path, Path)
-    assert raw_data_path.exists()
-    assert raw_data_path.is_dir()
+def test_sample_games_has_expected_columns(sample_games_path):
+    """Test that the sample games fixture has expected columns for testing."""
+    df = pd.read_parquet(sample_games_path)
 
-    # Verify the expected file exists
-    parquet_file = raw_data_path / "game_features.parquet"
-    assert parquet_file.exists()
+    # Core columns needed for transformers
+    required_columns = [
+        "game_id",
+        "name",
+        "year_published",
+        "min_players",
+        "max_players",
+        "min_playtime",
+        "max_playtime",
+        "min_age",
+        "mechanics",
+        "categories",
+        "designers",
+        "publishers",
+        "description",
+    ]
+
+    for col in required_columns:
+        assert col in df.columns, f"Missing required column: {col}"
+
+
+def test_sample_games_has_reasonable_size(sample_games_path):
+    """Test that the sample games fixture has a reasonable number of rows."""
+    df = pd.read_parquet(sample_games_path)
+    # Should have at least 100 rows for meaningful tests
+    assert len(df) >= 100, f"Sample games has too few rows: {len(df)}"
+    # Should not be too large (we limited to 1000 in generation)
+    assert len(df) <= 2000, f"Sample games has too many rows: {len(df)}"
