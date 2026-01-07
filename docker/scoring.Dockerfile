@@ -21,6 +21,7 @@ RUN pip install uv
 
 # Copy required files
 COPY pyproject.toml .
+COPY uv.lock .
 COPY scoring_service/main.py .
 COPY scoring_service/cloud_experiment_tracker.py .
 COPY scoring_service/registered_model.py .
@@ -37,9 +38,8 @@ COPY credentials/service-account-key.json /app/credentials/
 # Create necessary directories
 RUN mkdir -p data/predictions
 
-# Create virtual environment and install dependencies
-RUN uv venv && \
-    . .venv/bin/activate && uv pip install -e .
+# Create virtual environment and install dependencies using lock file
+RUN uv venv && uv sync
 
 # Set environment variables
 ENV PYTHONPATH=/app
