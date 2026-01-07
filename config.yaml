@@ -10,9 +10,9 @@ data_warehouse:
   features_table: games_features
   features_dataset: analytics
 
-# Predictions Destination (landing table for Dataform processing)
+# Predictions Destination (landing table - Dataform in bgg-data-warehouse consumes this)
 predictions:
-  project_id: bgg-data-warehouse
+  project_id: bgg-predictive-models
   dataset: raw
   table: ml_predictions_landing
 

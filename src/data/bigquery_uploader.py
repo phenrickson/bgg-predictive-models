@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from google.cloud import bigquery
-from google.cloud.exceptions import NotFound
 
 from src.utils.config import load_config, PredictionsDestinationConfig
 
@@ -34,7 +33,11 @@ PREDICTIONS_LANDING_SCHEMA = [
 
 
 class DataWarehousePredictionUploader:
-    """Uploads predictions to bgg-data-warehouse landing table for Dataform processing."""
+    """Uploads predictions to BigQuery landing table for Dataform processing.
+
+    The target table is managed by Terraform in the bgg-predictive-models project.
+    Dataform in bgg-data-warehouse consumes this table.
+    """
 
     def __init__(self, config: Optional[PredictionsDestinationConfig] = None):
         """Initialize uploader for data warehouse predictions.
@@ -54,31 +57,6 @@ class DataWarehousePredictionUploader:
 
         logger.info(f"Initialized DataWarehousePredictionUploader")
         logger.info(f"Target table: {self.table_id}")
-
-    def _ensure_table_exists(self) -> bigquery.Table:
-        """Create the landing table if it doesn't exist."""
-        try:
-            table = self.client.get_table(self.table_id)
-            logger.info(f"Table {self.table_id} already exists")
-            return table
-        except NotFound:
-            logger.info(f"Creating table {self.table_id}")
-
-            table = bigquery.Table(self.table_id, schema=PREDICTIONS_LANDING_SCHEMA)
-            table.description = "Landing table for ML predictions - processed by Dataform"
-
-            # Partition by score_ts for efficient queries
-            table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field="score_ts",
-            )
-
-            # Cluster by game_id for efficient lookups
-            table.clustering_fields = ["game_id"]
-
-            table = self.client.create_table(table)
-            logger.info(f"Created table {self.table_id}")
-            return table
 
     def upload_predictions(
         self,
@@ -105,10 +83,7 @@ class DataWarehousePredictionUploader:
         Returns:
             BigQuery load job ID
         """
-        logger.info(f"Uploading {len(predictions_df)} predictions to data warehouse")
-
-        # Ensure table exists
-        table = self._ensure_table_exists()
+        logger.info(f"Uploading {len(predictions_df)} predictions to {self.table_id}")
 
         # Prepare DataFrame
         df = predictions_df.copy()
@@ -135,7 +110,7 @@ class DataWarehousePredictionUploader:
         )
 
         # Upload
-        load_job = self.client.load_table_from_dataframe(df, table, job_config=job_config)
+        load_job = self.client.load_table_from_dataframe(df, self.table_id, job_config=job_config)
         load_job.result()  # Wait for completion
 
         logger.info(f"Successfully uploaded predictions to {self.table_id}")
