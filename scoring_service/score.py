@@ -197,10 +197,10 @@ def main():
 
     # Data warehouse arguments
     parser.add_argument(
-        "--upload-to-data-warehouse",
+        "--upload-to-bigquery",
         action="store_true",
         default=True,
-        help="Upload predictions to data warehouse (default: True)",
+        help="Upload predictions to BigQuery (default: True)",
     )
     parser.add_argument(
         "--no-upload",
@@ -223,7 +223,7 @@ def main():
     args = parser.parse_args()
 
     # Determine upload setting
-    upload_to_data_warehouse = args.upload_to_data_warehouse and not args.no_upload
+    upload_to_data_warehouse = args.upload_to_bigquery and not args.no_upload
 
     try:
         # Submit scoring request

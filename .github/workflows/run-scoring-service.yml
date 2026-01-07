@@ -6,11 +6,11 @@ on:
       start_year:
         description: 'Start year for predictions'
         required: false
-        default: '2024'
+        default: '2025'
       end_year:
         description: 'End year for predictions'
         required: false
-        default: '2029'
+        default: '2030'
       output_path:
         description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
         required: false
