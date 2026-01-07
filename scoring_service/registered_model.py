@@ -67,10 +67,8 @@ class RegisteredModel(ExperimentTracker):
             self.bucket = self.storage_client.bucket(bucket_name)
             # Include environment prefix in path: {env}/models/registered/{model_type}
             self.base_prefix = f"{environment_prefix}/{base_prefix}/{model_type}"
-
-            # Verify bucket exists and we have access
-            if not self.bucket.exists():
-                raise ValueError(f"Bucket {bucket_name} does not exist")
+            # Note: We don't verify bucket existence here as it requires storage.buckets.get
+            # permission. The bucket access will be validated on first object operation.
 
         except AuthenticationError as e:
             raise ValueError(f"Authentication failed: {str(e)}")

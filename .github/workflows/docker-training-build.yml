@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - 'pyproject.toml'
-      - 'Dockerfile.training'
+      - 'docker/training.Dockerfile'
       - '.github/workflows/docker-training-build.yml'
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: Dockerfile.training
+        file: docker/training.Dockerfile
         push: true
         tags: |
           us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ github.sha }}

@@ -81,16 +81,9 @@ class GCPAuthenticator:
                 # - Cloud Shell credentials
                 # - gcloud user credentials
                 self._storage_client = storage.Client(project=self.project_id)
-
-                # Test authentication by listing buckets (minimal operation)
-                try:
-                    # This will raise an exception if authentication fails
-                    list(self._storage_client.list_buckets(max_results=1))
-                    logger.info(
-                        f"Successfully authenticated to GCP project: {self.project_id}"
-                    )
-                except Exception as e:
-                    raise AuthenticationError(f"Authentication test failed: {str(e)}")
+                logger.info(
+                    f"Created storage client for GCP project: {self.project_id}"
+                )
 
             except Exception as e:
                 logger.error(f"Failed to create authenticated storage client: {str(e)}")
@@ -111,8 +104,9 @@ class GCPAuthenticator:
             client = self.get_storage_client()
             bucket = client.bucket(bucket_name)
 
-            # Test bucket access by checking if it exists and we can read it
-            bucket.reload()
+            # Test bucket access by listing objects (only requires object-level permissions)
+            # This works with roles/storage.objectAdmin without needing storage.buckets.get
+            list(bucket.list_blobs(max_results=1))
             logger.info(f"Successfully verified access to bucket: {bucket_name}")
             return True
 
