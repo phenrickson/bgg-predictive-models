@@ -165,7 +165,49 @@ For detailed migration steps, see [docs/MIGRATION_GCP_PROJECT.md](docs/MIGRATION
 
 ## Version History
 
-### [0.2.1] - Current
+### [0.2.2] - Current
+
+Enhanced scoring service with ad-hoc predictions and automated complexity scoring.
+
+#### Added
+
+- **Ad-hoc Scoring**: Added `game_ids` parameter to all prediction endpoints
+  - `/predict_games`, `/predict_complexity`, `/predict_hurdle`, `/predict_rating`, `/predict_users_rated`
+  - When `game_ids` is provided, predictions are returned directly in the response
+  - No persistence to BigQuery or GCS for ad-hoc requests
+  - Enables quick testing and on-demand scoring of specific games
+- **Individual Model Endpoints**: Dedicated endpoints for each model type
+  - `/predict_complexity` - Scores complexity with change detection and BigQuery persistence
+  - `/predict_hurdle` - Returns hurdle probabilities without persistence
+  - `/predict_rating` - Returns rating predictions without persistence
+  - `/predict_users_rated` - Returns users_rated predictions without persistence
+- **Automated Complexity Scoring**: GitHub Actions workflow for daily complexity predictions
+  - Runs daily at 6 AM UTC via cron schedule
+  - Uses change detection via `game_features_hash` table (maintained in Dataform)
+  - Scores only new games or games with changed features
+  - Uploads predictions to `bgg-predictive-models.raw.complexity_predictions` table
+  - Manual trigger option with model name override
+
+#### Changed
+
+- **Complexity Scoring**: Removed arbitrary `max_games` limit
+  - Scores all games that need predictions based on change detection
+  - No artificial cap on number of games per run
+- **BigQuery Client**: Fixed to use `bgg-data-warehouse` project for game data queries
+  - Ensures proper permissions for cross-project queries
+  - Consistent with data warehouse architecture
+- **Makefile**: Updated Docker configuration
+  - Corrected Dockerfile paths to `docker/` directory
+  - Changed scoring service port from 8080 to 8087 (local development)
+  - Added `GCP_PROJECT_ID` to `.env` for authentication
+
+#### Fixed
+
+- **Response Models**: Made `table_id` optional in prediction response models
+  - Allows endpoints to return `null` when not persisting to BigQuery
+  - Fixes validation errors for ad-hoc scoring requests
+
+### [0.2.1]
 
 Bug fixes and BigQuery schema improvements.
 

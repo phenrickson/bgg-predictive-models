@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
 import logging
 
@@ -89,15 +89,77 @@ class PredictGamesRequest(BaseModel):
     prior_weight: float = 2000
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
     upload_to_data_warehouse: bool = True
+    game_ids: Optional[List[int]] = None
 
 
 class PredictGamesResponse(BaseModel):
     job_id: str
     model_details: Dict[str, Any]
     scoring_parameters: Dict[str, Any]
-    output_location: str
+    output_location: Optional[str] = None
     data_warehouse_job_id: Optional[str] = None
     data_warehouse_table: Optional[str] = None
+    predictions: Optional[List[Dict[str, Any]]] = None
+
+
+class PredictComplexityRequest(BaseModel):
+    complexity_model_name: str
+    complexity_model_version: Optional[int] = None
+    game_ids: Optional[List[int]] = None
+
+
+class PredictComplexityResponse(BaseModel):
+    job_id: str
+    model_details: Dict[str, Any]
+    games_scored: int
+    table_id: Optional[str] = None
+    bq_job_id: Optional[str] = None
+    predictions: Optional[List[Dict[str, Any]]] = None
+
+
+class PredictHurdleRequest(BaseModel):
+    hurdle_model_name: str
+    hurdle_model_version: Optional[int] = None
+    game_ids: Optional[List[int]] = None
+
+
+class PredictHurdleResponse(BaseModel):
+    job_id: str
+    model_details: Dict[str, Any]
+    games_scored: int
+    table_id: Optional[str] = None
+    bq_job_id: Optional[str] = None
+    predictions: Optional[List[Dict[str, Any]]] = None
+
+
+class PredictRatingRequest(BaseModel):
+    rating_model_name: str
+    rating_model_version: Optional[int] = None
+    game_ids: Optional[List[int]] = None
+
+
+class PredictRatingResponse(BaseModel):
+    job_id: str
+    model_details: Dict[str, Any]
+    games_scored: int
+    table_id: Optional[str] = None
+    bq_job_id: Optional[str] = None
+    predictions: Optional[List[Dict[str, Any]]] = None
+
+
+class PredictUsersRatedRequest(BaseModel):
+    users_rated_model_name: str
+    users_rated_model_version: Optional[int] = None
+    game_ids: Optional[List[int]] = None
+
+
+class PredictUsersRatedResponse(BaseModel):
+    job_id: str
+    model_details: Dict[str, Any]
+    games_scored: int
+    table_id: Optional[str] = None
+    bq_job_id: Optional[str] = None
+    predictions: Optional[List[Dict[str, Any]]] = None
 
 
 def construct_year_filter(
@@ -116,17 +178,28 @@ def construct_year_filter(
 
 
 def load_game_data(
-    start_year: Optional[int] = None, end_year: Optional[int] = None
+    start_year: Optional[int] = None,
+    end_year: Optional[int] = None,
+    game_ids: Optional[List[int]] = None
 ) -> pd.DataFrame:
     """
-    Load game data from data warehouse with optional year filtering.
+    Load game data from data warehouse with optional year filtering or game_id filtering.
+
+    If game_ids is provided, it takes precedence over year filtering.
     """
     config = load_config()
     # Use data warehouse config for reading game data
     data_warehouse_config = config.get_data_warehouse_config()
     loader = BGGDataLoader(data_warehouse_config)
 
-    where_clause = construct_year_filter(start_year, end_year)
+    if game_ids:
+        # Filter by specific game IDs
+        game_ids_str = ",".join(str(gid) for gid in game_ids)
+        where_clause = f"game_id IN ({game_ids_str})"
+    else:
+        # Filter by year range
+        where_clause = construct_year_filter(start_year, end_year)
+
     df = loader.load_data(where_clause=where_clause, preprocessor=None)
 
     return df.to_pandas()
@@ -174,6 +247,67 @@ def predict_game_characteristics(
     )
 
     return results
+
+
+def load_games_for_complexity_scoring(
+    game_ids: Optional[List[int]] = None
+) -> pd.DataFrame:
+    """
+    Load games that need complexity predictions.
+
+    If game_ids is provided, load only those games (skip change detection).
+    Otherwise, returns games that are:
+    - New (never scored)
+    - Have changed features (detected via game_features_hash.last_updated)
+    """
+    from google.cloud import bigquery
+
+    # Use data warehouse project for querying game data
+    config = load_config()
+    data_warehouse_config = config.get_data_warehouse_config()
+    bq_client = bigquery.Client(project=data_warehouse_config.project_id)
+
+    if game_ids:
+        # Load specific games by ID (skip change detection)
+        game_ids_str = ",".join(str(gid) for gid in game_ids)
+        query = f"""
+        SELECT gf.*
+        FROM `bgg-data-warehouse.analytics.games_features` gf
+        WHERE gf.game_id IN ({game_ids_str})
+          AND gf.year_published IS NOT NULL
+        """
+        logger.info(f"Querying {len(game_ids)} specific games for complexity predictions...")
+    else:
+        # Use change detection logic for incremental scoring
+        query = """
+        WITH latest_predictions AS (
+          SELECT
+            game_id,
+            score_ts,
+            ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
+          FROM `bgg-predictive-models.raw.complexity_predictions`
+        )
+        SELECT
+          gf.*
+        FROM `bgg-data-warehouse.analytics.games_features` gf
+        LEFT JOIN `bgg-data-warehouse.staging.game_features_hash` fh
+          ON gf.game_id = fh.game_id
+        LEFT JOIN latest_predictions lp
+          ON gf.game_id = lp.game_id AND lp.rn = 1
+        WHERE
+          gf.year_published IS NOT NULL
+          AND (
+            lp.game_id IS NULL
+            OR fh.last_updated > lp.score_ts
+          )
+        """
+        logger.info("Querying games needing complexity predictions...")
+
+    query_job = bq_client.query(query)
+    df = query_job.result().to_dataframe()
+    logger.info(f"Found {len(df)} games to score")
+
+    return df
 
 
 app = FastAPI(title="BGG Model Scoring Service")
@@ -285,7 +419,9 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         threshold = hurdle_registration.get("metadata", {}).get("threshold", 0.5)
 
         # Load game data
-        df_pandas = load_game_data(request.start_year, request.end_year)
+        df_pandas = load_game_data(
+            request.start_year, request.end_year, game_ids=request.game_ids
+        )
 
         # Predict hurdle probabilities
         predicted_hurdle_prob = predict_hurdle_probabilities(
@@ -341,78 +477,86 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         # Add timestamp of scoring
         results["score_ts"] = datetime.now(timezone.utc).isoformat()
 
-        # Save predictions locally
-        local_output_path = request.output_path or f"/tmp/{job_id}_predictions.parquet"
-        results.to_parquet(local_output_path, index=False)
+        # When game_ids is provided, skip uploads and return predictions
+        if request.game_ids:
+            output_path = None
+            data_warehouse_job_id = None
+            data_warehouse_table = None
+            predictions_list = results.to_dict(orient="records")
+        else:
+            # Save predictions locally
+            local_output_path = request.output_path or f"/tmp/{job_id}_predictions.parquet"
+            results.to_parquet(local_output_path, index=False)
 
-        # Upload predictions to Google Cloud Storage
-        storage_client = authenticator.get_storage_client()
-        bucket = storage_client.bucket(BUCKET_NAME)
+            # Upload predictions to Google Cloud Storage
+            storage_client = authenticator.get_storage_client()
+            bucket = storage_client.bucket(BUCKET_NAME)
 
-        # Construct GCS path for predictions (with environment prefix)
-        gcs_output_path = f"{ENVIRONMENT_PREFIX}/predictions/{job_id}_predictions.parquet"
-        blob = bucket.blob(gcs_output_path)
-        blob.upload_from_filename(local_output_path)
+            # Construct GCS path for predictions (with environment prefix)
+            gcs_output_path = f"{ENVIRONMENT_PREFIX}/predictions/{job_id}_predictions.parquet"
+            blob = bucket.blob(gcs_output_path)
+            blob.upload_from_filename(local_output_path)
 
-        # Use GCS path as output location
-        output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
+            # Use GCS path as output location
+            output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
 
-        # Upload to data warehouse landing table (recommended)
-        data_warehouse_job_id = None
-        data_warehouse_table = None
-        if request.upload_to_data_warehouse:
-            try:
-                logger.info("Uploading predictions to data warehouse landing table")
+            # Upload to data warehouse landing table (recommended)
+            data_warehouse_job_id = None
+            data_warehouse_table = None
+            predictions_list = None
+            if request.upload_to_data_warehouse:
+                try:
+                    logger.info("Uploading predictions to data warehouse landing table")
 
-                # Prepare model versions for metadata
-                model_versions = {
-                    "hurdle": hurdle_registration["name"],
-                    "hurdle_version": hurdle_registration["version"],
-                    "hurdle_experiment": hurdle_registration["original_experiment"]["name"],
-                    "complexity": complexity_registration["name"],
-                    "complexity_version": complexity_registration["version"],
-                    "complexity_experiment": complexity_registration["original_experiment"]["name"],
-                    "rating": rating_registration["name"],
-                    "rating_version": rating_registration["version"],
-                    "rating_experiment": rating_registration["original_experiment"]["name"],
-                    "users_rated": users_rated_registration["name"],
-                    "users_rated_version": users_rated_registration["version"],
-                    "users_rated_experiment": users_rated_registration["original_experiment"]["name"],
-                }
+                    # Prepare model versions for metadata
+                    model_versions = {
+                        "hurdle": hurdle_registration["name"],
+                        "hurdle_version": hurdle_registration["version"],
+                        "hurdle_experiment": hurdle_registration["original_experiment"]["name"],
+                        "complexity": complexity_registration["name"],
+                        "complexity_version": complexity_registration["version"],
+                        "complexity_experiment": complexity_registration["original_experiment"]["name"],
+                        "rating": rating_registration["name"],
+                        "rating_version": rating_registration["version"],
+                        "rating_experiment": rating_registration["original_experiment"]["name"],
+                        "users_rated": users_rated_registration["name"],
+                        "users_rated_version": users_rated_registration["version"],
+                        "users_rated_experiment": users_rated_registration["original_experiment"]["name"],
+                    }
 
-                # Prepare predictions DataFrame for data warehouse
-                dw_predictions = results[
-                    [
-                        "game_id",
-                        "name",
-                        "year_published",
-                        "predicted_hurdle_prob",
-                        "predicted_complexity",
-                        "predicted_rating",
-                        "predicted_users_rated",
-                        "predicted_geek_rating",
-                    ]
-                ].copy()
+                    # Prepare predictions DataFrame for data warehouse
+                    dw_predictions = results[
+                        [
+                            "game_id",
+                            "name",
+                            "year_published",
+                            "predicted_hurdle_prob",
+                            "predicted_complexity",
+                            "predicted_rating",
+                            "predicted_users_rated",
+                            "predicted_geek_rating",
+                        ]
+                    ].copy()
 
-                dw_uploader = DataWarehousePredictionUploader()
-                data_warehouse_job_id = dw_uploader.upload_predictions(
-                    dw_predictions, job_id, model_versions=model_versions
-                )
-                data_warehouse_table = dw_uploader.table_id
+                    dw_uploader = DataWarehousePredictionUploader()
+                    data_warehouse_job_id = dw_uploader.upload_predictions(
+                        dw_predictions, job_id, model_versions=model_versions
+                    )
+                    data_warehouse_table = dw_uploader.table_id
 
-                logger.info(
-                    f"Successfully uploaded to data warehouse: {data_warehouse_table}"
-                )
-                logger.info(f"Data warehouse job ID: {data_warehouse_job_id}")
-            except Exception as e:
-                import traceback
+                    logger.info(
+                        f"Successfully uploaded to data warehouse: {data_warehouse_table}"
+                    )
+                    logger.info(f"Data warehouse job ID: {data_warehouse_job_id}")
+                except Exception as e:
+                    import traceback
 
-                logger.error(f"Failed to upload to data warehouse: {str(e)}")
-                logger.error(f"Data warehouse error traceback: {traceback.format_exc()}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to upload predictions to data warehouse: {str(e)}",
-                )
+                    logger.error(f"Failed to upload to data warehouse: {str(e)}")
+                    logger.error(f"Data warehouse error traceback: {traceback.format_exc()}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to upload predictions to data warehouse: {str(e)}",
+                    )
 
         # Prepare model details
         model_details = {
@@ -452,6 +596,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             output_location=output_path,
             data_warehouse_job_id=data_warehouse_job_id,
             data_warehouse_table=data_warehouse_table,
+            predictions=predictions_list,
         )
 
         return response
@@ -460,6 +605,291 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         import traceback
 
         logger.error(f"Error during prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict_complexity", response_model=PredictComplexityResponse)
+async def predict_complexity_endpoint(request: PredictComplexityRequest):
+    """
+    Predict complexity for games that need scoring (new/changed/stale).
+    """
+    try:
+        from google.cloud import bigquery
+
+        job_id = str(uuid.uuid4())
+
+        # Load registered complexity model
+        registered_complexity = RegisteredModel(
+            "complexity", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        complexity_pipeline, complexity_registration = (
+            registered_complexity.load_registered_model(
+                request.complexity_model_name,
+                request.complexity_model_version
+            )
+        )
+
+        # Load games needing predictions
+        games_df = load_games_for_complexity_scoring(
+            game_ids=request.game_ids
+        )
+
+        if len(games_df) == 0:
+            logger.info("No games need complexity predictions")
+            return PredictComplexityResponse(
+                job_id=job_id,
+                model_details={
+                    "name": complexity_registration["name"],
+                    "version": complexity_registration["version"],
+                    "experiment": complexity_registration["original_experiment"]["name"],
+                },
+                games_scored=0,
+                table_id="bgg-predictive-models.raw.complexity_predictions" if not request.game_ids else None,
+                bq_job_id=None,
+                predictions=None
+            )
+
+        logger.info(f"Scoring complexity for {len(games_df)} games")
+
+        # Score complexity
+        predictions = complexity_pipeline.predict(games_df)
+        predictions = np.clip(predictions, 1, 5)
+
+        # Build results DataFrame
+        results = pd.DataFrame({
+            "game_id": games_df["game_id"],
+            "name": games_df["name"],
+            "year_published": games_df["year_published"],
+            "predicted_complexity": predictions,
+            "complexity_model_name": complexity_registration["name"],
+            "complexity_model_version": complexity_registration["version"],
+            "complexity_experiment": complexity_registration["original_experiment"]["name"],
+            "score_ts": datetime.now(timezone.utc),
+            "job_id": job_id
+        })
+
+        # When game_ids is provided, skip BigQuery upload and return predictions
+        if request.game_ids:
+            predictions_list = results.to_dict(orient="records")
+            table_id = None
+            bq_job_id = None
+            logger.info(f"Scored {len(results)} games (no upload for game_ids mode)")
+        else:
+            # Upload to BigQuery
+            bq_client = bigquery.Client(project=GCP_PROJECT_ID)
+            table_id = "bgg-predictive-models.raw.complexity_predictions"
+
+            job_config = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            )
+
+            load_job = bq_client.load_table_from_dataframe(
+                results, table_id, job_config=job_config
+            )
+            load_job.result()  # Wait for completion
+
+            logger.info(f"Uploaded {len(results)} predictions to {table_id}")
+            predictions_list = None
+            bq_job_id = load_job.job_id
+
+        return PredictComplexityResponse(
+            job_id=job_id,
+            model_details={
+                "name": complexity_registration["name"],
+                "version": complexity_registration["version"],
+                "experiment": complexity_registration["original_experiment"]["name"],
+            },
+            games_scored=len(results),
+            table_id=table_id,
+            bq_job_id=bq_job_id,
+            predictions=predictions_list
+        )
+
+    except Exception as e:
+        import traceback
+
+        logger.error(f"Error in complexity prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict_hurdle", response_model=PredictHurdleResponse)
+async def predict_hurdle_endpoint(request: PredictHurdleRequest):
+    """
+    Predict hurdle probabilities for games (returns predictions without persisting).
+    """
+    try:
+        job_id = str(uuid.uuid4())
+
+        # Load registered hurdle model
+        registered_hurdle = RegisteredModel(
+            "hurdle", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        hurdle_pipeline, hurdle_registration = (
+            registered_hurdle.load_registered_model(
+                request.hurdle_model_name,
+                request.hurdle_model_version
+            )
+        )
+
+        # Load all games from games_features
+        games_df = load_game_data(game_ids=request.game_ids)
+        logger.info(f"Scoring hurdle for {len(games_df)} games")
+
+        # Score hurdle probabilities
+        predictions = hurdle_pipeline.predict_proba(games_df)[:, 1]
+
+        # Build results DataFrame
+        results = pd.DataFrame({
+            "game_id": games_df["game_id"],
+            "name": games_df["name"],
+            "year_published": games_df["year_published"],
+            "predicted_hurdle_prob": predictions,
+        })
+
+        logger.info(f"Scored {len(games_df)} games")
+
+        predictions_list = results.to_dict(orient="records")
+
+        return PredictHurdleResponse(
+            job_id=job_id,
+            model_details={
+                "name": hurdle_registration["name"],
+                "version": hurdle_registration["version"],
+                "experiment": hurdle_registration["original_experiment"]["name"],
+            },
+            games_scored=len(games_df),
+            table_id=None,
+            bq_job_id=None,
+            predictions=predictions_list
+        )
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error in hurdle prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict_rating", response_model=PredictRatingResponse)
+async def predict_rating_endpoint(request: PredictRatingRequest):
+    """
+    Predict ratings for games (returns predictions without persisting).
+    """
+    try:
+        job_id = str(uuid.uuid4())
+
+        # Load registered rating model
+        registered_rating = RegisteredModel(
+            "rating", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        rating_pipeline, rating_registration = (
+            registered_rating.load_registered_model(
+                request.rating_model_name,
+                request.rating_model_version
+            )
+        )
+
+        # Load all games from games_features
+        games_df = load_game_data(game_ids=request.game_ids)
+        logger.info(f"Scoring rating for {len(games_df)} games")
+
+        # Score ratings
+        predictions = rating_pipeline.predict(games_df)
+
+        # Build results DataFrame
+        results = pd.DataFrame({
+            "game_id": games_df["game_id"],
+            "name": games_df["name"],
+            "year_published": games_df["year_published"],
+            "predicted_rating": predictions,
+        })
+
+        logger.info(f"Scored {len(games_df)} games")
+
+        predictions_list = results.to_dict(orient="records")
+
+        return PredictRatingResponse(
+            job_id=job_id,
+            model_details={
+                "name": rating_registration["name"],
+                "version": rating_registration["version"],
+                "experiment": rating_registration["original_experiment"]["name"],
+            },
+            games_scored=len(games_df),
+            table_id=None,
+            bq_job_id=None,
+            predictions=predictions_list
+        )
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error in rating prediction: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict_users_rated", response_model=PredictUsersRatedResponse)
+async def predict_users_rated_endpoint(request: PredictUsersRatedRequest):
+    """
+    Predict users_rated for games (returns predictions without persisting).
+    """
+    try:
+        job_id = str(uuid.uuid4())
+
+        # Load registered users_rated model
+        registered_users_rated = RegisteredModel(
+            "users_rated", BUCKET_NAME, project_id=GCP_PROJECT_ID
+        )
+        users_rated_pipeline, users_rated_registration = (
+            registered_users_rated.load_registered_model(
+                request.users_rated_model_name,
+                request.users_rated_model_version
+            )
+        )
+
+        # Load all games from games_features
+        games_df = load_game_data(game_ids=request.game_ids)
+        logger.info(f"Scoring users_rated for {len(games_df)} games")
+
+        # Score users_rated
+        predictions = users_rated_pipeline.predict(games_df)
+
+        # Apply transformation
+        predictions = np.maximum(
+            np.round(np.expm1(predictions) / 50) * 50,
+            25,
+        )
+
+        # Build results DataFrame
+        results = pd.DataFrame({
+            "game_id": games_df["game_id"],
+            "name": games_df["name"],
+            "year_published": games_df["year_published"],
+            "predicted_users_rated": predictions,
+        })
+
+        logger.info(f"Scored {len(games_df)} games")
+
+        predictions_list = results.to_dict(orient="records")
+
+        return PredictUsersRatedResponse(
+            job_id=job_id,
+            model_details={
+                "name": users_rated_registration["name"],
+                "version": users_rated_registration["version"],
+                "experiment": users_rated_registration["original_experiment"]["name"],
+            },
+            games_scored=len(games_df),
+            table_id=None,
+            bq_job_id=None,
+            predictions=predictions_list
+        )
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error in users_rated prediction: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 

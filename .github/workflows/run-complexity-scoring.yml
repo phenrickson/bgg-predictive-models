@@ -1,0 +1,92 @@
+name: Score Complexity Predictions
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC (before main scoring at 7 AM)
+
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Model name to use'
+        required: false
+        default: 'complexity-v2026'
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  score-complexity:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set Environment Variables
+      id: env
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_name=prod" >> $GITHUB_OUTPUT
+        else
+          echo "env_name=dev" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Get Service URL
+      id: get-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe bgg-model-scoring \
+          --region us-central1 \
+          --format 'value(status.url)')
+        echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Get ID Token
+      id: id-token
+      run: |
+        ID_TOKEN=$(gcloud auth print-identity-token)
+        echo "::add-mask::$ID_TOKEN"
+        echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
+
+    - name: Call Complexity Scoring Endpoint
+      id: score
+      run: |
+        RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/predict_complexity" \
+          -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "complexity_model_name": "${{ github.event.inputs.model_name || 'complexity-v2026' }}"
+          }' \
+          -w "\n%{http_code}" \
+          -s)
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | head -n-1)
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Error: HTTP $HTTP_CODE"
+          echo "$BODY"
+          exit 1
+        fi
+
+        echo "$BODY" | jq '.'
+        GAMES_SCORED=$(echo "$BODY" | jq -r '.games_scored')
+        echo "games_scored=$GAMES_SCORED" >> $GITHUB_OUTPUT
+
+    - name: Job Summary
+      run: |
+        echo "## Complexity Scoring Results" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Model**: ${{ github.event.inputs.model_name || 'complexity-v2026' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Games Scored**: ${{ steps.score.outputs.games_scored }}" >> $GITHUB_STEP_SUMMARY
