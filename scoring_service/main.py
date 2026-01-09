@@ -7,8 +7,10 @@ import logging
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from google.cloud import bigquery
 
 import sys
 
@@ -260,54 +262,42 @@ def load_games_for_complexity_scoring(
     - New (never scored)
     - Have changed features (detected via game_features_hash.last_updated)
     """
-    from google.cloud import bigquery
-
-    # Use data warehouse project for querying game data
-    config = load_config()
-    data_warehouse_config = config.get_data_warehouse_config()
-    bq_client = bigquery.Client(project=data_warehouse_config.project_id)
-
     if game_ids:
-        # Load specific games by ID (skip change detection)
-        game_ids_str = ",".join(str(gid) for gid in game_ids)
-        query = f"""
-        SELECT gf.*
-        FROM `bgg-data-warehouse.analytics.games_features` gf
-        WHERE gf.game_id IN ({game_ids_str})
-          AND gf.year_published IS NOT NULL
-        """
-        logger.info(f"Querying {len(game_ids)} specific games for complexity predictions...")
+        # Load specific games by ID using existing helper
+        logger.info(f"Loading {len(game_ids)} specific games for complexity predictions...")
+        return load_game_data(game_ids=game_ids)
     else:
-        # Use change detection logic for incremental scoring
-        query = """
-        WITH latest_predictions AS (
-          SELECT
-            game_id,
-            score_ts,
-            ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
-          FROM `bgg-predictive-models.raw.complexity_predictions`
+        # Use change detection logic with BGGDataLoader
+        logger.info("Loading games needing complexity predictions...")
+        config = load_config()
+        data_warehouse_config = config.get_data_warehouse_config()
+        loader = BGGDataLoader(data_warehouse_config)
+
+        where_clause = """
+        game_id IN (
+          SELECT gf.game_id
+          FROM `bgg-data-warehouse.analytics.games_features` gf
+          LEFT JOIN `bgg-data-warehouse.staging.game_features_hash` fh
+            ON gf.game_id = fh.game_id
+          LEFT JOIN (
+            SELECT
+              game_id,
+              score_ts,
+              ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
+            FROM `bgg-predictive-models.raw.complexity_predictions`
+          ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
+          WHERE
+            gf.year_published IS NOT NULL
+            AND (
+              lp.game_id IS NULL
+              OR fh.last_updated > lp.score_ts
+            )
         )
-        SELECT
-          gf.*
-        FROM `bgg-data-warehouse.analytics.games_features` gf
-        LEFT JOIN `bgg-data-warehouse.staging.game_features_hash` fh
-          ON gf.game_id = fh.game_id
-        LEFT JOIN latest_predictions lp
-          ON gf.game_id = lp.game_id AND lp.rn = 1
-        WHERE
-          gf.year_published IS NOT NULL
-          AND (
-            lp.game_id IS NULL
-            OR fh.last_updated > lp.score_ts
-          )
         """
-        logger.info("Querying games needing complexity predictions...")
 
-    query_job = bq_client.query(query)
-    df = query_job.result().to_dataframe()
-    logger.info(f"Found {len(df)} games to score")
-
-    return df
+        df = loader.load_data(where_clause=where_clause, preprocessor=None)
+        logger.info(f"Found {len(df)} games to score")
+        return df.to_pandas()
 
 
 app = FastAPI(title="BGG Model Scoring Service")
