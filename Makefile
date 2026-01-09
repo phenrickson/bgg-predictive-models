@@ -330,7 +330,7 @@ download-experiments:
 # dockerfile training locally
 .PHONY: docker-training docker-scoring scoring-service
 docker-training:
-	docker build -f Dockerfile.training -t bgg-training:test . \
+	docker build -f docker/training.Dockerfile -t bgg-training:test . \
 	&& docker run -it \
 	--env-file .env \
 	bgg-training:test python -c "import os; print('Environment Variables:'); print(f'GCP_PROJECT_ID: {os.getenv(\"GCP_PROJECT_ID\")}'); print(f'GCS_BUCKET_NAME: {os.getenv(\"GCS_BUCKET_NAME\")}')"
@@ -338,11 +338,11 @@ docker-training:
 
 # run scoring service with credentials mounted
 docker-scoring:
-	docker build -f Dockerfile.scoring -t bgg-scoring-service . \
-	
+	docker build -f docker/scoring.Dockerfile -t bgg-scoring-service .
+
 start-scoring:
 	docker run -d \
-	-p 8080:8080 \
+	-p 8087:8080 \
 	-v $(PWD)/credentials:/app/credentials \
 	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
 	--env-file .env \
@@ -385,7 +385,7 @@ scoring-service-upload:
 .PHONY: streamlit-build streamlit-run streamlit-stop
 
 streamlit-build:  ## Build Streamlit Docker image
-	docker build -f Dockerfile.streamlit -t bgg-streamlit:test .
+	docker build -f docker/streamlit.Dockerfile -t bgg-streamlit:test .
 
 streamlit-run:  ## Run Streamlit Docker container
 	docker run -d \
