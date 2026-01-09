@@ -62,6 +62,17 @@ resource "google_bigquery_dataset_iam_member" "workload_dw_raw_write" {
 }
 
 # -----------------------------------------------------------------------------
+# Incoming Cross-Project Access (from data warehouse to this project)
+# -----------------------------------------------------------------------------
+
+# Grant bgg-data-warehouse Dataform service agent read access to BigQuery
+resource "google_project_iam_member" "datawarehouse_dataform_bigquery_reader" {
+  project = var.project_id
+  role    = "roles/bigquery.dataViewer"
+  member  = "serviceAccount:service-668088964150@gcp-sa-dataform.iam.gserviceaccount.com"
+}
+
+# -----------------------------------------------------------------------------
 # Terraform Admin SA permissions (created manually, permissions managed here)
 # -----------------------------------------------------------------------------
 
