@@ -368,12 +368,16 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 model_versions = {
                     "hurdle": hurdle_registration["name"],
                     "hurdle_version": hurdle_registration["version"],
+                    "hurdle_experiment": hurdle_registration["original_experiment"]["name"],
                     "complexity": complexity_registration["name"],
                     "complexity_version": complexity_registration["version"],
+                    "complexity_experiment": complexity_registration["original_experiment"]["name"],
                     "rating": rating_registration["name"],
                     "rating_version": rating_registration["version"],
+                    "rating_experiment": rating_registration["original_experiment"]["name"],
                     "users_rated": users_rated_registration["name"],
                     "users_rated_version": users_rated_registration["version"],
+                    "users_rated_experiment": users_rated_registration["original_experiment"]["name"],
                 }
 
                 # Prepare predictions DataFrame for data warehouse

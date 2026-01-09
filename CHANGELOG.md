@@ -165,7 +165,27 @@ For detailed migration steps, see [docs/MIGRATION_GCP_PROJECT.md](docs/MIGRATION
 
 ## Version History
 
-### [0.2.0] - Current
+### [0.2.1] - Current
+
+Bug fixes and BigQuery schema improvements.
+
+#### Fixed
+
+- **Scoring Service Docker**: Fixed sklearn version compatibility issue by using lock file (`uv.lock`) instead of resolving dependencies fresh
+  - Ensures scoring service uses same sklearn version (1.7.0) as training environment
+  - Prevents model loading failures due to pickle incompatibility between sklearn versions
+- **Environment Configuration**: Improved environment variable handling in Cloud Run deployment
+
+#### Changed
+
+- **BigQuery Schema**: Restructured `ml_predictions_landing` table to use separate columns for model metadata instead of single JSON column
+  - Added individual columns for each model: `{model}_model_name`, `{model}_model_version`, `{model}_experiment`
+  - Improved queryability and compatibility with BigQuery's native types
+  - Models tracked: hurdle, complexity, rating, users_rated, geek_rating
+  - `geek_rating_model_name` defaults to "computed" (future-proofing for dedicated model)
+- **Model Metadata**: Enhanced model version tracking to include experiment names alongside model names and versions
+
+### [0.2.0]
 
 Two-project GCP architecture with Terraform-managed infrastructure.
 

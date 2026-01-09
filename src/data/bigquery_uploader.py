@@ -26,7 +26,21 @@ PREDICTIONS_LANDING_SCHEMA = [
     bigquery.SchemaField("predicted_rating", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("predicted_users_rated", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("predicted_geek_rating", "FLOAT", mode="NULLABLE"),
-    bigquery.SchemaField("model_versions", "JSON", mode="NULLABLE"),
+    bigquery.SchemaField("geek_rating_model_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("geek_rating_model_version", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("geek_rating_experiment", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("hurdle_model_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("hurdle_model_version", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("hurdle_experiment", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("complexity_model_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("complexity_model_version", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("complexity_experiment", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("rating_model_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("rating_model_version", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("rating_experiment", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("users_rated_model_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("users_rated_model_version", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("users_rated_experiment", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("score_ts", "TIMESTAMP", mode="REQUIRED"),
     bigquery.SchemaField("source_environment", "STRING", mode="NULLABLE"),
 ]
@@ -93,11 +107,39 @@ class DataWarehousePredictionUploader:
         df["score_ts"] = datetime.utcnow()
         df["source_environment"] = self.environment
 
-        # Add model versions as JSON
+        # Add model version columns
         if model_versions:
-            df["model_versions"] = json.dumps(model_versions)
+            df["geek_rating_model_name"] = model_versions.get("geek_rating", "computed")
+            df["geek_rating_model_version"] = model_versions.get("geek_rating_version")
+            df["geek_rating_experiment"] = model_versions.get("geek_rating_experiment")
+            df["hurdle_model_name"] = model_versions.get("hurdle")
+            df["hurdle_model_version"] = model_versions.get("hurdle_version")
+            df["hurdle_experiment"] = model_versions.get("hurdle_experiment")
+            df["complexity_model_name"] = model_versions.get("complexity")
+            df["complexity_model_version"] = model_versions.get("complexity_version")
+            df["complexity_experiment"] = model_versions.get("complexity_experiment")
+            df["rating_model_name"] = model_versions.get("rating")
+            df["rating_model_version"] = model_versions.get("rating_version")
+            df["rating_experiment"] = model_versions.get("rating_experiment")
+            df["users_rated_model_name"] = model_versions.get("users_rated")
+            df["users_rated_model_version"] = model_versions.get("users_rated_version")
+            df["users_rated_experiment"] = model_versions.get("users_rated_experiment")
         else:
-            df["model_versions"] = None
+            df["geek_rating_model_name"] = "computed"
+            df["geek_rating_model_version"] = None
+            df["geek_rating_experiment"] = None
+            df["hurdle_model_name"] = None
+            df["hurdle_model_version"] = None
+            df["hurdle_experiment"] = None
+            df["complexity_model_name"] = None
+            df["complexity_model_version"] = None
+            df["complexity_experiment"] = None
+            df["rating_model_name"] = None
+            df["rating_model_version"] = None
+            df["rating_experiment"] = None
+            df["users_rated_model_name"] = None
+            df["users_rated_model_version"] = None
+            df["users_rated_experiment"] = None
 
         # Ensure game_id is integer
         if "game_id" in df.columns:

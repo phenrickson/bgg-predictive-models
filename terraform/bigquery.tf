@@ -77,8 +77,78 @@ resource "google_bigquery_table" "ml_predictions_landing" {
       mode = "NULLABLE"
     },
     {
-      name = "model_versions"
-      type = "JSON"
+      name = "geek_rating_model_name"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "geek_rating_model_version"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "geek_rating_experiment"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "hurdle_model_name"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "hurdle_model_version"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "hurdle_experiment"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "complexity_model_name"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "complexity_model_version"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "complexity_experiment"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "rating_model_name"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "rating_model_version"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "rating_experiment"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "users_rated_model_name"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "users_rated_model_version"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "users_rated_experiment"
+      type = "STRING"
       mode = "NULLABLE"
     },
     {

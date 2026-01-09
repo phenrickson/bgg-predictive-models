@@ -1,6 +1,6 @@
 [project]
 name = "bgg-predictive-models"
-version = "0.2.0"
+version = "0.2.1"
 description = "Predictive models for board games using various machine learning techniques."
 readme = "README.md"
 requires-python = ">=3.12"
