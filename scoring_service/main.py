@@ -107,6 +107,7 @@ class PredictGamesResponse(BaseModel):
 class PredictComplexityRequest(BaseModel):
     complexity_model_name: str
     complexity_model_version: Optional[int] = None
+    max_games: int = 25000
     game_ids: Optional[List[int]] = None
 
 
@@ -252,7 +253,8 @@ def predict_game_characteristics(
 
 
 def load_games_for_complexity_scoring(
-    game_ids: Optional[List[int]] = None
+    game_ids: Optional[List[int]] = None,
+    max_games: int = 25000
 ) -> pd.DataFrame:
     """
     Load games that need complexity predictions.
@@ -261,6 +263,10 @@ def load_games_for_complexity_scoring(
     Otherwise, returns games that are:
     - New (never scored)
     - Have changed features (detected via game_features_hash.last_updated)
+
+    Args:
+        game_ids: Optional list of specific game IDs to load
+        max_games: Maximum number of games to load (default: 25000)
     """
     if game_ids:
         # Load specific games by ID using existing helper
@@ -268,12 +274,12 @@ def load_games_for_complexity_scoring(
         return load_game_data(game_ids=game_ids)
     else:
         # Use change detection logic with BGGDataLoader
-        logger.info("Loading games needing complexity predictions...")
+        logger.info(f"Loading up to {max_games} games needing complexity predictions...")
         config = load_config()
         data_warehouse_config = config.get_data_warehouse_config()
         loader = BGGDataLoader(data_warehouse_config)
 
-        where_clause = """
+        where_clause = f"""
         game_id IN (
           SELECT gf.game_id
           FROM `bgg-data-warehouse.analytics.games_features` gf
@@ -292,6 +298,7 @@ def load_games_for_complexity_scoring(
               lp.game_id IS NULL
               OR fh.last_updated > lp.score_ts
             )
+          LIMIT {max_games}
         )
         """
 
@@ -622,7 +629,8 @@ async def predict_complexity_endpoint(request: PredictComplexityRequest):
 
         # Load games needing predictions
         games_df = load_games_for_complexity_scoring(
-            game_ids=request.game_ids
+            game_ids=request.game_ids,
+            max_games=request.max_games
         )
 
         if len(games_df) == 0:
