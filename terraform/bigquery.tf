@@ -48,7 +48,7 @@ resource "google_bigquery_table" "ml_predictions_landing" {
     },
     {
       name = "year_published"
-      type = "INTEGER"
+      type = "FLOAT"
       mode = "NULLABLE"
     },
     {
