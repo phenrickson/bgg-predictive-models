@@ -42,7 +42,7 @@ resource "google_bigquery_table" "ml_predictions_landing" {
       mode = "REQUIRED"
     },
     {
-      name = "game_name"
+      name = "name"
       type = "STRING"
       mode = "NULLABLE"
     },

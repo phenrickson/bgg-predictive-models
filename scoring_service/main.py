@@ -393,7 +393,6 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                         "predicted_geek_rating",
                     ]
                 ].copy()
-                dw_predictions = dw_predictions.rename(columns={"name": "game_name"})
 
                 dw_uploader = DataWarehousePredictionUploader()
                 data_warehouse_job_id = dw_uploader.upload_predictions(

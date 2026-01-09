@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 PREDICTIONS_LANDING_SCHEMA = [
     bigquery.SchemaField("job_id", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("game_id", "INTEGER", mode="REQUIRED"),
-    bigquery.SchemaField("game_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("name", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("year_published", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("predicted_hurdle_prob", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("predicted_complexity", "FLOAT", mode="NULLABLE"),
@@ -83,7 +83,7 @@ class DataWarehousePredictionUploader:
         Args:
             predictions_df: DataFrame containing predictions with columns:
                 - game_id (required)
-                - game_name (optional)
+                - name (optional)
                 - year_published (optional)
                 - predicted_hurdle_prob (optional)
                 - predicted_complexity (optional)
