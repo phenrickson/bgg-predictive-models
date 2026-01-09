@@ -17,7 +17,7 @@ on:
       action:
         description: 'Terraform action'
         required: true
-        default: 'plan'
+        default: 'apply'
         type: choice
         options:
           - plan
@@ -62,6 +62,8 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "action=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "action=apply" >> $GITHUB_OUTPUT
           else
             echo "action=plan" >> $GITHUB_OUTPUT
           fi
