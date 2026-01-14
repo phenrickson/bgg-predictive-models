@@ -34,6 +34,13 @@ resource "google_storage_bucket_iam_member" "workload_storage" {
   member = "serviceAccount:${google_service_account.workload.email}"
 }
 
+# Bucket-level read access (needed for storage.buckets.get in sync scripts)
+resource "google_storage_bucket_iam_member" "workload_storage_bucket_reader" {
+  bucket = google_storage_bucket.models.name
+  role   = "roles/storage.legacyBucketReader"
+  member = "serviceAccount:${google_service_account.workload.email}"
+}
+
 # CROSS-PROJECT: Read access to data warehouse BigQuery
 resource "google_project_iam_member" "workload_dw_viewer" {
   project = var.data_warehouse_project_id

@@ -319,13 +319,20 @@ clean-data:
 		print('Subfolders deleted.' if confirm == 'y' and dirs else 'Aborted.' if dirs else 'No subfolders found.')"
 
 # upload experiments to Google Cloud Storage
+# Use ENVIRONMENT=prod or ENVIRONMENT=dev to specify, or ENVIRONMENT=auto to detect from git branch
 .PHONY: upload_experiments
 upload-experiments:
-	uv run -m src.utils.sync_experiments --create-bucket
+	uv run -m src.utils.sync_experiments --create-bucket $(if $(ENVIRONMENT),--environment $(ENVIRONMENT),)
 
 .PHONY: download_experiments
 download-experiments:
-	uv run -m src.utils.sync_experiments --download
+	uv run -m src.utils.sync_experiments --download $(if $(ENVIRONMENT),--environment $(ENVIRONMENT),)
+
+# Setup git hooks for automatic experiment syncing
+.PHONY: setup-hooks
+setup-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks configured to use .githooks directory"
 
 # dockerfile training locally
 .PHONY: docker-training docker-scoring scoring-service
