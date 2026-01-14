@@ -1,0 +1,15 @@
+#!/bin/bash
+# Post-commit hook to sync experiments to GCS when experiment files change.
+# This hook runs after each commit and checks if any files in models/experiments/
+# were modified. If so, it triggers a sync to GCS with environment auto-detection.
+
+# Check if any experiment files were changed in the last commit
+if git diff-tree --no-commit-id --name-only -r HEAD | grep -q "^models/experiments/"; then
+    echo "🔄 Experiments changed, syncing to GCS in background..."
+
+    # Run sync in background with auto environment detection
+    # Using nohup to prevent the process from being killed when terminal closes
+    nohup uv run -m src.utils.sync_experiments --environment auto > /dev/null 2>&1 &
+
+    echo "✓ Sync started in background (environment auto-detected from branch)"
+fi

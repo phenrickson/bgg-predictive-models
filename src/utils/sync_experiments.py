@@ -3,6 +3,7 @@
 import os
 import argparse
 import hashlib
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +15,44 @@ from dotenv import load_dotenv
 import pathspec
 
 from .config import load_config
+
+
+def get_git_branch() -> Optional[str]:
+    """
+    Get the current git branch name.
+
+    Returns:
+        Branch name or None if not in a git repo
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def get_environment() -> str:
+    """
+    Get environment from ENVIRONMENT env var, falling back to git branch detection.
+
+    Returns:
+        Environment string (prod/dev)
+    """
+    # First try ENVIRONMENT env var (from .env or system)
+    env = os.environ.get("ENVIRONMENT")
+    if env:
+        return env.lower()
+
+    # Fall back to git branch detection
+    branch = get_git_branch()
+    if branch in ("main", "master"):
+        return "prod"
+    return "dev"
 
 # Load environment variables from .env file
 load_dotenv()
@@ -62,6 +101,7 @@ def sync_experiments_to_gcs(
     gitignore_path: Optional[str] = ".gitignore",
     dry_run: bool = False,
     config_path: Optional[str] = None,
+    environment: Optional[str] = None,
 ):
     """
     Sync experiments directory with Google Cloud Storage.
@@ -77,12 +117,23 @@ def sync_experiments_to_gcs(
         gitignore_path: Path to .gitignore file for filtering files
         dry_run: If True, only show what would be done without actually transferring files
         config_path: Path to config file. If None, uses default config.yaml
+        environment: Environment prefix (prod/dev). If 'auto', detects from git branch.
+                    If None, no environment prefix is used.
     """
     # Configure logging
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s"
     )
     logger = logging.getLogger(__name__)
+
+    # Handle environment prefix
+    if environment == "auto":
+        environment = get_environment()
+        logger.info(f"Auto-detected environment: {environment}")
+
+    if environment:
+        base_prefix = f"{environment}/{base_prefix}"
+        logger.info(f"Using environment-prefixed path: {base_prefix}")
 
     # If no bucket specified, get from config
     if bucket_name is None:
@@ -347,6 +398,12 @@ def main():
         action="store_true",
         help="Show what would be done without actually transferring files",
     )
+    parser.add_argument(
+        "--environment",
+        default=None,
+        help="Environment prefix (prod/dev). Use 'auto' to detect from git branch. "
+        "If not provided, no environment prefix is used.",
+    )
 
     args = parser.parse_args()
 
@@ -359,6 +416,7 @@ def main():
         download=args.download,
         dry_run=args.dry_run,
         config_path=args.config_path,
+        environment=args.environment,
     )
 
 
