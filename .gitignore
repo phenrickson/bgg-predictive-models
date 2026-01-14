@@ -92,3 +92,4 @@ settings.local.json
 
 # terraform
 terraform-admin-key.json.githooks/sync.log
+.githooks/sync.log
