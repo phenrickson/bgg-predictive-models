@@ -79,6 +79,13 @@ resource "google_project_iam_member" "datawarehouse_dataform_bigquery_reader" {
   member  = "serviceAccount:service-668088964150@gcp-sa-dataform.iam.gserviceaccount.com"
 }
 
+# Grant bgg-data-warehouse workload SA read access to models bucket (for dash-viewer experiments page)
+resource "google_storage_bucket_iam_member" "datawarehouse_models_reader" {
+  bucket = google_storage_bucket.models.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:bgg-data-warehouse@${var.data_warehouse_project_id}.iam.gserviceaccount.com"
+}
+
 # -----------------------------------------------------------------------------
 # Terraform Admin SA permissions (created manually, permissions managed here)
 # -----------------------------------------------------------------------------
