@@ -23,6 +23,11 @@ on:
           - plan
           - apply
 
+# Prevent concurrent terraform runs to avoid state lock conflicts
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
 env:
   TF_VERSION: '1.6.0'
 
