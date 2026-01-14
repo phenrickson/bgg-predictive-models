@@ -3,7 +3,9 @@
 # Runs after every commit - the sync script uses hash-based detection
 # to skip unchanged files, so this is efficient even when run frequently.
 
-echo ""
-echo "=== Syncing experiments to GCS ==="
-uv run -m src.utils.sync_experiments --environment auto
-echo "=== Sync complete ==="
+LOG_FILE=".githooks/sync.log"
+
+# Clear previous log and start fresh
+echo "$(date): Starting experiment sync..." > "$LOG_FILE"
+uv run -m src.utils.sync_experiments --environment auto >> "$LOG_FILE" 2>&1
+echo "$(date): Sync complete" >> "$LOG_FILE"
