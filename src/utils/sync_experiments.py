@@ -274,7 +274,9 @@ def sync_experiments_to_gcs(
             def download_file(args) -> Tuple[str, bool]:
                 relative_path, _, is_new = args
                 try:
-                    blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                    # Normalize path separators for GCS
+                    gcs_path = relative_path.replace("\\", "/")
+                    blob = bucket.blob(f"{base_prefix}/{gcs_path}")
                     blob.download_to_filename(str(local_path / relative_path))
                     logger.info(
                         f"{'Downloaded new' if is_new else 'Updated'}: {relative_path}"
@@ -324,7 +326,9 @@ def sync_experiments_to_gcs(
             def upload_file(args) -> Tuple[str, bool]:
                 relative_path, local_hash, is_new = args
                 try:
-                    blob = bucket.blob(f"{base_prefix}/{relative_path}")
+                    # Normalize path separators for GCS (Windows uses backslashes)
+                    gcs_path = relative_path.replace("\\", "/")
+                    blob = bucket.blob(f"{base_prefix}/{gcs_path}")
                     blob.upload_from_filename(str(local_path / relative_path))
                     blob.metadata = {"file_hash": local_hash}
                     blob.patch()
