@@ -57,6 +57,11 @@ help:  ## Show this help message
 	@echo '  make evaluate-verbose            Run evaluation with verbose logging'
 	@echo '  make evaluate-dry-run            Show what evaluation would do without running'
 	@echo '  make predictions                 Generate predictions using trained models'
+	@echo '  make embeddings                  Train all embedding models (pca, svd, umap)'
+	@echo '  make embeddings_pca              Train PCA embeddings'
+	@echo '  make embeddings_svd              Train SVD embeddings'
+	@echo '  make embeddings_umap             Train UMAP embeddings'
+	@echo '  make embeddings_autoencoder      Train Autoencoder embeddings (requires torch)'
 	@echo '  make experiment_dashboard        Launch predictions dashboard'
 	@echo '  make predictions_dashboard       Launch geek rating dashboard'
 	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
@@ -228,6 +233,22 @@ score_users_rated:
 	--model-type users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
+
+## embeddings models (settings from config.yaml, data from BigQuery)
+.PHONY: embeddings embeddings_pca embeddings_svd embeddings_umap embeddings_autoencoder
+embeddings: embeddings_pca embeddings_svd embeddings_umap
+
+embeddings_pca:
+	uv run -m src.models.embeddings.train --algorithm pca
+
+embeddings_svd:
+	uv run -m src.models.embeddings.train --algorithm svd
+
+embeddings_umap:
+	uv run -m src.models.embeddings.train --algorithm umap
+
+embeddings_autoencoder:
+	uv run -m src.models.embeddings.train --algorithm autoencoder
 
 # predict geek rating given models
 geek_rating: 
