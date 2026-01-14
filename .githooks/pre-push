@@ -1,6 +1,6 @@
 #!/bin/bash
-# Post-commit hook to sync experiments to GCS.
-# Runs after every commit - the sync script uses hash-based detection
+# Pre-push hook to sync experiments to GCS.
+# Runs before each push - the sync script uses hash-based detection
 # to skip unchanged files, so this is efficient even when run frequently.
 
 LOG_FILE=".githooks/sync.log"
