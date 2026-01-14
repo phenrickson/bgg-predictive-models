@@ -3,6 +3,7 @@
 # Runs after every commit - the sync script uses hash-based detection
 # to skip unchanged files, so this is efficient even when run frequently.
 
-echo "Syncing experiments to GCS in background..."
-nohup uv run -m src.utils.sync_experiments --environment auto > /dev/null 2>&1 &
-echo "Sync started (environment auto-detected from ENVIRONMENT env var)"
+echo ""
+echo "=== Syncing experiments to GCS ==="
+uv run -m src.utils.sync_experiments --environment auto
+echo "=== Sync complete ==="

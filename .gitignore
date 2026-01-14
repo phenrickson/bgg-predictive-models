@@ -91,4 +91,4 @@ settings.local.json
 .claude
 
 # terraform
-terraform-admin-key.json
+terraform-admin-key.json.githooks/sync.log
