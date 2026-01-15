@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA, TruncatedSVD
-from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +73,17 @@ class BaseEmbeddingAlgorithm(ABC):
         """
         pass
 
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get algorithm-specific artifacts for visualization and analysis.
+
+        Args:
+            feature_names: Optional list of input feature names.
+
+        Returns:
+            Dictionary of artifacts (e.g., components matrix for PCA).
+        """
+        return {}
+
 
 class PCAEmbedding(BaseEmbeddingAlgorithm):
     """PCA-based embeddings using sklearn."""
@@ -88,13 +98,14 @@ class PCAEmbedding(BaseEmbeddingAlgorithm):
         """
         super().__init__(embedding_dim)
         self.whiten = whiten
-        self.scaler = StandardScaler()
         self.model = PCA(n_components=embedding_dim, whiten=whiten, **kwargs)
 
     def fit(self, X: pd.DataFrame) -> "PCAEmbedding":
-        """Fit PCA on the input data."""
-        X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled)
+        """Fit PCA on the input data.
+
+        Note: Data is assumed to be already centered/scaled by the preprocessor.
+        """
+        self.model.fit(X)
         self.is_fitted = True
         logger.info(
             f"PCA fitted with {self.embedding_dim} components, "
@@ -106,8 +117,7 @@ class PCAEmbedding(BaseEmbeddingAlgorithm):
         """Transform data using fitted PCA."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before transform")
-        X_scaled = self.scaler.transform(X)
-        return self.model.transform(X_scaled)
+        return self.model.transform(X)
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get PCA metrics including explained variance."""
@@ -120,6 +130,42 @@ class PCAEmbedding(BaseEmbeddingAlgorithm):
             ),
             "n_components": self.model.n_components_,
         }
+
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get PCA artifacts including component loadings."""
+        if not self.is_fitted:
+            return {}
+
+        artifacts = {
+            "components": self.model.components_.tolist(),  # (n_components, n_features)
+            "explained_variance": self.model.explained_variance_.tolist(),
+            "explained_variance_ratio": self.model.explained_variance_ratio_.tolist(),
+            "singular_values": self.model.singular_values_.tolist(),
+            "mean": self.model.mean_.tolist(),
+            "n_features_in": self.model.n_features_in_,
+        }
+
+        # Add feature names if provided
+        if feature_names is not None:
+            artifacts["feature_names"] = feature_names
+
+            # Compute top features per component for easier interpretation
+            top_features_per_component = []
+            for i, component in enumerate(self.model.components_):
+                # Get indices of top 10 features by absolute loading
+                top_indices = np.argsort(np.abs(component))[-10:][::-1]
+                top_features = [
+                    {
+                        "feature": feature_names[idx],
+                        "loading": float(component[idx]),
+                        "abs_loading": float(abs(component[idx])),
+                    }
+                    for idx in top_indices
+                ]
+                top_features_per_component.append(top_features)
+            artifacts["top_features_per_component"] = top_features_per_component
+
+        return artifacts
 
 
 class SVDEmbedding(BaseEmbeddingAlgorithm):
@@ -135,15 +181,16 @@ class SVDEmbedding(BaseEmbeddingAlgorithm):
         """
         super().__init__(embedding_dim)
         self.n_iter = n_iter
-        self.scaler = StandardScaler()
         self.model = TruncatedSVD(
             n_components=embedding_dim, n_iter=n_iter, random_state=42, **kwargs
         )
 
     def fit(self, X: pd.DataFrame) -> "SVDEmbedding":
-        """Fit TruncatedSVD on the input data."""
-        X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled)
+        """Fit TruncatedSVD on the input data.
+
+        Note: Data is assumed to be already centered/scaled by the preprocessor.
+        """
+        self.model.fit(X)
         self.is_fitted = True
         logger.info(
             f"SVD fitted with {self.embedding_dim} components, "
@@ -155,8 +202,7 @@ class SVDEmbedding(BaseEmbeddingAlgorithm):
         """Transform data using fitted SVD."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before transform")
-        X_scaled = self.scaler.transform(X)
-        return self.model.transform(X_scaled)
+        return self.model.transform(X)
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get SVD metrics including explained variance."""
@@ -169,6 +215,39 @@ class SVDEmbedding(BaseEmbeddingAlgorithm):
             ),
             "n_components": self.model.n_components,
         }
+
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get SVD artifacts including component loadings."""
+        if not self.is_fitted:
+            return {}
+
+        artifacts = {
+            "components": self.model.components_.tolist(),  # (n_components, n_features)
+            "explained_variance": self.model.explained_variance_.tolist(),
+            "explained_variance_ratio": self.model.explained_variance_ratio_.tolist(),
+            "singular_values": self.model.singular_values_.tolist(),
+        }
+
+        # Add feature names if provided
+        if feature_names is not None:
+            artifacts["feature_names"] = feature_names
+
+            # Compute top features per component
+            top_features_per_component = []
+            for i, component in enumerate(self.model.components_):
+                top_indices = np.argsort(np.abs(component))[-10:][::-1]
+                top_features = [
+                    {
+                        "feature": feature_names[idx],
+                        "loading": float(component[idx]),
+                        "abs_loading": float(abs(component[idx])),
+                    }
+                    for idx in top_indices
+                ]
+                top_features_per_component.append(top_features)
+            artifacts["top_features_per_component"] = top_features_per_component
+
+        return artifacts
 
 
 class UMAPEmbedding(BaseEmbeddingAlgorithm):
@@ -195,7 +274,6 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
         self.n_neighbors = n_neighbors
         self.min_dist = min_dist
         self.metric = metric
-        self.scaler = StandardScaler()
 
         try:
             from umap import UMAP
@@ -212,9 +290,11 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
             raise ImportError("umap-learn is required for UMAPEmbedding")
 
     def fit(self, X: pd.DataFrame) -> "UMAPEmbedding":
-        """Fit UMAP on the input data."""
-        X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled)
+        """Fit UMAP on the input data.
+
+        Note: Data is assumed to be already centered/scaled by the preprocessor.
+        """
+        self.model.fit(X)
         self.is_fitted = True
         logger.info(
             f"UMAP fitted with {self.embedding_dim} components, "
@@ -226,8 +306,7 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
         """Transform data using fitted UMAP."""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before transform")
-        X_scaled = self.scaler.transform(X)
-        return self.model.transform(X_scaled)
+        return self.model.transform(X)
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get UMAP metrics."""
@@ -239,6 +318,24 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
             "metric": self.metric,
             "n_components": self.embedding_dim,
         }
+
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get UMAP artifacts."""
+        if not self.is_fitted:
+            return {}
+
+        artifacts = {
+            "n_neighbors": self.n_neighbors,
+            "min_dist": self.min_dist,
+            "metric": self.metric,
+            "n_components": self.embedding_dim,
+        }
+
+        # Add feature names if provided
+        if feature_names is not None:
+            artifacts["feature_names"] = feature_names
+
+        return artifacts
 
 
 class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
@@ -271,7 +368,6 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.dropout = dropout
-        self.scaler = StandardScaler()
 
         self.encoder = None
         self.decoder = None
@@ -319,15 +415,18 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         self.decoder = nn.Sequential(*decoder_layers)
 
     def fit(self, X: pd.DataFrame) -> "AutoencoderEmbedding":
-        """Train the autoencoder on input data."""
+        """Train the autoencoder on input data.
+
+        Note: Data is assumed to be already centered/scaled by the preprocessor.
+        """
         import torch
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
 
-        X_scaled = self.scaler.fit_transform(X)
-        self._build_model(X_scaled.shape[1])
+        X_array = X.values if hasattr(X, "values") else X
+        self._build_model(X_array.shape[1])
 
-        X_tensor = torch.FloatTensor(X_scaled)
+        X_tensor = torch.FloatTensor(X_array)
         dataset = TensorDataset(X_tensor, X_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
@@ -374,8 +473,8 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         if not self.is_fitted:
             raise ValueError("Model must be fitted before transform")
 
-        X_scaled = self.scaler.transform(X)
-        X_tensor = torch.FloatTensor(X_scaled)
+        X_array = X.values if hasattr(X, "values") else X
+        X_tensor = torch.FloatTensor(X_array)
 
         with torch.no_grad():
             embeddings = self.encoder(X_tensor).numpy()
@@ -393,6 +492,28 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
             "embedding_dim": self.embedding_dim,
             "input_dim": self.input_dim,
         }
+
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get autoencoder artifacts including training history."""
+        if not self.is_fitted:
+            return {}
+
+        artifacts = {
+            "training_history": self.training_history,
+            "hidden_layers": self.hidden_layers,
+            "embedding_dim": self.embedding_dim,
+            "input_dim": self.input_dim,
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "dropout": self.dropout,
+        }
+
+        # Add feature names if provided
+        if feature_names is not None:
+            artifacts["feature_names"] = feature_names
+
+        return artifacts
 
 
 def create_embedding_algorithm(

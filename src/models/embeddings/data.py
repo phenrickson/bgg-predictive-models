@@ -26,15 +26,13 @@ class EmbeddingDataLoader:
         """
         self.config = config or load_config()
 
-        # Data warehouse config (games_features source)
+        # Data warehouse config (games_features and complexity_predictions source)
         self.dw_project = self.config.data_warehouse.project_id
         self.dw_dataset = self.config.data_warehouse.features_dataset
         self.dw_table = self.config.data_warehouse.features_table
 
-        # ML project config (complexity_predictions source)
-        self.ml_project = self.config.ml_project_id
-
-        self.client = bigquery.Client(project=self.ml_project)
+        # Use data warehouse project for running queries (has job permissions)
+        self.client = bigquery.Client(project=self.dw_project)
 
     def load_embedding_data(
         self,
@@ -54,6 +52,7 @@ class EmbeddingDataLoader:
             end_year = self.config.years.test_end
 
         # Query that joins games_features with latest complexity predictions
+        # Complexity predictions are in bgg-data-warehouse.predictions
         query = f"""
         WITH latest_complexity AS (
             SELECT
@@ -63,7 +62,7 @@ class EmbeddingDataLoader:
                     PARTITION BY game_id
                     ORDER BY score_ts DESC
                 ) as rn
-            FROM `{self.ml_project}.raw.complexity_predictions`
+            FROM `{self.dw_project}.predictions.bgg_complexity_predictions`
         )
         SELECT
             gf.*,
@@ -137,7 +136,7 @@ class EmbeddingDataLoader:
                     PARTITION BY game_id
                     ORDER BY score_ts DESC
                 ) as rn
-            FROM `{self.ml_project}.raw.complexity_predictions`
+            FROM `{self.dw_project}.predictions.bgg_complexity_predictions`
         )
         SELECT
             gf.*,

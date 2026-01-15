@@ -115,6 +115,12 @@ def parse_arguments() -> argparse.Namespace:
         default=0.001,
         help="(Autoencoder) Learning rate",
     )
+    parser.add_argument(
+        "--min-ratings",
+        type=int,
+        default=None,
+        help="Minimum users_rated for training data (default: from config.yaml)",
+    )
 
     return parser.parse_args()
 
@@ -167,6 +173,14 @@ def main():
     # Determine experiment name
     experiment_name = args.experiment or f"{algorithm}-embeddings"
 
+    # Resolve min_ratings (CLI overrides config)
+    if args.min_ratings is not None:
+        min_ratings = args.min_ratings
+    elif config.embeddings:
+        min_ratings = config.embeddings.min_ratings
+    else:
+        min_ratings = 25
+
     # Get algorithm parameters (from args or config)
     # Update args.algorithm for get_algorithm_params
     args.algorithm = algorithm
@@ -182,6 +196,7 @@ def main():
     logger.info(f"Training {algorithm} embeddings")
     logger.info(f"Embedding dimension: {embedding_dim}")
     logger.info(f"Experiment name: {experiment_name}")
+    logger.info(f"Min ratings for training: {min_ratings}")
     logger.info(f"Algorithm parameters: {algorithm_params}")
 
     # Create trainer and run training
@@ -193,6 +208,7 @@ def main():
         experiment_name=experiment_name,
         algorithm_params=algorithm_params,
         description=args.description,
+        min_ratings=min_ratings,
     )
 
     # Log summary

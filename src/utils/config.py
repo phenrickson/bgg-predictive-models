@@ -104,6 +104,7 @@ class EmbeddingConfig:
     experiment_name: str
     algorithms: EmbeddingAlgorithmConfig
     vector_search: EmbeddingVectorSearchConfig
+    min_ratings: int = 25  # Minimum users_rated for training data
 
     def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
         """Get parameters for a specific algorithm.
@@ -319,6 +320,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             experiment_name=emb["experiment_name"],
             algorithms=algorithms_config,
             vector_search=vector_search_config,
+            min_ratings=emb.get("min_ratings", 25),
         )
 
     return Config(

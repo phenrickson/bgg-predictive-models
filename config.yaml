@@ -99,6 +99,7 @@ embeddings:
   algorithm: umap  # pca, svd, umap, autoencoder
   embedding_dim: 64
   experiment_name: game-embeddings
+  min_ratings: 5  # Minimum users_rated for training data
   algorithms:
     pca:
       whiten: true
