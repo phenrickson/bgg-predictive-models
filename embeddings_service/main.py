@@ -18,7 +18,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from src.utils.config import load_config  # noqa: E402
-from src.data.loader import BGGDataLoader  # noqa: E402
+from src.models.embeddings.data import EmbeddingDataLoader  # noqa: E402
 from embeddings_service.registered_model import RegisteredEmbeddingModel  # noqa: E402
 
 load_dotenv()
@@ -67,6 +67,7 @@ class SimilarGamesRequest(BaseModel):
     top_k: Optional[int] = Field(None, description="Number of results")
     distance_type: Optional[str] = Field(None, description="cosine, euclidean, dot_product")
     model_version: Optional[int] = Field(None, description="Specific model version")
+    embedding_dims: Optional[int] = Field(None, description="Embedding dimensions to use (8, 16, 32, or 64)")
     # Filters
     min_year: Optional[int] = Field(None, description="Minimum year published")
     max_year: Optional[int] = Field(None, description="Maximum year published")
@@ -166,13 +167,14 @@ def load_games_for_embedding(
         max_games: Maximum number of games to load.
 
     Returns:
-        DataFrame with game features.
+        DataFrame with game features and predicted_complexity.
     """
-    loader = BGGDataLoader(config.data_warehouse)
+    # Use EmbeddingDataLoader to get predicted_complexity joined with features
+    emb_loader = EmbeddingDataLoader(config)
 
     if game_ids:
         logger.info(f"Loading {len(game_ids)} specific games for embeddings...")
-        return loader.load_prediction_data(game_ids=game_ids).to_pandas()
+        return emb_loader.load_scoring_data(game_ids=game_ids).to_pandas()
 
     # Change detection: find games needing embeddings
     # Games that either don't have embeddings or have updated features
@@ -213,16 +215,15 @@ def load_games_for_embedding(
             return pd.DataFrame()
 
         logger.info(f"Found {len(game_ids_to_load)} games needing embeddings")
-        return loader.load_prediction_data(game_ids=game_ids_to_load).to_pandas()
+        return emb_loader.load_scoring_data(game_ids=game_ids_to_load).to_pandas()
 
     except Exception as e:
         logger.warning(f"Change detection query failed, falling back to year filter: {e}")
         # Fallback: load games from scoring years (all games, no min_ratings filter)
-        where_clause = (
-            f"year_published >= {config.years.score_start} "
-            f"AND year_published <= {config.years.score_end}"
-        )
-        return loader.load_data(where_clause).to_pandas()
+        return emb_loader.load_scoring_data(
+            start_year=config.years.score_start,
+            end_year=config.years.score_end,
+        ).to_pandas()
 
 
 def upload_embeddings_to_bigquery(
@@ -260,10 +261,15 @@ def upload_embeddings_to_bigquery(
     upload_df["job_id"] = job_id
 
     # Convert embedding arrays to list format for BigQuery
+    # Create truncated versions for efficient similarity search at different dimensions
     if "embedding" in upload_df.columns:
-        upload_df["embedding"] = upload_df["embedding"].apply(
-            lambda x: x.tolist() if hasattr(x, "tolist") else list(x)
-        )
+        def to_list(x):
+            return x.tolist() if hasattr(x, "tolist") else list(x)
+
+        upload_df["embedding"] = upload_df["embedding"].apply(to_list)
+        upload_df["embedding_8"] = upload_df["embedding"].apply(lambda x: x[:8])
+        upload_df["embedding_16"] = upload_df["embedding"].apply(lambda x: x[:16])
+        upload_df["embedding_32"] = upload_df["embedding"].apply(lambda x: x[:32])
 
     client = bigquery.Client(project=config.ml_project_id)
 
@@ -401,6 +407,7 @@ async def find_similar_games(request: SimilarGamesRequest):
                 distance_type=distance_type,
                 model_version=request.model_version,
                 filters=filters,
+                embedding_dims=request.embedding_dims,
             )
             query_info = {"game_id": request.game_id}
 
@@ -412,6 +419,7 @@ async def find_similar_games(request: SimilarGamesRequest):
                 distance_type=distance_type,
                 model_version=request.model_version,
                 filters=filters,
+                embedding_dims=request.embedding_dims,
             )
             query_info = {"game_ids": request.game_ids}
             if request.weights:
@@ -422,6 +430,9 @@ async def find_similar_games(request: SimilarGamesRequest):
                 status_code=400,
                 detail="Must provide either game_id or game_ids"
             )
+
+        # Add embedding_dims to query info
+        query_info["embedding_dims"] = request.embedding_dims or 64
 
         # Add applied filters to query info
         if filters.has_filters():
