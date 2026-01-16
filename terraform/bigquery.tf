@@ -286,7 +286,25 @@ resource "google_bigquery_table" "game_embeddings" {
       name        = "embedding"
       type        = "FLOAT64"
       mode        = "REPEATED"
-      description = "Game embedding vector for vector search"
+      description = "Game embedding vector for vector search (full 64 dimensions)"
+    },
+    {
+      name        = "embedding_8"
+      type        = "FLOAT64"
+      mode        = "REPEATED"
+      description = "Truncated embedding vector (first 8 dimensions)"
+    },
+    {
+      name        = "embedding_16"
+      type        = "FLOAT64"
+      mode        = "REPEATED"
+      description = "Truncated embedding vector (first 16 dimensions)"
+    },
+    {
+      name        = "embedding_32"
+      type        = "FLOAT64"
+      mode        = "REPEATED"
+      description = "Truncated embedding vector (first 32 dimensions)"
     },
     {
       name        = "embedding_model"
