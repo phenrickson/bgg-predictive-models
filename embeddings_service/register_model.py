@@ -111,7 +111,17 @@ def register_model(
         raise
 
 
+def get_default_model_name() -> str:
+    """Get default model name from config."""
+    config = load_config()
+    current_year = config.years.current
+    return f"embeddings-v{current_year}"
+
+
 def main():
+    config = load_config()
+    default_name = get_default_model_name()
+
     parser = argparse.ArgumentParser(description="Register an embedding model for production use")
 
     parser.add_argument(
@@ -119,10 +129,14 @@ def main():
     )
 
     parser.add_argument(
-        "--name", required=True, help="Name to give the registered model"
+        "--name", default=default_name, help=f"Name to give the registered model (default: {default_name})"
     )
 
-    parser.add_argument("--description", required=True, help="Description of the model")
+    parser.add_argument(
+        "--description",
+        default=f"Production (v{config.years.current}) SVD embeddings for game similarity",
+        help="Description of the model"
+    )
 
     parser.add_argument("--bucket", help="GCS bucket for storing registered models")
 

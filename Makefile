@@ -4,7 +4,7 @@
 RAW_DIR := data/raw
 
 ## set years for training, tuning, testing
-CURRENT_YEAR = 2025
+CURRENT_YEAR = 2026
 TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
 TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
 TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
