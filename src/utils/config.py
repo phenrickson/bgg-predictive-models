@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -78,6 +78,58 @@ class ScoringConfig:
 
 
 @dataclass
+class EmbeddingAlgorithmConfig:
+    """Configuration for a specific embedding algorithm."""
+
+    pca: Optional[Dict[str, Any]] = None
+    svd: Optional[Dict[str, Any]] = None
+    umap: Optional[Dict[str, Any]] = None
+    autoencoder: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class EmbeddingVectorSearchConfig:
+    """Configuration for BigQuery Vector Search storage."""
+
+    dataset: str = "raw"
+    table: str = "game_embeddings"
+
+
+@dataclass
+class EmbeddingSearchConfig:
+    """Configuration for embedding similarity search."""
+
+    default_distance_type: str = "cosine"  # cosine, euclidean, dot_product
+    default_top_k: int = 10
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding generation."""
+
+    algorithm: str  # pca, svd, umap, autoencoder
+    embedding_dim: int
+    experiment_name: str
+    algorithms: EmbeddingAlgorithmConfig
+    vector_search: EmbeddingVectorSearchConfig
+    search: EmbeddingSearchConfig
+    min_ratings: int = 25  # Minimum users_rated for training data
+
+    def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
+        """Get parameters for a specific algorithm.
+
+        Args:
+            algorithm: Algorithm name. If None, uses self.algorithm.
+
+        Returns:
+            Dictionary of algorithm parameters.
+        """
+        algo = algorithm or self.algorithm
+        params = getattr(self.algorithms, algo, None)
+        return params if params is not None else {}
+
+
+@dataclass
 class ModelConfig:
     """Configuration for model settings."""
 
@@ -115,6 +167,7 @@ class Config:
     predictions: PredictionsDestinationConfig
     ml_project_id: str
     scoring: Optional[ScoringConfig] = None
+    embeddings: Optional[EmbeddingConfig] = None
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -256,6 +309,34 @@ def load_config(config_path: Optional[str] = None) -> Config:
             output=config["scoring"]["output"],
         )
 
+    # Create embeddings config if present
+    embeddings_config = None
+    if "embeddings" in config:
+        emb = config["embeddings"]
+        algorithms_config = EmbeddingAlgorithmConfig(
+            pca=emb.get("algorithms", {}).get("pca"),
+            svd=emb.get("algorithms", {}).get("svd"),
+            umap=emb.get("algorithms", {}).get("umap"),
+            autoencoder=emb.get("algorithms", {}).get("autoencoder"),
+        )
+        vector_search_config = EmbeddingVectorSearchConfig(
+            dataset=emb.get("vector_search", {}).get("dataset", "raw"),
+            table=emb.get("vector_search", {}).get("table", "game_embeddings"),
+        )
+        search_config = EmbeddingSearchConfig(
+            default_distance_type=emb.get("search", {}).get("default_distance_type", "cosine"),
+            default_top_k=emb.get("search", {}).get("default_top_k", 10),
+        )
+        embeddings_config = EmbeddingConfig(
+            algorithm=emb["algorithm"],
+            embedding_dim=emb["embedding_dim"],
+            experiment_name=emb["experiment_name"],
+            algorithms=algorithms_config,
+            vector_search=vector_search_config,
+            search=search_config,
+            min_ratings=emb.get("min_ratings", 25),
+        )
+
     return Config(
         bucket_name=bucket_name,
         default_environment=config.get("default_environment", "dev"),
@@ -265,4 +346,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         predictions=predictions_config,
         ml_project_id=ml_project_id,
         scoring=scoring_config,
+        embeddings=embeddings_config,
     )

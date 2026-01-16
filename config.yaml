@@ -94,6 +94,33 @@ evaluate:
   output_dir: "./models/experiments"
   min_ratings_threshold: 0
 
+# Embeddings Configuration
+embeddings:
+  algorithm: umap  # pca, svd, umap, autoencoder
+  embedding_dim: 64
+  experiment_name: game-embeddings
+  min_ratings: 5  # Minimum users_rated for training data
+  algorithms:
+    pca:
+      whiten: true
+    svd:
+      n_iter: 5
+    umap:
+      n_neighbors: 15
+      min_dist: 0.1
+      metric: cosine
+    autoencoder:
+      hidden_layers: [512, 256, 128]
+      epochs: 100
+      batch_size: 256
+      learning_rate: 0.001
+  vector_search:
+    dataset: raw
+    table: game_embeddings
+  search:
+    default_distance_type: cosine  # cosine, euclidean, dot_product
+    default_top_k: 10
+
 # Scoring Configuration
 scoring:
   models:
@@ -101,6 +128,7 @@ scoring:
     complexity: complexity-v2026
     rating: rating-v2026
     users_rated: users_rated-v2026
+    embeddings: embeddings-v2026
   parameters:
     prior_rating: 5.5
     prior_weight: 2000

@@ -247,3 +247,88 @@ resource "google_bigquery_table" "complexity_predictions" {
     model_type  = "complexity"
   }
 }
+
+# Game embeddings table for vector search
+resource "google_bigquery_table" "game_embeddings" {
+  dataset_id          = google_bigquery_dataset.raw.dataset_id
+  table_id            = "game_embeddings"
+  project             = var.project_id
+  description         = "Game embeddings for vector search - nearest neighbor queries"
+  deletion_protection = true
+
+  time_partitioning {
+    type  = "DAY"
+    field = "created_ts"
+  }
+
+  clustering = ["game_id"]
+
+  schema = jsonencode([
+    {
+      name        = "game_id"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "BGG game ID"
+    },
+    {
+      name        = "name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Game name"
+    },
+    {
+      name        = "year_published"
+      type        = "INTEGER"
+      mode        = "NULLABLE"
+      description = "Year game was published"
+    },
+    {
+      name        = "embedding"
+      type        = "FLOAT64"
+      mode        = "REPEATED"
+      description = "Game embedding vector for vector search"
+    },
+    {
+      name        = "embedding_model"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Name of embedding model used"
+    },
+    {
+      name        = "embedding_version"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "Version number of the embedding model"
+    },
+    {
+      name        = "embedding_dim"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "Dimensionality of the embedding"
+    },
+    {
+      name        = "algorithm"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Algorithm used (pca, svd, umap, autoencoder)"
+    },
+    {
+      name        = "created_ts"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "When this embedding was created"
+    },
+    {
+      name        = "job_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique job ID for this embedding run"
+    }
+  ])
+
+  labels = {
+    environment = "production"
+    managed_by  = "terraform"
+    model_type  = "embeddings"
+  }
+}

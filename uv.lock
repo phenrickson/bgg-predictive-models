@@ -129,6 +129,11 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+embeddings = [
+    { name = "torch" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "black", specifier = ">=25.1.0" },
@@ -165,9 +170,11 @@ requires-dist = [
     { name = "statsmodels", specifier = ">=0.14.5" },
     { name = "streamlit", specifier = ">=1.46.1" },
     { name = "streamlit-aggrid", specifier = ">=1.1.6" },
+    { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.0.0" },
     { name = "umap-learn", specifier = ">=0.5.9.post2" },
     { name = "uvicorn", specifier = ">=0.35.0" },
 ]
+provides-extras = ["embeddings"]
 
 [package.metadata.requires-dev]
 dev = []

@@ -1,0 +1,91 @@
+name: Deploy Embeddings Service
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'embeddings_service/**'
+      - 'docker/embeddings.Dockerfile'
+      - '.github/workflows/build-embeddings.yml'
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Environment
+      run: |
+        mkdir -p credentials
+        echo '${{ secrets.GCP_SA_KEY_BGG_ML }}' > credentials/service-account-key.json
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker
+      run: |
+        gcloud auth configure-docker us-central1-docker.pkg.dev
+        gcloud artifacts repositories create bgg-predictive-models --repository-format=docker --location=us-central1 --quiet || true
+
+    - name: Set Environment Tag
+      id: env-tag
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_tag=prod" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "env_tag=dev" >> $GITHUB_OUTPUT
+        else
+          echo "env_tag=test" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build Docker Image
+      run: |
+        docker build -f docker/embeddings.Dockerfile \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ github.sha }} \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ steps.env-tag.outputs.env_tag }} \
+          -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          .
+
+    - name: Push Docker Image
+      run: |
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ github.sha }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ steps.env-tag.outputs.env_tag }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy bgg-embeddings-service \
+          --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/embeddings:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+          --platform managed \
+          --region us-central1 \
+          --allow-unauthenticated \
+          --max-instances 5 \
+          --memory 4Gi \
+          --cpu 2 \
+          --service-account bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
+
+    - name: Verify Deployment
+      run: |
+        gcloud run services describe bgg-embeddings-service \
+          --region us-central1 \
+          --format 'value(status.url)'

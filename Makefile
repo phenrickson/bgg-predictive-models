@@ -50,6 +50,7 @@ help:  ## Show this help message
 	@echo '  make data                        Fetch raw data from BigQuery'
 	@echo '  make models                      Train all model candidates'
 	@echo '  make register                    Register all models to scoring service'
+	@echo '  make register_embeddings         Register embeddings model to embeddings service'
 	@echo '  make clean_experiments           Remove all experiment subfolders'
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make years                       Show year configuration for model training'
@@ -57,6 +58,11 @@ help:  ## Show this help message
 	@echo '  make evaluate-verbose            Run evaluation with verbose logging'
 	@echo '  make evaluate-dry-run            Show what evaluation would do without running'
 	@echo '  make predictions                 Generate predictions using trained models'
+	@echo '  make embeddings                  Train all embedding models (pca, svd, umap)'
+	@echo '  make embeddings_pca              Train PCA embeddings'
+	@echo '  make embeddings_svd              Train SVD embeddings'
+	@echo '  make embeddings_umap             Train UMAP embeddings'
+	@echo '  make embeddings_autoencoder      Train Autoencoder embeddings (requires torch)'
 	@echo '  make experiment_dashboard        Launch predictions dashboard'
 	@echo '  make predictions_dashboard       Launch geek rating dashboard'
 	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
@@ -120,8 +126,8 @@ USERS_RATED_MODEL ?= $(RIDGE)
 models: hurdle complexity rating users_rated geek_rating
 
 ## register models
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register
-register: register_complexity register_rating register_users_rated register_hurdle
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register
+register: register_complexity register_rating register_users_rated register_hurdle register_embeddings
 
 # train individual models
 hurdle: train_hurdle finalize_hurdle score_hurdle
@@ -229,6 +235,22 @@ score_users_rated:
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
+## embeddings models (settings from config.yaml, data from BigQuery)
+.PHONY: embeddings embeddings_pca embeddings_svd embeddings_umap embeddings_autoencoder
+embeddings: embeddings_pca embeddings_svd embeddings_umap
+
+embeddings_pca:
+	uv run -m src.models.embeddings.train --algorithm pca
+
+embeddings_svd:
+	uv run -m src.models.embeddings.train --algorithm svd
+
+embeddings_umap:
+	uv run -m src.models.embeddings.train --algorithm umap
+
+embeddings_autoencoder:
+	uv run -m src.models.embeddings.train --algorithm autoencoder
+
 # predict geek rating given models
 geek_rating: 
 	uv run -m src.models.geek_rating \
@@ -280,6 +302,13 @@ register_hurdle:
 	--experiment $(HURDLE_CANDIDATE) \
 	--name hurdle-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
+
+EMBEDDINGS_CANDIDATE ?= svd-embeddings
+register_embeddings:
+	uv run -m embeddings_service.register_model \
+	--experiment $(EMBEDDINGS_CANDIDATE) \
+	--name embeddings-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
 
 ## dashboard
 dashboard:
