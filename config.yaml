@@ -117,6 +117,9 @@ embeddings:
   vector_search:
     dataset: raw
     table: game_embeddings
+  search:
+    default_distance_type: cosine  # cosine, euclidean, dot_product
+    default_top_k: 10
 
 # Scoring Configuration
 scoring:
@@ -125,6 +128,7 @@ scoring:
     complexity: complexity-v2026
     rating: rating-v2026
     users_rated: users_rated-v2026
+    embeddings: embeddings-v2026
   parameters:
     prior_rating: 5.5
     prior_weight: 2000

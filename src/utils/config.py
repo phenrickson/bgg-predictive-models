@@ -96,6 +96,14 @@ class EmbeddingVectorSearchConfig:
 
 
 @dataclass
+class EmbeddingSearchConfig:
+    """Configuration for embedding similarity search."""
+
+    default_distance_type: str = "cosine"  # cosine, euclidean, dot_product
+    default_top_k: int = 10
+
+
+@dataclass
 class EmbeddingConfig:
     """Configuration for embedding generation."""
 
@@ -104,6 +112,7 @@ class EmbeddingConfig:
     experiment_name: str
     algorithms: EmbeddingAlgorithmConfig
     vector_search: EmbeddingVectorSearchConfig
+    search: EmbeddingSearchConfig
     min_ratings: int = 25  # Minimum users_rated for training data
 
     def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
@@ -314,12 +323,17 @@ def load_config(config_path: Optional[str] = None) -> Config:
             dataset=emb.get("vector_search", {}).get("dataset", "raw"),
             table=emb.get("vector_search", {}).get("table", "game_embeddings"),
         )
+        search_config = EmbeddingSearchConfig(
+            default_distance_type=emb.get("search", {}).get("default_distance_type", "cosine"),
+            default_top_k=emb.get("search", {}).get("default_top_k", 10),
+        )
         embeddings_config = EmbeddingConfig(
             algorithm=emb["algorithm"],
             embedding_dim=emb["embedding_dim"],
             experiment_name=emb["experiment_name"],
             algorithms=algorithms_config,
             vector_search=vector_search_config,
+            search=search_config,
             min_ratings=emb.get("min_ratings", 25),
         )
 
