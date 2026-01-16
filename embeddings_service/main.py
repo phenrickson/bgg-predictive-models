@@ -67,6 +67,17 @@ class SimilarGamesRequest(BaseModel):
     top_k: Optional[int] = Field(None, description="Number of results")
     distance_type: Optional[str] = Field(None, description="cosine, euclidean, dot_product")
     model_version: Optional[int] = Field(None, description="Specific model version")
+    # Filters
+    min_year: Optional[int] = Field(None, description="Minimum year published")
+    max_year: Optional[int] = Field(None, description="Maximum year published")
+    min_users_rated: Optional[int] = Field(None, description="Minimum number of ratings")
+    max_users_rated: Optional[int] = Field(None, description="Maximum number of ratings")
+    min_rating: Optional[float] = Field(None, description="Minimum average rating")
+    max_rating: Optional[float] = Field(None, description="Maximum average rating")
+    min_geek_rating: Optional[float] = Field(None, description="Minimum BGG geek rating (Bayesian average)")
+    max_geek_rating: Optional[float] = Field(None, description="Maximum BGG geek rating (Bayesian average)")
+    min_complexity: Optional[float] = Field(None, description="Minimum complexity/weight (1-5)")
+    max_complexity: Optional[float] = Field(None, description="Maximum complexity/weight (1-5)")
 
 
 class SimilarGame(BaseModel):
@@ -75,6 +86,11 @@ class SimilarGame(BaseModel):
     game_id: int
     name: str
     year_published: Optional[int]
+    users_rated: Optional[int] = None
+    average_rating: Optional[float] = None
+    geek_rating: Optional[float] = None
+    complexity: Optional[float] = None
+    thumbnail: Optional[str] = None
     distance: float
 
 
@@ -165,7 +181,8 @@ def load_games_for_embedding(
     ml_project = config.ml_project_id
     dw_project = config.data_warehouse.project_id
     emb_config = config.embeddings
-    table_id = f"{ml_project}.{emb_config.vector_search.dataset}.{emb_config.vector_search.table}"
+    # Use upload config for raw table (where we write embeddings)
+    table_id = f"{ml_project}.{emb_config.upload.dataset}.{emb_config.upload.table}"
 
     # Score ALL games regardless of ratings - embeddings should work for everything
     query = f"""
@@ -230,7 +247,8 @@ def upload_embeddings_to_bigquery(
         BigQuery job ID.
     """
     emb_config = config.embeddings
-    table_id = f"{config.ml_project_id}.{emb_config.vector_search.dataset}.{emb_config.vector_search.table}"
+    # Use upload config for raw table (where we write embeddings)
+    table_id = f"{config.ml_project_id}.{emb_config.upload.dataset}.{emb_config.upload.table}"
 
     # Prepare data for upload
     upload_df = embeddings_df.copy()
@@ -300,7 +318,7 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
                     "algorithm": algorithm,
                 },
                 games_embedded=0,
-                table_id=f"{config.ml_project_id}.{config.embeddings.vector_search.dataset}.{config.embeddings.vector_search.table}",
+                table_id=f"{config.ml_project_id}.{config.embeddings.upload.dataset}.{config.embeddings.upload.table}",
             )
 
         logger.info(f"Generating embeddings for {len(games_df)} games...")
@@ -339,7 +357,7 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
                 "embedding_dim": embedding_dim,
             },
             games_embedded=len(results_df),
-            table_id=f"{config.ml_project_id}.{config.embeddings.vector_search.dataset}.{config.embeddings.vector_search.table}",
+            table_id=f"{config.ml_project_id}.{config.embeddings.upload.dataset}.{config.embeddings.upload.table}",
             bq_job_id=bq_job_id,
         )
 
@@ -351,12 +369,26 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
 @app.post("/similar", response_model=SimilarGamesResponse)
 async def find_similar_games(request: SimilarGamesRequest):
     """Find similar games using vector similarity search."""
-    from src.models.embeddings.search import NearestNeighborSearch
+    from src.models.embeddings.search import NearestNeighborSearch, SearchFilters
 
     # Get defaults from config
     search_config = config.embeddings.search
     top_k = request.top_k or search_config.default_top_k
     distance_type = (request.distance_type or search_config.default_distance_type).upper()
+
+    # Build filters from request
+    filters = SearchFilters(
+        min_year=request.min_year,
+        max_year=request.max_year,
+        min_users_rated=request.min_users_rated,
+        max_users_rated=request.max_users_rated,
+        min_rating=request.min_rating,
+        max_rating=request.max_rating,
+        min_geek_rating=request.min_geek_rating,
+        max_geek_rating=request.max_geek_rating,
+        min_complexity=request.min_complexity,
+        max_complexity=request.max_complexity,
+    )
 
     try:
         search = NearestNeighborSearch()
@@ -368,6 +400,7 @@ async def find_similar_games(request: SimilarGamesRequest):
                 top_k=top_k,
                 distance_type=distance_type,
                 model_version=request.model_version,
+                filters=filters,
             )
             query_info = {"game_id": request.game_id}
 
@@ -378,6 +411,7 @@ async def find_similar_games(request: SimilarGamesRequest):
                 top_k=top_k,
                 distance_type=distance_type,
                 model_version=request.model_version,
+                filters=filters,
             )
             query_info = {"game_ids": request.game_ids}
             if request.weights:
@@ -389,6 +423,23 @@ async def find_similar_games(request: SimilarGamesRequest):
                 detail="Must provide either game_id or game_ids"
             )
 
+        # Add applied filters to query info
+        if filters.has_filters():
+            query_info["filters"] = {
+                k: v for k, v in {
+                    "min_year": request.min_year,
+                    "max_year": request.max_year,
+                    "min_users_rated": request.min_users_rated,
+                    "max_users_rated": request.max_users_rated,
+                    "min_rating": request.min_rating,
+                    "max_rating": request.max_rating,
+                    "min_geek_rating": request.min_geek_rating,
+                    "max_geek_rating": request.max_geek_rating,
+                    "min_complexity": request.min_complexity,
+                    "max_complexity": request.max_complexity,
+                }.items() if v is not None
+            }
+
         # Convert results to response format
         similar_games = []
         for row in results.to_dicts():
@@ -397,6 +448,11 @@ async def find_similar_games(request: SimilarGamesRequest):
                     game_id=row["game_id"],
                     name=row.get("name", ""),
                     year_published=row.get("year_published"),
+                    users_rated=row.get("users_rated"),
+                    average_rating=row.get("average_rating"),
+                    geek_rating=row.get("geek_rating"),
+                    complexity=row.get("complexity"),
+                    thumbnail=row.get("thumbnail"),
                     distance=row["distance"],
                 )
             )

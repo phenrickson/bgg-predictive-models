@@ -26,10 +26,10 @@ class BigQueryEmbeddingStorage:
         self.config = config or load_config()
         self.project_id = self.config.ml_project_id
 
-        # Get dataset and table from embeddings config or defaults
+        # Get dataset and table from embeddings upload config (raw table)
         if self.config.embeddings:
-            self.dataset = self.config.embeddings.vector_search.dataset
-            self.table = self.config.embeddings.vector_search.table
+            self.dataset = self.config.embeddings.upload.dataset
+            self.table = self.config.embeddings.upload.table
         else:
             self.dataset = "raw"
             self.table = "game_embeddings"

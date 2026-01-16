@@ -114,9 +114,15 @@ embeddings:
       epochs: 100
       batch_size: 256
       learning_rate: 0.001
-  vector_search:
+  upload:
+    # Raw table where new embeddings are written (Dataform pulls from here)
     dataset: raw
     table: game_embeddings
+  vector_search:
+    # Enriched table for similarity search (embeddings + game features for filtering)
+    project: bgg-data-warehouse
+    dataset: analytics
+    table: game_similarity_search
   search:
     default_distance_type: cosine  # cosine, euclidean, dot_product
     default_top_k: 10

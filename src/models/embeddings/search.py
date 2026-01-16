@@ -1,6 +1,7 @@
 """Nearest neighbor search using BigQuery Vector Search."""
 
 import logging
+from dataclasses import dataclass
 from typing import List, Optional
 
 import polars as pl
@@ -9,6 +10,32 @@ from google.cloud import bigquery
 from src.utils.config import Config, load_config
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SearchFilters:
+    """Filters for similarity search results."""
+
+    min_year: Optional[int] = None
+    max_year: Optional[int] = None
+    min_users_rated: Optional[int] = None
+    max_users_rated: Optional[int] = None
+    min_rating: Optional[float] = None
+    max_rating: Optional[float] = None
+    min_geek_rating: Optional[float] = None
+    max_geek_rating: Optional[float] = None
+    min_complexity: Optional[float] = None
+    max_complexity: Optional[float] = None
+
+    def has_filters(self) -> bool:
+        """Check if any filters are set."""
+        return any([
+            self.min_year, self.max_year,
+            self.min_users_rated, self.max_users_rated,
+            self.min_rating, self.max_rating,
+            self.min_geek_rating, self.max_geek_rating,
+            self.min_complexity, self.max_complexity,
+        ])
 
 
 class NearestNeighborSearch:
@@ -30,7 +57,7 @@ class NearestNeighborSearch:
         if table_id:
             self.table_id = table_id
         elif self.config.embeddings:
-            project = self.config.ml_project_id
+            project = self.config.embeddings.vector_search.project or self.config.ml_project_id
             dataset = self.config.embeddings.vector_search.dataset
             table = self.config.embeddings.vector_search.table
             self.table_id = f"{project}.{dataset}.{table}"
@@ -39,6 +66,35 @@ class NearestNeighborSearch:
 
         self.client = bigquery.Client(project=self.config.ml_project_id)
 
+    def _build_filter_clause(self, filters: Optional[SearchFilters]) -> str:
+        """Build SQL WHERE clause from filters."""
+        if not filters or not filters.has_filters():
+            return ""
+
+        conditions = []
+        if filters.min_year is not None:
+            conditions.append(f"year_published >= {filters.min_year}")
+        if filters.max_year is not None:
+            conditions.append(f"year_published <= {filters.max_year}")
+        if filters.min_users_rated is not None:
+            conditions.append(f"users_rated >= {filters.min_users_rated}")
+        if filters.max_users_rated is not None:
+            conditions.append(f"users_rated <= {filters.max_users_rated}")
+        if filters.min_rating is not None:
+            conditions.append(f"average_rating >= {filters.min_rating}")
+        if filters.max_rating is not None:
+            conditions.append(f"average_rating <= {filters.max_rating}")
+        if filters.min_geek_rating is not None:
+            conditions.append(f"geek_rating >= {filters.min_geek_rating}")
+        if filters.max_geek_rating is not None:
+            conditions.append(f"geek_rating <= {filters.max_geek_rating}")
+        if filters.min_complexity is not None:
+            conditions.append(f"complexity >= {filters.min_complexity}")
+        if filters.max_complexity is not None:
+            conditions.append(f"complexity <= {filters.max_complexity}")
+
+        return " AND " + " AND ".join(conditions) if conditions else ""
+
     def find_similar_games(
         self,
         game_id: int,
@@ -46,6 +102,7 @@ class NearestNeighborSearch:
         distance_type: str = "COSINE",
         exclude_self: bool = True,
         model_version: Optional[int] = None,
+        filters: Optional[SearchFilters] = None,
     ) -> pl.DataFrame:
         """Find k nearest neighbors for a game.
 
@@ -55,9 +112,10 @@ class NearestNeighborSearch:
             distance_type: COSINE, EUCLIDEAN, or DOT_PRODUCT.
             exclude_self: Whether to exclude the source game.
             model_version: Specific version to use. If None, uses latest.
+            filters: Optional filters for year, rating, complexity, etc.
 
         Returns:
-            DataFrame with game_id, name, year_published, distance.
+            DataFrame with game_id, name, year_published, distance, and filter fields.
         """
         # Build version filter
         if model_version:
@@ -69,6 +127,9 @@ class NearestNeighborSearch:
             )
             """
 
+        # Build filter clause
+        filter_clause = self._build_filter_clause(filters)
+
         # Query to find similar games
         query = f"""
         WITH source_game AS (
@@ -78,14 +139,20 @@ class NearestNeighborSearch:
             LIMIT 1
         ),
         candidates AS (
-            SELECT game_id, name, year_published, embedding
+            SELECT game_id, name, year_published, embedding,
+                   users_rated, average_rating, geek_rating, complexity, thumbnail
             FROM `{self.table_id}`
-            WHERE {version_filter}
+            WHERE {version_filter}{filter_clause}
         )
         SELECT
             c.game_id,
             c.name,
             c.year_published,
+            c.users_rated,
+            c.average_rating,
+            c.geek_rating,
+            c.complexity,
+            c.thumbnail,
             ML.DISTANCE(c.embedding, s.embedding, '{distance_type}') as distance
         FROM candidates c
         CROSS JOIN source_game s
@@ -185,6 +252,7 @@ class NearestNeighborSearch:
         top_k: int = 10,
         distance_type: str = "COSINE",
         model_version: Optional[int] = None,
+        filters: Optional[SearchFilters] = None,
     ) -> pl.DataFrame:
         """Find games similar to a set of games (using average embedding).
 
@@ -193,6 +261,7 @@ class NearestNeighborSearch:
             top_k: Number of results to return.
             distance_type: Distance metric.
             model_version: Specific version to use.
+            filters: Optional filters for year, rating, complexity, etc.
 
         Returns:
             DataFrame with similar games.
@@ -206,6 +275,9 @@ class NearestNeighborSearch:
                 SELECT MAX(embedding_version) FROM `{self.table_id}`
             )
             """
+
+        # Build filter clause
+        filter_clause = self._build_filter_clause(filters)
 
         game_ids_str = ",".join(str(g) for g in game_ids)
 
@@ -227,15 +299,21 @@ class NearestNeighborSearch:
             FROM avg_embedding
         ),
         candidates AS (
-            SELECT game_id, name, year_published, embedding
+            SELECT game_id, name, year_published, embedding,
+                   users_rated, average_rating, geek_rating, complexity, thumbnail
             FROM `{self.table_id}`
             WHERE {version_filter}
-              AND game_id NOT IN ({game_ids_str})
+              AND game_id NOT IN ({game_ids_str}){filter_clause}
         )
         SELECT
             c.game_id,
             c.name,
             c.year_published,
+            c.users_rated,
+            c.average_rating,
+            c.geek_rating,
+            c.complexity,
+            c.thumbnail,
             ML.DISTANCE(c.embedding, q.embedding, '{distance_type}') as distance
         FROM candidates c
         CROSS JOIN query_embedding q

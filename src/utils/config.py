@@ -88,11 +88,20 @@ class EmbeddingAlgorithmConfig:
 
 
 @dataclass
-class EmbeddingVectorSearchConfig:
-    """Configuration for BigQuery Vector Search storage."""
+class EmbeddingUploadConfig:
+    """Configuration for uploading embeddings to BigQuery (raw table)."""
 
     dataset: str = "raw"
     table: str = "game_embeddings"
+
+
+@dataclass
+class EmbeddingVectorSearchConfig:
+    """Configuration for BigQuery Vector Search (curated table for similarity search)."""
+
+    project: Optional[str] = None  # If None, uses ml_project_id
+    dataset: str = "predictions"
+    table: str = "bgg_game_embeddings"
 
 
 @dataclass
@@ -111,7 +120,8 @@ class EmbeddingConfig:
     embedding_dim: int
     experiment_name: str
     algorithms: EmbeddingAlgorithmConfig
-    vector_search: EmbeddingVectorSearchConfig
+    upload: EmbeddingUploadConfig  # Raw table for writing new embeddings
+    vector_search: EmbeddingVectorSearchConfig  # Curated table for similarity search
     search: EmbeddingSearchConfig
     min_ratings: int = 25  # Minimum users_rated for training data
 
@@ -319,9 +329,14 @@ def load_config(config_path: Optional[str] = None) -> Config:
             umap=emb.get("algorithms", {}).get("umap"),
             autoencoder=emb.get("algorithms", {}).get("autoencoder"),
         )
+        upload_config = EmbeddingUploadConfig(
+            dataset=emb.get("upload", {}).get("dataset", "raw"),
+            table=emb.get("upload", {}).get("table", "game_embeddings"),
+        )
         vector_search_config = EmbeddingVectorSearchConfig(
-            dataset=emb.get("vector_search", {}).get("dataset", "raw"),
-            table=emb.get("vector_search", {}).get("table", "game_embeddings"),
+            project=emb.get("vector_search", {}).get("project"),
+            dataset=emb.get("vector_search", {}).get("dataset", "predictions"),
+            table=emb.get("vector_search", {}).get("table", "bgg_game_embeddings"),
         )
         search_config = EmbeddingSearchConfig(
             default_distance_type=emb.get("search", {}).get("default_distance_type", "cosine"),
@@ -332,6 +347,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             embedding_dim=emb["embedding_dim"],
             experiment_name=emb["experiment_name"],
             algorithms=algorithms_config,
+            upload=upload_config,
             vector_search=vector_search_config,
             search=search_config,
             min_ratings=emb.get("min_ratings", 25),
