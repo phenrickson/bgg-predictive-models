@@ -95,37 +95,24 @@ class EmbeddingDataLoader:
 
     def load_scoring_data(
         self,
-        start_year: Optional[int] = None,
-        end_year: Optional[int] = None,
         game_ids: Optional[list] = None,
     ) -> pl.DataFrame:
-        """Load data for scoring/inference (generating embeddings for new games).
+        """Load data for scoring/inference (generating embeddings for games).
 
         Args:
-            start_year: Minimum year_published to include.
-            end_year: Maximum year_published to include.
-            game_ids: Optional list of specific game IDs to load.
+            game_ids: Optional list of game IDs to load. If None, loads all games
+                      with complexity predictions.
 
         Returns:
             DataFrame with game features and predicted_complexity.
         """
-        if start_year is None:
-            start_year = self.config.years.score_start
-        if end_year is None:
-            end_year = self.config.years.score_end
-
-        # Build WHERE conditions
-        conditions = [
-            "gf.year_published IS NOT NULL",
-            f"gf.year_published >= {start_year}",
-            f"gf.year_published <= {end_year}",
-        ]
-
         if game_ids:
             ids_str = ",".join(str(g) for g in game_ids)
-            conditions.append(f"gf.game_id IN ({ids_str})")
-
-        where_clause = " AND ".join(conditions)
+            where_clause = f"gf.year_published IS NOT NULL AND gf.game_id IN ({ids_str})"
+            log_msg = f"Loading scoring data for {len(game_ids)} specific game IDs"
+        else:
+            where_clause = "gf.year_published IS NOT NULL"
+            log_msg = "Loading scoring data for all games with complexity predictions"
 
         query = f"""
         WITH latest_complexity AS (
@@ -148,7 +135,7 @@ class EmbeddingDataLoader:
         WHERE {where_clause}
         """
 
-        logger.info(f"Loading scoring data for years {start_year}-{end_year}")
+        logger.info(log_msg)
 
         try:
             result = self.client.query(query).to_dataframe()
