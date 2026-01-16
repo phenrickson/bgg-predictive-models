@@ -167,6 +167,7 @@ def load_games_for_embedding(
     emb_config = config.embeddings
     table_id = f"{ml_project}.{emb_config.vector_search.dataset}.{emb_config.vector_search.table}"
 
+    # Score ALL games regardless of ratings - embeddings should work for everything
     query = f"""
     SELECT gf.game_id
     FROM `{dw_project}.analytics.games_features` gf
@@ -178,7 +179,6 @@ def load_games_for_embedding(
       FROM `{table_id}`
     ) le ON gf.game_id = le.game_id AND le.rn = 1
     WHERE gf.year_published IS NOT NULL
-      AND gf.users_rated >= {emb_config.min_ratings}
       AND (
         le.game_id IS NULL
         OR fh.last_updated > le.created_ts
@@ -200,11 +200,10 @@ def load_games_for_embedding(
 
     except Exception as e:
         logger.warning(f"Change detection query failed, falling back to year filter: {e}")
-        # Fallback: load games from scoring years
+        # Fallback: load games from scoring years (all games, no min_ratings filter)
         where_clause = (
             f"year_published >= {config.years.score_start} "
-            f"AND year_published <= {config.years.score_end} "
-            f"AND users_rated >= {emb_config.min_ratings}"
+            f"AND year_published <= {config.years.score_end}"
         )
         return loader.load_data(where_clause).to_pandas()
 
