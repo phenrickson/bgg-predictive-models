@@ -13,7 +13,7 @@ on:
       max_games:
         description: 'Maximum games to process'
         required: false
-        default: '25000'
+        default: '50000'
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models

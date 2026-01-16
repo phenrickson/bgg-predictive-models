@@ -104,11 +104,24 @@ class EmbeddingTrainer:
         if preprocessor is None:
             # Create preprocessor with subset of features for embeddings
             # Exclude designers, publishers, and artists - focus on game mechanics/categories
+            # Restrict family features to game characteristic types only
+            embedding_family_patterns = [
+                "^Players:",
+                "^Category",
+                "^Sports",
+                "^Traditional",
+                "^Series:",
+                "^Card",
+                "^Collectible",
+            ]
             preprocessor = create_bgg_preprocessor(
                 model_type="linear",
                 create_designer_features=False,
                 create_artist_features=False,
                 create_publisher_features=False,
+                family_allow_patterns=embedding_family_patterns,
+                max_family_features=150,
+                preserve_columns=["year_published", "predicted_complexity"],
             )
 
         df_pandas = df.to_pandas()

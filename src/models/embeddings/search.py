@@ -38,6 +38,10 @@ class SearchFilters:
         ])
 
 
+# Valid embedding dimension options
+VALID_EMBEDDING_DIMS = [8, 16, 32, 64]
+
+
 class NearestNeighborSearch:
     """Query interface for BigQuery VECTOR_SEARCH."""
 
@@ -65,6 +69,24 @@ class NearestNeighborSearch:
             self.table_id = f"{self.config.ml_project_id}.raw.game_embeddings"
 
         self.client = bigquery.Client(project=self.config.ml_project_id)
+
+    def _get_embedding_column(self, embedding_dims: Optional[int] = None) -> str:
+        """Get the embedding column name for the requested dimensions.
+
+        Args:
+            embedding_dims: Number of dimensions (8, 16, 32, or 64/None for full).
+
+        Returns:
+            Column name to use for embeddings.
+        """
+        if embedding_dims is None or embedding_dims == 64:
+            return "embedding"
+        if embedding_dims not in VALID_EMBEDDING_DIMS:
+            raise ValueError(
+                f"Invalid embedding_dims: {embedding_dims}. "
+                f"Must be one of {VALID_EMBEDDING_DIMS}"
+            )
+        return f"embedding_{embedding_dims}"
 
     def _build_filter_clause(self, filters: Optional[SearchFilters]) -> str:
         """Build SQL WHERE clause from filters."""
@@ -103,6 +125,7 @@ class NearestNeighborSearch:
         exclude_self: bool = True,
         model_version: Optional[int] = None,
         filters: Optional[SearchFilters] = None,
+        embedding_dims: Optional[int] = None,
     ) -> pl.DataFrame:
         """Find k nearest neighbors for a game.
 
@@ -113,6 +136,7 @@ class NearestNeighborSearch:
             exclude_self: Whether to exclude the source game.
             model_version: Specific version to use. If None, uses latest.
             filters: Optional filters for year, rating, complexity, etc.
+            embedding_dims: Number of embedding dimensions to use (8, 16, 32, or 64/None).
 
         Returns:
             DataFrame with game_id, name, year_published, distance, and filter fields.
@@ -130,16 +154,19 @@ class NearestNeighborSearch:
         # Build filter clause
         filter_clause = self._build_filter_clause(filters)
 
+        # Get embedding column based on requested dimensions
+        emb_col = self._get_embedding_column(embedding_dims)
+
         # Query to find similar games
         query = f"""
         WITH source_game AS (
-            SELECT embedding, game_id as source_game_id
+            SELECT {emb_col} as embedding, game_id as source_game_id
             FROM `{self.table_id}`
             WHERE game_id = @game_id AND {version_filter}
             LIMIT 1
         ),
         candidates AS (
-            SELECT game_id, name, year_published, embedding,
+            SELECT game_id, name, year_published, {emb_col} as embedding,
                    users_rated, average_rating, geek_rating, complexity, thumbnail
             FROM `{self.table_id}`
             WHERE {version_filter}{filter_clause}
@@ -188,6 +215,7 @@ class NearestNeighborSearch:
         top_k: int = 10,
         distance_type: str = "COSINE",
         model_version: Optional[int] = None,
+        embedding_dims: Optional[int] = None,
     ) -> pl.DataFrame:
         """Find similar games given an embedding vector.
 
@@ -196,6 +224,7 @@ class NearestNeighborSearch:
             top_k: Number of results to return.
             distance_type: COSINE, EUCLIDEAN, or DOT_PRODUCT.
             model_version: Specific version to use.
+            embedding_dims: Number of embedding dimensions to use. If None, inferred from embedding length.
 
         Returns:
             DataFrame with game_id, name, year_published, distance.
@@ -210,6 +239,13 @@ class NearestNeighborSearch:
             )
             """
 
+        # Infer embedding_dims from embedding length if not provided
+        if embedding_dims is None:
+            embedding_dims = len(embedding) if len(embedding) in VALID_EMBEDDING_DIMS else 64
+
+        # Get embedding column based on dimensions
+        emb_col = self._get_embedding_column(embedding_dims)
+
         # Convert embedding to string for SQL
         embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
@@ -218,7 +254,7 @@ class NearestNeighborSearch:
             SELECT {embedding_str} as embedding
         ),
         candidates AS (
-            SELECT game_id, name, year_published, embedding
+            SELECT game_id, name, year_published, {emb_col} as embedding
             FROM `{self.table_id}`
             WHERE {version_filter}
         )
@@ -253,6 +289,7 @@ class NearestNeighborSearch:
         distance_type: str = "COSINE",
         model_version: Optional[int] = None,
         filters: Optional[SearchFilters] = None,
+        embedding_dims: Optional[int] = None,
     ) -> pl.DataFrame:
         """Find games similar to a set of games (using average embedding).
 
@@ -262,6 +299,7 @@ class NearestNeighborSearch:
             distance_type: Distance metric.
             model_version: Specific version to use.
             filters: Optional filters for year, rating, complexity, etc.
+            embedding_dims: Number of embedding dimensions to use (8, 16, 32, or 64/None).
 
         Returns:
             DataFrame with similar games.
@@ -279,11 +317,14 @@ class NearestNeighborSearch:
         # Build filter clause
         filter_clause = self._build_filter_clause(filters)
 
+        # Get embedding column based on requested dimensions
+        emb_col = self._get_embedding_column(embedding_dims)
+
         game_ids_str = ",".join(str(g) for g in game_ids)
 
         query = f"""
         WITH source_games AS (
-            SELECT embedding
+            SELECT {emb_col} as embedding
             FROM `{self.table_id}`
             WHERE game_id IN ({game_ids_str}) AND {version_filter}
         ),
@@ -299,7 +340,7 @@ class NearestNeighborSearch:
             FROM avg_embedding
         ),
         candidates AS (
-            SELECT game_id, name, year_published, embedding,
+            SELECT game_id, name, year_published, {emb_col} as embedding,
                    users_rated, average_rating, geek_rating, complexity, thumbnail
             FROM `{self.table_id}`
             WHERE {version_filter}

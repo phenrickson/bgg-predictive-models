@@ -445,6 +445,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         include_average_weight: bool = False,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
+        # Family pattern filters (regex patterns to match against family names)
+        family_allow_patterns: Optional[List[str]] = None,
+        family_remove_patterns: Optional[List[str]] = None,
     ):
         """Initialize the preprocessor.
 
@@ -519,6 +522,10 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         # Column preservation parameters
         self.preserve_columns = preserve_columns or ["year_published"]
+
+        # Family pattern filters (use defaults if not provided)
+        self.family_allow_patterns = family_allow_patterns
+        self.family_remove_patterns = family_remove_patterns
 
         # Fitted attributes (will be populated during fit)
         self.feature_names_ = None
@@ -945,8 +952,12 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         elif not isinstance(families, list):
             return []
 
-        remove_pattern = re.compile("|".join(self.FAMILY_REMOVE_PATTERNS))
-        allow_pattern = re.compile("|".join(self.FAMILY_ALLOW_PATTERNS))
+        # Use instance patterns if provided, otherwise use class defaults
+        remove_patterns = self.family_remove_patterns if self.family_remove_patterns is not None else self.FAMILY_REMOVE_PATTERNS
+        allow_patterns = self.family_allow_patterns if self.family_allow_patterns is not None else self.FAMILY_ALLOW_PATTERNS
+
+        remove_pattern = re.compile("|".join(remove_patterns))
+        allow_pattern = re.compile("|".join(allow_patterns))
 
         filtered = []
         for family in families:
