@@ -307,14 +307,16 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
         logger.info(f"Generating embeddings for {len(games_df)} games...")
 
         # Generate embeddings using pipeline transform
+        # Returns DataFrame with shape (n_games, embedding_dim)
         embeddings = pipeline.transform(games_df)
 
         # Build results DataFrame
+        # embeddings.values converts to numpy array, iterate rows to get list of vectors
         results_df = pd.DataFrame({
             "game_id": games_df["game_id"].values,
             "name": games_df["name"].values if "name" in games_df.columns else None,
             "year_published": games_df["year_published"].values if "year_published" in games_df.columns else None,
-            "embedding": list(embeddings),
+            "embedding": [row for row in embeddings.values],
         })
 
         # Upload to BigQuery (skip if specific game_ids provided - return in response)
