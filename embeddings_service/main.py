@@ -156,7 +156,7 @@ def load_games_for_embedding(
 
     if game_ids:
         logger.info(f"Loading {len(game_ids)} specific games for embeddings...")
-        return loader.load_games_features(game_ids=game_ids)
+        return loader.load_prediction_data(game_ids=game_ids).to_pandas()
 
     # Change detection: find games needing embeddings
     # Games that either don't have embeddings or have updated features
@@ -196,16 +196,17 @@ def load_games_for_embedding(
             return pd.DataFrame()
 
         logger.info(f"Found {len(game_ids_to_load)} games needing embeddings")
-        return loader.load_games_features(game_ids=game_ids_to_load)
+        return loader.load_prediction_data(game_ids=game_ids_to_load).to_pandas()
 
     except Exception as e:
         logger.warning(f"Change detection query failed, falling back to year filter: {e}")
         # Fallback: load games from scoring years
-        return loader.load_games_features(
-            year_start=config.years.score_start,
-            year_end=config.years.score_end,
-            min_ratings=emb_config.min_ratings,
+        where_clause = (
+            f"year_published >= {config.years.score_start} "
+            f"AND year_published <= {config.years.score_end} "
+            f"AND users_rated >= {emb_config.min_ratings}"
         )
+        return loader.load_data(where_clause).to_pandas()
 
 
 def upload_embeddings_to_bigquery(
