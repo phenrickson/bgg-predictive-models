@@ -152,7 +152,7 @@ def load_games_for_embedding(
     Returns:
         DataFrame with game features.
     """
-    loader = BGGDataLoader()
+    loader = BGGDataLoader(config.data_warehouse)
 
     if game_ids:
         logger.info(f"Loading {len(game_ids)} specific games for embeddings...")
