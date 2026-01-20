@@ -130,6 +130,19 @@ class RegisteredEmbeddingModel(ExperimentTracker):
             pickle.dumps(pipeline), content_type="application/octet-stream"
         )
 
+        # Save UMAP model if it exists in the experiment directory
+        umap_model_path = experiment.exp_dir / "umap_2d_model.pkl"
+        if umap_model_path.exists():
+            with open(umap_model_path, "rb") as f:
+                umap_model_bytes = f.read()
+            umap_blob = self.bucket.blob(f"{version_prefix}/umap_2d_model.pkl")
+            umap_blob.upload_from_string(
+                umap_model_bytes, content_type="application/octet-stream"
+            )
+            registration["has_umap_model"] = True
+        else:
+            registration["has_umap_model"] = False
+
         return registration
 
     def list_registered_models(self) -> List[Dict[str, Any]]:
@@ -198,6 +211,37 @@ class RegisteredEmbeddingModel(ExperimentTracker):
         pipeline = pickle.loads(pipeline_blob.download_as_string())
 
         return pipeline, registration
+
+    def load_umap_model(
+        self, name: str, version: Optional[int] = None
+    ) -> Optional[Any]:
+        """Load the UMAP model for a registered embedding model.
+
+        Args:
+            name: Name of the registered model.
+            version: Optional specific version (latest if None).
+
+        Returns:
+            Fitted UMAP model, or None if not available.
+        """
+        versions = self.list_model_versions(name)
+        if not versions:
+            return None
+
+        if version is None:
+            version = max(v["version"] for v in versions)
+
+        version_prefix = f"{self.base_prefix}/{name}/v{version}"
+        umap_blob = self.bucket.blob(f"{version_prefix}/umap_2d_model.pkl")
+
+        if not umap_blob.exists():
+            return None
+
+        try:
+            umap_model = pickle.loads(umap_blob.download_as_string())
+            return umap_model
+        except Exception:
+            return None
 
     def archive_model(
         self, name: str, version: Optional[int] = None, reason: str = ""
