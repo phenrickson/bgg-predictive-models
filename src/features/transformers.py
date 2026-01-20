@@ -443,6 +443,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Feature selection parameters
         include_base_numeric: bool = True,
         include_average_weight: bool = False,
+        include_mechanics_count: bool = True,
+        include_categories_count: bool = True,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
         # Family pattern filters (regex patterns to match against family names)
@@ -519,6 +521,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Feature selection parameters
         self.include_base_numeric = include_base_numeric
         self.include_average_weight = include_average_weight
+        self.include_mechanics_count = include_mechanics_count
+        self.include_categories_count = include_categories_count
 
         # Column preservation parameters
         self.preserve_columns = preserve_columns or ["year_published"]
@@ -1048,12 +1052,16 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         """Generate the list of feature names."""
         feature_names = []
 
+        # Count features (can be disabled independently)
+        if self.include_mechanics_count:
+            feature_names.append("mechanics_count")
+        if self.include_categories_count:
+            feature_names.append("categories_count")
+
         # Base numeric features
         if self.include_base_numeric:
             feature_names.extend(
                 [
-                    "mechanics_count",
-                    "categories_count",
                     "time_per_player",
                     "description_word_count",
                     "min_age",
@@ -1128,8 +1136,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Initialize list to store all feature DataFrames
         feature_dfs = []
 
-        # Create mechanics count if mechanics column exists
-        if "mechanics" in X_base.columns:
+        # Create mechanics count if mechanics column exists and enabled
+        if self.include_mechanics_count and "mechanics" in X_base.columns:
             mechanics_df = pd.DataFrame(index=X_base.index)
 
             # Use the more robust count_mechanics function
@@ -1161,8 +1169,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             mechanics_df["mechanics_count"] = X_base["mechanics"].apply(count_mechanics)
             feature_dfs.append(mechanics_df)
 
-        # Create categories count if categories column exists
-        if "categories" in X_base.columns:
+        # Create categories count if categories column exists and enabled
+        if self.include_categories_count and "categories" in X_base.columns:
             categories_df = pd.DataFrame(index=X_base.index)
 
             def count_categories(categories):

@@ -311,7 +311,8 @@ register_embeddings:
 	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
 
 ## dashboard
-dashboard:
+.PHONY: streamlit dashboard
+streamlit dashboard:
 	uv run streamlit run src/streamlit/Home.py
 
 ## view experiments
