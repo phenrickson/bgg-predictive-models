@@ -1,4 +1,4 @@
-name: Generate Game Embeddings
+name: Run Game Embeddings
 
 on:
   schedule:
@@ -63,38 +63,63 @@ jobs:
         echo "::add-mask::$ID_TOKEN"
         echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
 
-    - name: Call Embeddings Generation Endpoint
+    - name: Call Embeddings Generation Endpoint (Batched)
       id: generate
       run: |
         MODEL_NAME="${{ github.event.inputs.model_name || 'embeddings-v2026' }}"
         MAX_GAMES="${{ github.event.inputs.max_games || '25000' }}"
 
-        RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_embeddings" \
-          -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"model_name\": \"$MODEL_NAME\",
-            \"max_games\": $MAX_GAMES
-          }" \
-          -w "\n%{http_code}" \
-          -s)
+        TOTAL_GAMES=0
+        BATCH_COUNT=0
+        MAX_BATCHES=10  # Safety limit: 10 batches * 25k = 250k games max
 
-        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-        BODY=$(echo "$RESPONSE" | head -n-1)
+        while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
+          BATCH_COUNT=$((BATCH_COUNT + 1))
+          echo "=== Batch $BATCH_COUNT ==="
 
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Error: HTTP $HTTP_CODE"
-          echo "$BODY"
-          exit 1
-        fi
+          RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_embeddings" \
+            -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model_name\": \"$MODEL_NAME\",
+              \"max_games\": $MAX_GAMES
+            }" \
+            -w "\n%{http_code}" \
+            -s \
+            --max-time 600)
 
-        echo "$BODY" | jq '.'
-        GAMES_EMBEDDED=$(echo "$BODY" | jq -r '.games_embedded')
-        echo "games_embedded=$GAMES_EMBEDDED" >> $GITHUB_OUTPUT
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          echo "$BODY" | jq '.'
+          GAMES_EMBEDDED=$(echo "$BODY" | jq -r '.games_embedded')
+          TOTAL_GAMES=$((TOTAL_GAMES + GAMES_EMBEDDED))
+
+          echo "Batch $BATCH_COUNT: Embedded $GAMES_EMBEDDED games (Total: $TOTAL_GAMES)"
+
+          # Stop if no more games to embed
+          if [ "$GAMES_EMBEDDED" -eq 0 ]; then
+            echo "No more games to embed. Stopping."
+            break
+          fi
+
+          # Brief pause between batches
+          sleep 5
+        done
+
+        echo "total_games=$TOTAL_GAMES" >> $GITHUB_OUTPUT
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
 
     - name: Job Summary
       run: |
         echo "## Embeddings Generation Results" >> $GITHUB_STEP_SUMMARY
         echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Model**: ${{ github.event.inputs.model_name || 'embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Games Embedded**: ${{ steps.generate.outputs.games_embedded }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
