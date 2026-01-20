@@ -218,12 +218,8 @@ def load_games_for_embedding(
         return emb_loader.load_scoring_data(game_ids=game_ids_to_load).to_pandas()
 
     except Exception as e:
-        logger.warning(f"Change detection query failed, falling back to year filter: {e}")
-        # Fallback: load games from scoring years (all games, no min_ratings filter)
-        return emb_loader.load_scoring_data(
-            start_year=config.years.score_start,
-            end_year=config.years.score_end,
-        ).to_pandas()
+        logger.error(f"Change detection query failed: {e}")
+        raise
 
 
 def upload_embeddings_to_bigquery(
