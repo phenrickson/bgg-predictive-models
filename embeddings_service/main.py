@@ -67,8 +67,9 @@ class SimilarGamesRequest(BaseModel):
     top_k: Optional[int] = Field(None, description="Number of results")
     distance_type: Optional[str] = Field(None, description="cosine, euclidean, dot_product")
     model_version: Optional[int] = Field(None, description="Specific model version")
-    embedding_dims: Optional[int] = Field(None, description="Embedding dimensions to use (8, 16, 32, or 64)")
-    # Filters
+    embedding_dims: int = Field(64, description="Embedding dimensions to use (8, 16, 32, or 64)")
+
+    # Absolute filters
     min_year: Optional[int] = Field(None, description="Minimum year published")
     max_year: Optional[int] = Field(None, description="Maximum year published")
     min_users_rated: Optional[int] = Field(None, description="Minimum number of ratings")
@@ -79,6 +80,27 @@ class SimilarGamesRequest(BaseModel):
     max_geek_rating: Optional[float] = Field(None, description="Maximum BGG geek rating (Bayesian average)")
     min_complexity: Optional[float] = Field(None, description="Minimum complexity/weight (1-5)")
     max_complexity: Optional[float] = Field(None, description="Maximum complexity/weight (1-5)")
+
+    # Relative complexity filtering (relative to query game)
+    complexity_mode: Optional[str] = Field(
+        None,
+        description="Complexity filter mode: 'within_band' (±band), 'less_complex', 'more_complex'. "
+                    "If set, overrides min/max_complexity with values relative to query game."
+    )
+    complexity_band: Optional[float] = Field(
+        0.5,
+        description="Complexity band for relative modes (±value for within_band, max difference for directional)"
+    )
+
+    # Visualization options
+    include_embeddings: bool = Field(
+        False,
+        description="Include embedding vectors in response for visualization (component profiles, etc.)"
+    )
+    include_umap: bool = Field(
+        False,
+        description="Include UMAP 2D coordinates in response (requires UMAP model to be registered)"
+    )
 
 
 class SimilarGame(BaseModel):
@@ -93,6 +115,9 @@ class SimilarGame(BaseModel):
     complexity: Optional[float] = None
     thumbnail: Optional[str] = None
     distance: float
+    embedding: Optional[List[float]] = Field(None, description="Embedding vector (if include_embeddings=true)")
+    umap_1: Optional[float] = Field(None, description="UMAP x-coordinate (if include_umap=true)")
+    umap_2: Optional[float] = Field(None, description="UMAP y-coordinate (if include_umap=true)")
 
 
 class SimilarGamesResponse(BaseModel):
@@ -101,6 +126,37 @@ class SimilarGamesResponse(BaseModel):
     query: Dict[str, Any]
     results: List[SimilarGame]
     distance_type: str
+    query_embedding: Optional[List[float]] = Field(None, description="Query game embedding (if include_embeddings=true)")
+    query_umap: Optional[List[float]] = Field(None, description="Query game UMAP coordinates [x, y] (if include_umap=true)")
+
+
+class EmbeddingProfileRequest(BaseModel):
+    """Request for embedding profiles."""
+
+    game_ids: List[int] = Field(..., description="List of game IDs to get embeddings for")
+    model_version: Optional[int] = Field(None, description="Specific model version")
+    embedding_dims: int = Field(64, description="Embedding dimensions (8, 16, 32, or 64)")
+    include_umap: bool = Field(False, description="Include UMAP 2D coordinates")
+
+
+class GameEmbedding(BaseModel):
+    """Embedding data for a single game."""
+
+    game_id: int
+    name: Optional[str] = None
+    year_published: Optional[int] = None
+    complexity: Optional[float] = None
+    embedding: List[float]
+    umap_1: Optional[float] = Field(None, description="UMAP x-coordinate")
+    umap_2: Optional[float] = Field(None, description="UMAP y-coordinate")
+
+
+class EmbeddingProfileResponse(BaseModel):
+    """Response containing embedding profiles."""
+
+    games: List[GameEmbedding]
+    embedding_dim: int
+    model_version: int
 
 
 class ModelInfo(BaseModel):
@@ -368,15 +424,247 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def get_query_game_complexity(game_id: int) -> Optional[float]:
+    """Fetch the complexity of a game from the embeddings table.
+
+    Args:
+        game_id: The game ID to look up.
+
+    Returns:
+        The game's complexity value, or None if not found.
+    """
+    emb_config = config.embeddings
+    project = emb_config.vector_search.project or config.ml_project_id
+    dataset = emb_config.vector_search.dataset
+    table = emb_config.vector_search.table
+    table_id = f"{project}.{dataset}.{table}"
+
+    query = f"""
+    SELECT complexity
+    FROM `{table_id}`
+    WHERE game_id = @game_id
+    LIMIT 1
+    """
+
+    client = bigquery.Client(project=config.ml_project_id)
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("game_id", "INT64", game_id),
+        ]
+    )
+
+    try:
+        result = client.query(query, job_config=job_config).to_dataframe()
+        if len(result) > 0 and result["complexity"].iloc[0] is not None:
+            return float(result["complexity"].iloc[0])
+        return None
+    except Exception as e:
+        logger.warning(f"Could not fetch complexity for game {game_id}: {e}")
+        return None
+
+
+def compute_complexity_bounds(
+    query_complexity: float,
+    mode: str,
+    band: float,
+) -> tuple[Optional[float], Optional[float]]:
+    """Compute min/max complexity based on relative mode.
+
+    Args:
+        query_complexity: The query game's complexity.
+        mode: One of 'within_band', 'less_complex', 'more_complex'.
+        band: The complexity band value (± for within_band, max difference for directional).
+
+    Returns:
+        Tuple of (min_complexity, max_complexity).
+    """
+    if mode == "within_band":
+        return (
+            max(1.0, query_complexity - band),
+            min(5.0, query_complexity + band),
+        )
+    elif mode == "less_complex":
+        return (
+            max(1.0, query_complexity - band),
+            query_complexity,
+        )
+    elif mode == "more_complex":
+        return (
+            query_complexity,
+            min(5.0, query_complexity + band),
+        )
+    else:
+        raise ValueError(f"Invalid complexity_mode: {mode}")
+
+
+def fetch_game_embeddings(
+    game_ids: List[int],
+    embedding_dims: Optional[int] = None,
+    model_version: Optional[int] = None,
+) -> Dict[int, Dict[str, Any]]:
+    """Fetch embeddings and metadata for multiple games.
+
+    Args:
+        game_ids: List of game IDs to fetch.
+        embedding_dims: Embedding dimensions (8, 16, 32, or 64/None).
+        model_version: Specific model version, or None for latest.
+
+    Returns:
+        Dict mapping game_id to {embedding, name, year_published, complexity}.
+    """
+    from src.models.embeddings.search import VALID_EMBEDDING_DIMS
+
+    emb_config = config.embeddings
+    project = emb_config.vector_search.project or config.ml_project_id
+    dataset = emb_config.vector_search.dataset
+    table = emb_config.vector_search.table
+    table_id = f"{project}.{dataset}.{table}"
+
+    # Determine embedding column
+    if embedding_dims is None or embedding_dims == 64:
+        emb_col = "embedding"
+    elif embedding_dims in VALID_EMBEDDING_DIMS:
+        emb_col = f"embedding_{embedding_dims}"
+    else:
+        raise ValueError(f"Invalid embedding_dims: {embedding_dims}")
+
+    # Build version filter
+    if model_version:
+        version_filter = f"embedding_version = {model_version}"
+    else:
+        version_filter = f"embedding_version = (SELECT MAX(embedding_version) FROM `{table_id}`)"
+
+    game_ids_str = ",".join(str(g) for g in game_ids)
+
+    query = f"""
+    SELECT game_id, name, year_published, complexity, {emb_col} as embedding, embedding_version
+    FROM `{table_id}`
+    WHERE game_id IN ({game_ids_str}) AND {version_filter}
+    """
+
+    client = bigquery.Client(project=config.ml_project_id)
+
+    try:
+        result = client.query(query).to_dataframe()
+        embeddings_map = {}
+        for _, row in result.iterrows():
+            embeddings_map[row["game_id"]] = {
+                "embedding": list(row["embedding"]),
+                "name": row.get("name"),
+                "year_published": row.get("year_published"),
+                "complexity": row.get("complexity"),
+                "embedding_version": row.get("embedding_version"),
+            }
+        return embeddings_map
+    except Exception as e:
+        logger.error(f"Error fetching embeddings: {e}")
+        raise
+
+
+# Cache for loaded UMAP models (keyed by model_name:version)
+_umap_model_cache: Dict[str, Any] = {}
+
+
+def get_umap_model(model_name: str = "bgg-embeddings", model_version: Optional[int] = None) -> Optional[Any]:
+    """Load and cache the UMAP model for transforming embeddings to 2D.
+
+    Args:
+        model_name: Name of the registered embedding model.
+        model_version: Specific version, or None for latest.
+
+    Returns:
+        Fitted UMAP model, or None if not available.
+    """
+    # Build cache key
+    cache_key = f"{model_name}:{model_version or 'latest'}"
+
+    if cache_key in _umap_model_cache:
+        return _umap_model_cache[cache_key]
+
+    try:
+        registered_model = RegisteredEmbeddingModel()
+        umap_model = registered_model.load_umap_model(model_name, model_version)
+
+        if umap_model is not None:
+            _umap_model_cache[cache_key] = umap_model
+            logger.info(f"Loaded UMAP model for {cache_key}")
+
+        return umap_model
+    except Exception as e:
+        logger.warning(f"Could not load UMAP model for {cache_key}: {e}")
+        return None
+
+
+def transform_to_umap(
+    embeddings: List[List[float]],
+    model_name: str = "bgg-embeddings",
+    model_version: Optional[int] = None,
+) -> Optional[List[List[float]]]:
+    """Transform embeddings to 2D UMAP coordinates.
+
+    Args:
+        embeddings: List of embedding vectors (must be full 64-dim for UMAP).
+        model_name: Name of the registered embedding model.
+        model_version: Specific version, or None for latest.
+
+    Returns:
+        List of [umap_1, umap_2] coordinates, or None if UMAP not available.
+    """
+    import numpy as np
+
+    umap_model = get_umap_model(model_name, model_version)
+    if umap_model is None:
+        return None
+
+    try:
+        embeddings_array = np.array(embeddings)
+        umap_coords = umap_model.transform(embeddings_array)
+        return [[float(x), float(y)] for x, y in umap_coords]
+    except Exception as e:
+        logger.warning(f"UMAP transform failed: {e}")
+        return None
+
+
 @app.post("/similar", response_model=SimilarGamesResponse)
 async def find_similar_games(request: SimilarGamesRequest):
-    """Find similar games using vector similarity search."""
+    """Find similar games using vector similarity search.
+
+    Supports both absolute filters (min_year, max_complexity, etc.) and
+    relative complexity filtering (within_band, less_complex, more_complex)
+    based on the query game's complexity.
+    """
     from src.models.embeddings.search import NearestNeighborSearch, SearchFilters
 
     # Get defaults from config
     search_config = config.embeddings.search
     top_k = request.top_k or search_config.default_top_k
     distance_type = (request.distance_type or search_config.default_distance_type).upper()
+
+    # Determine complexity bounds
+    min_complexity = request.min_complexity
+    max_complexity = request.max_complexity
+    query_complexity = None
+    complexity_mode_applied = None
+
+    # Handle relative complexity mode
+    if request.complexity_mode and request.game_id:
+        query_complexity = get_query_game_complexity(request.game_id)
+        if query_complexity is not None:
+            band = request.complexity_band if request.complexity_band is not None else 0.5
+            min_complexity, max_complexity = compute_complexity_bounds(
+                query_complexity, request.complexity_mode, band
+            )
+            complexity_mode_applied = request.complexity_mode
+            logger.info(
+                f"Applied complexity_mode={request.complexity_mode} "
+                f"(query={query_complexity:.2f}, band={band}) -> "
+                f"[{min_complexity:.2f}, {max_complexity:.2f}]"
+            )
+        else:
+            logger.warning(
+                f"complexity_mode requested but query game {request.game_id} "
+                "has no complexity value - ignoring"
+            )
 
     # Build filters from request
     filters = SearchFilters(
@@ -388,8 +676,8 @@ async def find_similar_games(request: SimilarGamesRequest):
         max_rating=request.max_rating,
         min_geek_rating=request.min_geek_rating,
         max_geek_rating=request.max_geek_rating,
-        min_complexity=request.min_complexity,
-        max_complexity=request.max_complexity,
+        min_complexity=min_complexity,
+        max_complexity=max_complexity,
     )
 
     try:
@@ -428,31 +716,111 @@ async def find_similar_games(request: SimilarGamesRequest):
             )
 
         # Add embedding_dims to query info
-        query_info["embedding_dims"] = request.embedding_dims or 64
+        query_info["embedding_dims"] = request.embedding_dims
 
-        # Add applied filters to query info
-        if filters.has_filters():
-            query_info["filters"] = {
-                k: v for k, v in {
-                    "min_year": request.min_year,
-                    "max_year": request.max_year,
-                    "min_users_rated": request.min_users_rated,
-                    "max_users_rated": request.max_users_rated,
-                    "min_rating": request.min_rating,
-                    "max_rating": request.max_rating,
-                    "min_geek_rating": request.min_geek_rating,
-                    "max_geek_rating": request.max_geek_rating,
-                    "min_complexity": request.min_complexity,
-                    "max_complexity": request.max_complexity,
-                }.items() if v is not None
-            }
+        # Build applied filters dict for response
+        applied_filters = {}
+        if request.min_year is not None:
+            applied_filters["min_year"] = request.min_year
+        if request.max_year is not None:
+            applied_filters["max_year"] = request.max_year
+        if request.min_users_rated is not None:
+            applied_filters["min_users_rated"] = request.min_users_rated
+        if request.max_users_rated is not None:
+            applied_filters["max_users_rated"] = request.max_users_rated
+        if request.min_rating is not None:
+            applied_filters["min_rating"] = request.min_rating
+        if request.max_rating is not None:
+            applied_filters["max_rating"] = request.max_rating
+        if request.min_geek_rating is not None:
+            applied_filters["min_geek_rating"] = request.min_geek_rating
+        if request.max_geek_rating is not None:
+            applied_filters["max_geek_rating"] = request.max_geek_rating
+
+        # Add complexity info (either absolute or computed from mode)
+        if complexity_mode_applied:
+            applied_filters["complexity_mode"] = complexity_mode_applied
+            applied_filters["complexity_band"] = request.complexity_band or 0.5
+            applied_filters["query_complexity"] = query_complexity
+            applied_filters["min_complexity"] = min_complexity
+            applied_filters["max_complexity"] = max_complexity
+        else:
+            if request.min_complexity is not None:
+                applied_filters["min_complexity"] = request.min_complexity
+            if request.max_complexity is not None:
+                applied_filters["max_complexity"] = request.max_complexity
+
+        if applied_filters:
+            query_info["filters"] = applied_filters
+
+        # Fetch embeddings if requested for visualization (or for UMAP)
+        embeddings_map = {}
+        umap_coords_map = {}
+        query_embedding = None
+        query_umap = None
+
+        if request.include_embeddings or request.include_umap:
+            # Get all game IDs we need embeddings for
+            result_game_ids = [row["game_id"] for row in results.to_dicts()]
+            all_game_ids = result_game_ids.copy()
+            if request.game_id:
+                all_game_ids.append(request.game_id)
+
+            # For UMAP, we need full 64-dim embeddings regardless of embedding_dims setting
+            fetch_dims = None if request.include_umap else request.embedding_dims
+
+            embeddings_map = fetch_game_embeddings(
+                game_ids=all_game_ids,
+                embedding_dims=fetch_dims,
+                model_version=request.model_version,
+            )
+
+            # Extract query embedding
+            if request.game_id and request.game_id in embeddings_map:
+                query_embedding = embeddings_map[request.game_id]["embedding"]
+
+            # Compute UMAP coordinates if requested
+            if request.include_umap and embeddings_map:
+                # Build list of embeddings in same order as game_ids
+                ordered_embeddings = [
+                    embeddings_map[gid]["embedding"]
+                    for gid in all_game_ids
+                    if gid in embeddings_map
+                ]
+                ordered_game_ids = [
+                    gid for gid in all_game_ids if gid in embeddings_map
+                ]
+
+                umap_result = transform_to_umap(
+                    ordered_embeddings,
+                    model_version=request.model_version,
+                )
+
+                if umap_result is not None:
+                    for gid, coords in zip(ordered_game_ids, umap_result):
+                        umap_coords_map[gid] = coords
+
+                    # Extract query UMAP
+                    if request.game_id and request.game_id in umap_coords_map:
+                        query_umap = umap_coords_map[request.game_id]
 
         # Convert results to response format
         similar_games = []
         for row in results.to_dicts():
+            game_id = row["game_id"]
+            embedding = None
+            umap_1 = None
+            umap_2 = None
+
+            if request.include_embeddings and game_id in embeddings_map:
+                embedding = embeddings_map[game_id]["embedding"]
+
+            if request.include_umap and game_id in umap_coords_map:
+                umap_1, umap_2 = umap_coords_map[game_id]
+
             similar_games.append(
                 SimilarGame(
-                    game_id=row["game_id"],
+                    game_id=game_id,
                     name=row.get("name", ""),
                     year_published=row.get("year_published"),
                     users_rated=row.get("users_rated"),
@@ -461,6 +829,9 @@ async def find_similar_games(request: SimilarGamesRequest):
                     complexity=row.get("complexity"),
                     thumbnail=row.get("thumbnail"),
                     distance=row["distance"],
+                    embedding=embedding,
+                    umap_1=umap_1,
+                    umap_2=umap_2,
                 )
             )
 
@@ -468,6 +839,8 @@ async def find_similar_games(request: SimilarGamesRequest):
             query=query_info,
             results=similar_games,
             distance_type=distance_type.lower(),
+            query_embedding=query_embedding,
+            query_umap=query_umap,
         )
 
     except Exception as e:
@@ -487,6 +860,91 @@ async def get_embedding_stats(model_version: Optional[int] = None):
 
     except Exception as e:
         logger.error(f"Error getting embedding stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/embedding_profile", response_model=EmbeddingProfileResponse)
+async def get_embedding_profile(request: EmbeddingProfileRequest):
+    """Get embedding profiles for multiple games.
+
+    Returns the embedding vectors and metadata for the requested games,
+    suitable for creating component profile visualizations.
+
+    Example use cases:
+    - Plot embedding values across all components for multiple games
+    - Compare how games are positioned in embedding space
+    - Analyze which components differentiate similar games
+    - Visualize games in 2D UMAP space (with include_umap=true)
+    """
+    try:
+        # For UMAP, we need full 64-dim embeddings
+        fetch_dims = None if request.include_umap else request.embedding_dims
+
+        embeddings_map = fetch_game_embeddings(
+            game_ids=request.game_ids,
+            embedding_dims=fetch_dims,
+            model_version=request.model_version,
+        )
+
+        if not embeddings_map:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No embeddings found for game_ids: {request.game_ids}"
+            )
+
+        # Determine embedding dimension and version from first result
+        first_game = next(iter(embeddings_map.values()))
+        embedding_dim = len(first_game["embedding"])
+        model_version_found = first_game.get("embedding_version", 0)
+
+        # Compute UMAP coordinates if requested
+        umap_coords_map = {}
+        if request.include_umap:
+            ordered_game_ids = [gid for gid in request.game_ids if gid in embeddings_map]
+            ordered_embeddings = [embeddings_map[gid]["embedding"] for gid in ordered_game_ids]
+
+            umap_result = transform_to_umap(
+                ordered_embeddings,
+                model_version=request.model_version,
+            )
+
+            if umap_result is not None:
+                for gid, coords in zip(ordered_game_ids, umap_result):
+                    umap_coords_map[gid] = coords
+
+        # Build response
+        games = []
+        for game_id in request.game_ids:
+            if game_id in embeddings_map:
+                data = embeddings_map[game_id]
+                umap_1 = None
+                umap_2 = None
+
+                if game_id in umap_coords_map:
+                    umap_1, umap_2 = umap_coords_map[game_id]
+
+                games.append(
+                    GameEmbedding(
+                        game_id=game_id,
+                        name=data.get("name"),
+                        year_published=data.get("year_published"),
+                        complexity=data.get("complexity"),
+                        embedding=data["embedding"],
+                        umap_1=umap_1,
+                        umap_2=umap_2,
+                    )
+                )
+
+        return EmbeddingProfileResponse(
+            games=games,
+            embedding_dim=embedding_dim,
+            model_version=model_version_found,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting embedding profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -12,13 +12,13 @@ import polars as pl
 from sklearn.metrics import silhouette_score
 from sklearn.pipeline import Pipeline
 
-from src.features.preprocessor import create_bgg_preprocessor
 from src.models.experiments import ExperimentTracker
 from src.models.training import create_data_splits
 from src.utils.config import Config, load_config
 
 from .algorithms import BaseEmbeddingAlgorithm, create_embedding_algorithm
 from .data import EmbeddingDataLoader
+from .transformer import create_embedding_preprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -102,27 +102,10 @@ class EmbeddingTrainer:
             Tuple of (preprocessed features DataFrame, fitted preprocessor).
         """
         if preprocessor is None:
-            # Create preprocessor with subset of features for embeddings
-            # Exclude designers, publishers, and artists - focus on game mechanics/categories
-            # Restrict family features to game characteristic types only
-            embedding_family_patterns = [
-                "^Players:",
-                "^Category",
-                "^Sports",
-                "^Traditional",
-                "^Series:",
-                "^Card",
-                "^Collectible",
-            ]
-            preprocessor = create_bgg_preprocessor(
+            # Create embedding-specific preprocessor with appropriate defaults
+            # (excludes designer/artist/publisher, focuses on game characteristics)
+            preprocessor = create_embedding_preprocessor(
                 model_type="linear",
-                create_designer_features=False,
-                create_artist_features=False,
-                create_publisher_features=False,
-                include_mechanics_count=False,
-                include_categories_count=False,
-                family_allow_patterns=embedding_family_patterns,
-                max_family_features=150,
                 preserve_columns=["year_published", "predicted_complexity"],
             )
 
@@ -628,6 +611,7 @@ class EmbeddingTrainer:
                     "test_end_year": years.test_end,
                 },
                 "feature_config": {
+                    "transformer": "EmbeddingTransformer",
                     "create_designer_features": False,
                     "create_artist_features": False,
                     "create_publisher_features": False,
@@ -636,8 +620,6 @@ class EmbeddingTrainer:
                     "create_family_features": True,
                     "create_player_dummies": True,
                     "include_base_numeric": True,
-                    "include_mechanics_count": False,
-                    "include_categories_count": False,
                     "includes_predicted_complexity": True,
                 },
             },
