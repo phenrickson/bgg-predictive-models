@@ -30,8 +30,8 @@ default_environment: dev
 years:
   current: 2026
   train_end: 2022  # current - 4
-  tune_end: 2022   # train_end + 1
-  test_start: 2023 # tune_end + 1
+  tune_end: 2023   # train_end + 1
+  test_start: 2024 # tune_end + 1
   test_end: 2024   # test_start
   eval:
     start: 2018

@@ -236,17 +236,14 @@ score_users_rated:
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
-.PHONY: embeddings embeddings_pca embeddings_svd embeddings_umap embeddings_autoencoder
-embeddings: embeddings_pca embeddings_svd embeddings_umap
+.PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
+embeddings: embeddings_pca embeddings_svd embeddings_autoencoder
 
 embeddings_pca:
 	uv run -m src.models.embeddings.train --algorithm pca
 
 embeddings_svd:
 	uv run -m src.models.embeddings.train --algorithm svd
-
-embeddings_umap:
-	uv run -m src.models.embeddings.train --algorithm umap
 
 embeddings_autoencoder:
 	uv run -m src.models.embeddings.train --algorithm autoencoder
@@ -311,7 +308,8 @@ register_embeddings:
 	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
 
 ## dashboard
-dashboard:
+.PHONY: streamlit dashboard
+streamlit dashboard:
 	uv run streamlit run src/streamlit/Home.py
 
 ## view experiments
