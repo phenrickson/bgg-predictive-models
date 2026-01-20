@@ -173,9 +173,16 @@ class EmbeddingTrainer:
         algo_metrics = algorithm.get_metrics()
         metrics.update(algo_metrics)
 
-        # Compute reconstruction error for linear methods
+        # Compute reconstruction error for linear methods (PCA, SVD)
+        # Skip for UMAP - its inverse_transform is unstable for high-dimensional targets
+        # and not meaningful for non-linear manifold methods
         # Note: X_original is already scaled by the preprocessor
-        if hasattr(algorithm, "model") and hasattr(algorithm.model, "inverse_transform"):
+        is_umap = type(algorithm).__name__ == "UMAPEmbedding"
+        if (
+            not is_umap
+            and hasattr(algorithm, "model")
+            and hasattr(algorithm.model, "inverse_transform")
+        ):
             try:
                 X_reconstructed = algorithm.model.inverse_transform(embeddings)
                 reconstruction_error = np.mean((X_original.values - X_reconstructed) ** 2)
@@ -190,6 +197,90 @@ class EmbeddingTrainer:
         metrics["embedding_max"] = float(np.max(embeddings))
 
         return metrics
+
+    def _compute_and_save_umap_coordinates(
+        self,
+        exp_dir: Path,
+        game_ids: list,
+        fit_embeddings: np.ndarray,
+        all_embeddings: np.ndarray,
+        dataset_name: str,
+        complexity_values: Optional[np.ndarray] = None,
+        n_neighbors: int = 30,
+        min_dist: float = 0.1,
+    ) -> None:
+        """Compute UMAP 2D projection and save coordinates and visualization.
+
+        Fits UMAP on fit_embeddings (train+tune), then transforms all embeddings.
+
+        Args:
+            exp_dir: Experiment directory to save to.
+            game_ids: List of game IDs corresponding to all_embeddings.
+            fit_embeddings: Embeddings to fit UMAP on (typically train+tune filtered).
+            all_embeddings: All embeddings (train + tune + test) to transform.
+            dataset_name: Name of dataset (train/tune/test/all).
+            complexity_values: Optional array of complexity values for coloring.
+            n_neighbors: UMAP n_neighbors parameter.
+            min_dist: UMAP min_dist parameter.
+        """
+        try:
+            from umap import UMAP
+        except ImportError:
+            logger.warning("umap-learn not installed, skipping UMAP projection")
+            return
+
+        logger.info(f"Fitting UMAP on {len(fit_embeddings)} samples (train + tune filtered)...")
+
+        umap_2d = UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            metric="euclidean",
+            random_state=42,
+        )
+        umap_2d.fit(fit_embeddings)
+
+        # Save fitted UMAP model for later use (e.g., scoring service)
+        umap_model_path = exp_dir / "umap_2d_model.pkl"
+        with open(umap_model_path, "wb") as f:
+            pickle.dump(umap_2d, f)
+        logger.info(f"Saved fitted UMAP model to {umap_model_path}")
+
+        logger.info(f"Transforming all embeddings ({len(all_embeddings)} samples)...")
+        projection_2d = umap_2d.transform(all_embeddings)
+
+        # Save as parquet with game_id
+        umap_df = pl.DataFrame({
+            "game_id": game_ids,
+            "umap_1": projection_2d[:, 0],
+            "umap_2": projection_2d[:, 1],
+        })
+        umap_path = exp_dir / f"{dataset_name}_umap_coords.parquet"
+        umap_df.write_parquet(umap_path)
+        logger.info(f"Saved UMAP 2D coordinates to {umap_path}")
+
+        # Save 2D PNG visualization
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 8))
+        scatter = ax.scatter(
+            projection_2d[:, 0],
+            projection_2d[:, 1],
+            c=complexity_values,
+            cmap="viridis",
+            s=2,
+            alpha=0.5,
+        )
+        if complexity_values is not None:
+            plt.colorbar(scatter, ax=ax, label="Predicted Complexity")
+        ax.set_xlabel("UMAP 1")
+        ax.set_ylabel("UMAP 2")
+        ax.set_title(f"UMAP 2D Projection - {dataset_name} ({len(projection_2d)} games)")
+
+        png_path = exp_dir / f"{dataset_name}_umap_2d.png"
+        fig.savefig(png_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"Saved UMAP 2D plot to {png_path}")
 
     def _save_visualization_data(
         self,
@@ -437,15 +528,23 @@ class EmbeddingTrainer:
             test_end_year=years.test_end,
         )
 
-        # Filter training data by min_ratings
+        # Filter training and tune data by min_ratings
         # Only train on games with sufficient ratings (more meaningful data)
         train_df_unfiltered = train_df
+        tune_df_unfiltered = tune_df
         if min_ratings > 0:
             train_df = train_df.filter(pl.col("users_rated") >= min_ratings)
+            tune_df_filtered = tune_df.filter(pl.col("users_rated") >= min_ratings)
             logger.info(
                 f"Filtered training data: {len(train_df_unfiltered)} -> {len(train_df)} "
                 f"games with users_rated >= {min_ratings}"
             )
+            logger.info(
+                f"Filtered tune data: {len(tune_df_unfiltered)} -> {len(tune_df_filtered)} "
+                f"games with users_rated >= {min_ratings}"
+            )
+        else:
+            tune_df_filtered = tune_df
 
         logger.info(
             f"Split sizes - Train: {len(train_df)} (filtered), "
@@ -479,8 +578,9 @@ class EmbeddingTrainer:
         test_metrics = self.evaluate_embeddings(test_embeddings, test_X, embedding_model)
 
         # Refit on combined train + tune data for final model
+        # Use filtered tune data (same min_ratings filter as train)
         logger.info("Refitting model on combined train + tune data...")
-        combined_df = pl.concat([train_df, tune_df])
+        combined_df = pl.concat([train_df, tune_df_filtered])
         combined_X, _ = self.prepare_features(combined_df, preprocessor=preprocessor, fit=False)
 
         # Create fresh model for final fit
@@ -491,6 +591,9 @@ class EmbeddingTrainer:
         )
         final_model.fit(combined_X)
         logger.info(f"Final model trained on {len(combined_X)} samples (train + tune)")
+
+        # Generate embeddings for the combined training data (for UMAP fitting)
+        combined_embeddings = final_model.transform(combined_X)
 
         # Use final model for generating embeddings going forward
         embedding_model = final_model
@@ -635,6 +738,33 @@ class EmbeddingTrainer:
             )
             emb_path = experiment.exp_dir / f"{name}_embeddings.parquet"
             emb_output.write_parquet(emb_path)
+
+        # Compute and save UMAP 2D projections for visualization
+        # Fit UMAP on training data only, then transform all datasets
+        all_game_ids = (
+            train_df["game_id"].to_list()
+            + tune_df["game_id"].to_list()
+            + test_df["game_id"].to_list()
+        )
+        all_embeddings = np.vstack([train_embeddings, tune_embeddings, test_embeddings])
+
+        # Get complexity values for coloring the UMAP plot
+        all_complexity = None
+        if "predicted_complexity" in train_df.columns:
+            all_complexity = np.concatenate([
+                train_df["predicted_complexity"].to_numpy(),
+                tune_df["predicted_complexity"].to_numpy(),
+                test_df["predicted_complexity"].to_numpy(),
+            ])
+
+        self._compute_and_save_umap_coordinates(
+            experiment.exp_dir,
+            all_game_ids,
+            fit_embeddings=combined_embeddings,
+            all_embeddings=all_embeddings,
+            dataset_name="all",
+            complexity_values=all_complexity,
+        )
 
         logger.info(f"Experiment saved to {experiment.exp_dir}")
 

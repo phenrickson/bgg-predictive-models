@@ -516,13 +516,259 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         return artifacts
 
 
+class VAEEmbedding(BaseEmbeddingAlgorithm):
+    """Variational Autoencoder for well-structured learned embeddings.
+
+    Unlike regular autoencoders, VAEs enforce structure on the latent space
+    by pushing it toward a standard Gaussian distribution. This prevents
+    latent collapse and creates smooth, continuous embeddings.
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        hidden_layers: Optional[List[int]] = None,
+        epochs: int = 100,
+        batch_size: int = 256,
+        learning_rate: float = 0.001,
+        beta: float = 1.0,
+        dropout: float = 0.1,
+        use_batch_norm: bool = True,
+        **kwargs,
+    ):
+        """Initialize VAE embedding.
+
+        Args:
+            embedding_dim: Size of the latent space (embedding dimension).
+            hidden_layers: List of hidden layer sizes for encoder/decoder.
+            epochs: Number of training epochs.
+            batch_size: Batch size for training.
+            learning_rate: Learning rate for optimizer.
+            beta: Weight for KL divergence loss (beta-VAE). Higher = more regularization.
+                  beta=1.0 is standard VAE, beta>1 pushes harder toward Gaussian.
+            dropout: Dropout rate for regularization.
+            use_batch_norm: Whether to use batch normalization.
+            **kwargs: Additional parameters.
+        """
+        super().__init__(embedding_dim)
+        self.hidden_layers = hidden_layers or [512, 256, 128]
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.beta = beta
+        self.dropout = dropout
+        self.use_batch_norm = use_batch_norm
+
+        self.encoder = None
+        self.fc_mu = None
+        self.fc_logvar = None
+        self.decoder = None
+        self.input_dim = None
+        self.training_history = []
+        self.kl_history = []
+        self.recon_history = []
+
+    def _build_model(self, input_dim: int):
+        """Build the VAE architecture."""
+        try:
+            import torch.nn as nn
+        except ImportError:
+            raise ImportError("PyTorch is required for VAEEmbedding")
+
+        self.input_dim = input_dim
+
+        # Build encoder (outputs to hidden, then split to mu and logvar)
+        encoder_layers = []
+        prev_dim = input_dim
+        for hidden_dim in self.hidden_layers:
+            encoder_layers.append(nn.Linear(prev_dim, hidden_dim))
+            if self.use_batch_norm:
+                encoder_layers.append(nn.BatchNorm1d(hidden_dim))
+            encoder_layers.append(nn.ReLU())
+            if self.dropout > 0:
+                encoder_layers.append(nn.Dropout(self.dropout))
+            prev_dim = hidden_dim
+
+        self.encoder = nn.Sequential(*encoder_layers)
+
+        # Separate heads for mean and log-variance
+        self.fc_mu = nn.Linear(prev_dim, self.embedding_dim)
+        self.fc_logvar = nn.Linear(prev_dim, self.embedding_dim)
+
+        # Build decoder
+        decoder_layers = []
+        prev_dim = self.embedding_dim
+        for hidden_dim in reversed(self.hidden_layers):
+            decoder_layers.append(nn.Linear(prev_dim, hidden_dim))
+            if self.use_batch_norm:
+                decoder_layers.append(nn.BatchNorm1d(hidden_dim))
+            decoder_layers.append(nn.ReLU())
+            if self.dropout > 0:
+                decoder_layers.append(nn.Dropout(self.dropout))
+            prev_dim = hidden_dim
+        decoder_layers.append(nn.Linear(prev_dim, input_dim))
+
+        self.decoder = nn.Sequential(*decoder_layers)
+
+    def _reparameterize(self, mu, logvar):
+        """Reparameterization trick: z = mu + std * epsilon."""
+        import torch
+
+        std = (0.5 * logvar).exp()
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def _kl_divergence(self, mu, logvar):
+        """KL divergence from N(mu, sigma) to N(0, 1)."""
+        return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
+
+    def fit(self, X: pd.DataFrame) -> "VAEEmbedding":
+        """Train the VAE on input data."""
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+
+        X_array = X.values if hasattr(X, "values") else X
+        self._build_model(X_array.shape[1])
+
+        X_tensor = torch.FloatTensor(X_array)
+        dataset = TensorDataset(X_tensor)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+
+        # Collect all parameters
+        params = (
+            list(self.encoder.parameters())
+            + list(self.fc_mu.parameters())
+            + list(self.fc_logvar.parameters())
+            + list(self.decoder.parameters())
+        )
+        optimizer = torch.optim.Adam(params, lr=self.learning_rate)
+
+        self.encoder.train()
+        self.decoder.train()
+
+        for epoch in range(self.epochs):
+            epoch_loss = 0.0
+            epoch_recon = 0.0
+            epoch_kl = 0.0
+
+            for (batch_X,) in dataloader:
+                optimizer.zero_grad()
+
+                # Encode
+                h = self.encoder(batch_X)
+                mu = self.fc_mu(h)
+                logvar = self.fc_logvar(h)
+
+                # Reparameterize
+                z = self._reparameterize(mu, logvar)
+
+                # Decode
+                x_recon = self.decoder(z)
+
+                # Losses
+                recon_loss = nn.functional.mse_loss(x_recon, batch_X, reduction="mean")
+                kl_loss = self._kl_divergence(mu, logvar)
+                loss = recon_loss + self.beta * kl_loss
+
+                loss.backward()
+                optimizer.step()
+
+                epoch_loss += loss.item()
+                epoch_recon += recon_loss.item()
+                epoch_kl += kl_loss.item()
+
+            n_batches = len(dataloader)
+            avg_loss = epoch_loss / n_batches
+            avg_recon = epoch_recon / n_batches
+            avg_kl = epoch_kl / n_batches
+
+            self.training_history.append(avg_loss)
+            self.recon_history.append(avg_recon)
+            self.kl_history.append(avg_kl)
+
+            if (epoch + 1) % 10 == 0:
+                logger.info(
+                    f"Epoch {epoch + 1}/{self.epochs}, "
+                    f"Loss: {avg_loss:.6f} (Recon: {avg_recon:.6f}, KL: {avg_kl:.6f})"
+                )
+
+        self.encoder.eval()
+        self.decoder.eval()
+        self.is_fitted = True
+
+        logger.info(
+            f"VAE trained for {self.epochs} epochs, "
+            f"final loss: {self.training_history[-1]:.6f} "
+            f"(recon: {self.recon_history[-1]:.6f}, kl: {self.kl_history[-1]:.6f})"
+        )
+        return self
+
+    def transform(self, X: pd.DataFrame) -> np.ndarray:
+        """Generate embeddings using the trained encoder (returns mu, the mean)."""
+        import torch
+
+        if not self.is_fitted:
+            raise ValueError("Model must be fitted before transform")
+
+        X_array = X.values if hasattr(X, "values") else X
+        X_tensor = torch.FloatTensor(X_array)
+
+        self.encoder.eval()
+        with torch.no_grad():
+            h = self.encoder(X_tensor)
+            mu = self.fc_mu(h)
+
+        return mu.numpy()
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get VAE training metrics."""
+        if not self.is_fitted:
+            return {}
+        return {
+            "final_loss": self.training_history[-1] if self.training_history else None,
+            "final_recon_loss": self.recon_history[-1] if self.recon_history else None,
+            "final_kl_loss": self.kl_history[-1] if self.kl_history else None,
+            "epochs_trained": len(self.training_history),
+            "hidden_layers": self.hidden_layers,
+            "embedding_dim": self.embedding_dim,
+            "input_dim": self.input_dim,
+            "beta": self.beta,
+        }
+
+    def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get VAE artifacts including training history."""
+        if not self.is_fitted:
+            return {}
+
+        artifacts = {
+            "training_history": self.training_history,
+            "recon_history": self.recon_history,
+            "kl_history": self.kl_history,
+            "hidden_layers": self.hidden_layers,
+            "embedding_dim": self.embedding_dim,
+            "input_dim": self.input_dim,
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "beta": self.beta,
+            "dropout": self.dropout,
+            "use_batch_norm": self.use_batch_norm,
+        }
+
+        if feature_names is not None:
+            artifacts["feature_names"] = feature_names
+
+        return artifacts
+
+
 def create_embedding_algorithm(
     algorithm: str, embedding_dim: int, **kwargs
 ) -> BaseEmbeddingAlgorithm:
     """Factory function to create embedding algorithms.
 
     Args:
-        algorithm: Algorithm name ('pca', 'svd', 'umap', 'autoencoder').
+        algorithm: Algorithm name ('pca', 'svd', 'umap', 'autoencoder', 'vae').
         embedding_dim: Target embedding dimension.
         **kwargs: Algorithm-specific parameters.
 
@@ -537,6 +783,7 @@ def create_embedding_algorithm(
         "svd": SVDEmbedding,
         "umap": UMAPEmbedding,
         "autoencoder": AutoencoderEmbedding,
+        "vae": VAEEmbedding,
     }
 
     if algorithm not in algorithms:

@@ -102,6 +102,16 @@ def load_component_loadings(exp_path: str) -> pd.DataFrame:
     return None
 
 
+@st.cache_data
+def load_umap_coordinates(exp_path: str, dataset: str = "all") -> pl.DataFrame:
+    """Load pre-computed UMAP 2D coordinates."""
+    exp_path = Path(exp_path)
+    umap_path = exp_path / f"{dataset}_umap_coords.parquet"
+    if umap_path.exists():
+        return pl.read_parquet(umap_path)
+    return None
+
+
 def create_scree_plot(artifacts: dict) -> go.Figure:
     """Create scree plot from artifacts."""
     if "explained_variance_ratio" not in artifacts:
@@ -189,8 +199,25 @@ def create_2d_embedding_plot(
     sample_size: int = 10000,
     dim_x: int = 1,
     dim_y: int = 2,
+    algorithm: str = "pca",
+    projection_method: str = "direct",
+    umap_coords: pl.DataFrame = None,
 ) -> go.Figure:
-    """Create 2D scatter plot of embeddings."""
+    """Create 2D scatter plot of embeddings.
+
+    Args:
+        embeddings_df: DataFrame with game_id and embedding columns.
+        game_data: DataFrame with game metadata.
+        color_by: Column to use for coloring points.
+        sample_size: Maximum number of points to plot.
+        dim_x: X-axis dimension (1-indexed, for direct dimension mode).
+        dim_y: Y-axis dimension (1-indexed, for direct dimension mode).
+        algorithm: The embedding algorithm (pca, svd, autoencoder).
+        projection_method: How to project to 2D ('direct', 'pca', 'umap').
+        umap_coords: Pre-computed UMAP coordinates (game_id, umap_1, umap_2).
+    """
+    from sklearn.decomposition import PCA
+
     # Join embeddings with game data
     df = embeddings_df.join(game_data, on="game_id", how="left")
 
@@ -198,10 +225,70 @@ def create_2d_embedding_plot(
     if len(df) > sample_size:
         df = df.sample(n=sample_size, seed=42)
 
-    # Extract selected dimensions (convert to 0-indexed)
+    # Extract all embeddings
     all_embeddings = np.array([np.array(e) for e in df["embedding"].to_list()])
-    x_vals = all_embeddings[:, dim_x - 1]
-    y_vals = all_embeddings[:, dim_y - 1]
+    game_ids = df["game_id"].to_list()
+
+    # Determine how to get 2D coordinates
+    if projection_method == "pca":
+        # Use PCA to project all dimensions to 2D (captures full structure)
+        pca_2d = PCA(n_components=2)
+        projection_2d = pca_2d.fit_transform(all_embeddings)
+        x_vals = projection_2d[:, 0]
+        y_vals = projection_2d[:, 1]
+        var_explained = pca_2d.explained_variance_ratio_
+        x_label = f"PCA 1 ({var_explained[0]:.1%} var)"
+        y_label = f"PCA 2 ({var_explained[1]:.1%} var)"
+        title_suffix = f"PCA Projection ({var_explained.sum():.1%} total var)"
+    elif projection_method == "umap":
+        # Use pre-computed UMAP coordinates if available
+        if umap_coords is not None:
+            # Join pre-computed coords with our sampled data
+            umap_lookup = {row["game_id"]: (row["umap_1"], row["umap_2"]) for row in umap_coords.iter_rows(named=True)}
+            x_vals = []
+            y_vals = []
+            valid_indices = []
+            for i, gid in enumerate(game_ids):
+                if gid in umap_lookup:
+                    x_vals.append(umap_lookup[gid][0])
+                    y_vals.append(umap_lookup[gid][1])
+                    valid_indices.append(i)
+            x_vals = np.array(x_vals)
+            y_vals = np.array(y_vals)
+            # Filter df to only include games with UMAP coords
+            df = df[valid_indices]
+            x_label = "UMAP 1"
+            y_label = "UMAP 2"
+            title_suffix = "UMAP Projection (pre-computed)"
+        else:
+            # Fall back to computing UMAP on-the-fly
+            try:
+                from umap import UMAP
+                st.info("Computing UMAP projection (this may take a moment)...")
+                umap_2d = UMAP(n_components=2, n_neighbors=15, min_dist=0.1, metric="euclidean", random_state=42)
+                projection_2d = umap_2d.fit_transform(all_embeddings)
+                x_vals = projection_2d[:, 0]
+                y_vals = projection_2d[:, 1]
+                x_label = "UMAP 1"
+                y_label = "UMAP 2"
+                title_suffix = "UMAP Projection"
+            except ImportError:
+                st.error("UMAP not installed. Install with: pip install umap-learn")
+                return None
+    elif algorithm in ("pca", "svd"):
+        # For PCA/SVD, dimensions are ordered by variance - use selected dims directly
+        x_vals = all_embeddings[:, dim_x - 1]
+        y_vals = all_embeddings[:, dim_y - 1]
+        x_label = f"PC {dim_x}"
+        y_label = f"PC {dim_y}"
+        title_suffix = f"Components {dim_x} vs {dim_y}"
+    else:
+        # For autoencoder, use selected dims directly
+        x_vals = all_embeddings[:, dim_x - 1]
+        y_vals = all_embeddings[:, dim_y - 1]
+        x_label = f"Dim {dim_x}"
+        y_label = f"Dim {dim_y}"
+        title_suffix = f"Dimensions {dim_x} vs {dim_y}"
 
     # Prepare plot data
     plot_df = pd.DataFrame({
@@ -221,7 +308,7 @@ def create_2d_embedding_plot(
             color=color_by,
             hover_data=["name", "game_id"],
             color_continuous_scale="viridis",
-            title=f"2D Embedding Projection (n={len(plot_df)})",
+            title=f"2D Embedding - {title_suffix} (n={len(plot_df)})",
         )
     else:
         fig = px.scatter(
@@ -229,13 +316,13 @@ def create_2d_embedding_plot(
             x="x",
             y="y",
             hover_data=["name", "game_id"],
-            title=f"2D Embedding Projection (n={len(plot_df)})",
+            title=f"2D Embedding - {title_suffix} (n={len(plot_df)})",
         )
 
     fig.update_traces(marker=dict(size=4, opacity=0.6))
     fig.update_layout(
-        xaxis_title=f"Component {dim_x}",
-        yaxis_title=f"Component {dim_y}",
+        xaxis_title=x_label,
+        yaxis_title=y_label,
         height=600,
     )
 
@@ -323,10 +410,11 @@ artifacts = load_artifacts(str(exp_path))
 loadings_df = load_component_loadings(str(exp_path))
 
 # Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Variance & Loadings",
     "2D Visualization",
     "Similar Games",
+    "Compare Experiments",
     "Experiment Details",
 ])
 
@@ -369,22 +457,63 @@ with tab1:
 with tab2:
     st.header("2D Embedding Visualization")
 
-    dataset = st.selectbox("Dataset", ["train", "tune", "test"], key="viz_dataset")
+    dataset = st.selectbox("Dataset", ["all", "train", "tune", "test"], key="viz_dataset")
 
-    embeddings_df = load_embeddings(str(exp_path), dataset)
-    game_data = load_game_data(str(exp_path), dataset)
+    # Load embeddings based on selection
+    if dataset == "all":
+        # Combine all datasets
+        all_emb = []
+        all_data = []
+        for ds in ["train", "tune", "test"]:
+            emb = load_embeddings(str(exp_path), ds)
+            data = load_game_data(str(exp_path), ds)
+            if emb is not None:
+                all_emb.append(emb)
+            if data is not None:
+                all_data.append(data)
+        embeddings_df = pl.concat(all_emb).unique(subset=["game_id"]) if all_emb else None
+        game_data = pl.concat(all_data).unique(subset=["game_id"]) if all_data else None
+    else:
+        embeddings_df = load_embeddings(str(exp_path), dataset)
+        game_data = load_game_data(str(exp_path), dataset)
 
     if embeddings_df is not None and game_data is not None:
-        # Get embedding dimension
+        # Get embedding dimension and algorithm
         sample_embedding = embeddings_df["embedding"].to_list()[0]
         n_dims = len(np.array(sample_embedding))
+        algorithm = metadata["metadata"].get("algorithm", "pca").lower()
 
-        # Dimension selectors
-        col1, col2 = st.columns(2)
-        with col1:
-            dim_x = st.selectbox("X-axis dimension", list(range(1, n_dims + 1)), index=0, key="dim_x")
-        with col2:
-            dim_y = st.selectbox("Y-axis dimension", list(range(1, n_dims + 1)), index=1, key="dim_y")
+        # Projection method selector
+        # For autoencoder, default to PCA projection; for PCA/SVD, default to direct
+        is_nonlinear = algorithm in ("autoencoder",)
+        default_projection = "pca" if is_nonlinear else "direct"
+
+        projection_options = ["direct", "pca", "umap"]
+        projection_labels = {
+            "direct": "Direct dimensions",
+            "pca": "PCA projection (linear)",
+            "umap": "UMAP projection (non-linear)",
+        }
+        projection_method = st.selectbox(
+            "Visualization method",
+            projection_options,
+            index=projection_options.index(default_projection),
+            format_func=lambda x: projection_labels[x],
+            key="projection_method",
+            help="Direct: plot specific embedding dimensions. "
+                 "PCA: linear projection capturing max variance. "
+                 "UMAP: non-linear projection preserving local structure.",
+        )
+
+        # Dimension selectors (only shown for direct projection)
+        if projection_method == "direct":
+            col1, col2 = st.columns(2)
+            with col1:
+                dim_x = st.selectbox("X-axis dimension", list(range(1, n_dims + 1)), index=0, key="dim_x")
+            with col2:
+                dim_y = st.selectbox("Y-axis dimension", list(range(1, n_dims + 1)), index=1, key="dim_y")
+        else:
+            dim_x, dim_y = 1, 2  # Not used when projection is enabled
 
         # Color options
         available_colors = [col for col in game_data.columns if col not in ["game_id", "name"]]
@@ -396,8 +525,16 @@ with tab2:
 
         sample_size = st.slider("Sample size", 1000, 50000, 10000, step=1000, key="viz_sample")
 
-        fig = create_2d_embedding_plot(embeddings_df, game_data, color_by, sample_size, dim_x, dim_y)
-        st.plotly_chart(fig, use_container_width=True)
+        # Load pre-computed UMAP coordinates if available
+        umap_coords = load_umap_coordinates(str(exp_path), "all")
+
+        fig = create_2d_embedding_plot(
+            embeddings_df, game_data, color_by, sample_size, dim_x, dim_y,
+            algorithm=algorithm, projection_method=projection_method,
+            umap_coords=umap_coords,
+        )
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
 
         # Show table with all components
         st.subheader("Embedding Components")
@@ -422,9 +559,10 @@ with tab2:
         if color_by in df.columns:
             table_data[color_by] = df[color_by].to_list()
 
-        # Add all embedding components
+        # Add all embedding components with appropriate labels
+        dim_prefix = "PC" if algorithm in ("pca", "svd") else "Dim"
         for i in range(all_embeddings.shape[1]):
-            table_data[f"PC{i+1}"] = all_embeddings[:, i]
+            table_data[f"{dim_prefix}{i+1}"] = all_embeddings[:, i]
 
         table_df = pd.DataFrame(table_data)
         st.dataframe(table_df, use_container_width=True, height=400)
@@ -708,6 +846,110 @@ with tab3:
                             margin=dict(b=100),
                         )
                         st.plotly_chart(fig, use_container_width=True)
+
+                        # Network plot using UMAP coordinates
+                        st.subheader("Neighbor Network (UMAP Space)")
+                        umap_coords = load_umap_coordinates(str(exp_path), "all")
+
+                        if umap_coords is not None:
+                            # Build lookup for UMAP coordinates
+                            umap_lookup = {
+                                row["game_id"]: (row["umap_1"], row["umap_2"])
+                                for row in umap_coords.iter_rows(named=True)
+                            }
+
+                            # Check if query and neighbors have UMAP coords
+                            if game_id in umap_lookup:
+                                query_x, query_y = umap_lookup[game_id]
+
+                                # Collect neighbor coordinates
+                                neighbor_data = []
+                                for row in similar_df.itertuples():
+                                    if row.game_id in umap_lookup:
+                                        nx, ny = umap_lookup[row.game_id]
+                                        score = row.similarity if metric == "cosine" else row.distance
+                                        neighbor_data.append({
+                                            "game_id": row.game_id,
+                                            "name": row.name,
+                                            "x": nx,
+                                            "y": ny,
+                                            "score": score,
+                                        })
+
+                                if neighbor_data:
+                                    # Create figure with edges and nodes
+                                    network_fig = go.Figure()
+
+                                    # Add edges from query to each neighbor
+                                    for neighbor in neighbor_data:
+                                        network_fig.add_trace(go.Scatter(
+                                            x=[query_x, neighbor["x"]],
+                                            y=[query_y, neighbor["y"]],
+                                            mode="lines",
+                                            line=dict(color="lightgray", width=1),
+                                            hoverinfo="skip",
+                                            showlegend=False,
+                                        ))
+
+                                    # Add neighbor nodes
+                                    neighbor_df = pd.DataFrame(neighbor_data)
+                                    network_fig.add_trace(go.Scatter(
+                                        x=neighbor_df["x"],
+                                        y=neighbor_df["y"],
+                                        mode="markers+text",
+                                        marker=dict(
+                                            size=12,
+                                            color=neighbor_df["score"],
+                                            colorscale="Viridis" if metric == "cosine" else "Viridis_r",
+                                            showscale=True,
+                                            colorbar=dict(title="Similarity" if metric == "cosine" else "Distance"),
+                                        ),
+                                        text=neighbor_df["name"],
+                                        textposition="top center",
+                                        textfont=dict(size=9),
+                                        hovertemplate="<b>%{text}</b><br>Score: %{marker.color:.4f}<extra></extra>",
+                                        name="Similar Games",
+                                    ))
+
+                                    # Add query node (star marker, larger)
+                                    network_fig.add_trace(go.Scatter(
+                                        x=[query_x],
+                                        y=[query_y],
+                                        mode="markers+text",
+                                        marker=dict(
+                                            size=20,
+                                            color="red",
+                                            symbol="star",
+                                            line=dict(color="darkred", width=2),
+                                        ),
+                                        text=[query_name],
+                                        textposition="bottom center",
+                                        textfont=dict(size=11, color="red"),
+                                        hovertemplate=f"<b>{query_name}</b><br>(Query Game)<extra></extra>",
+                                        name="Query Game",
+                                    ))
+
+                                    network_fig.update_layout(
+                                        height=600,
+                                        xaxis_title="UMAP 1",
+                                        yaxis_title="UMAP 2",
+                                        title=f"Neighbor Network for {query_name}",
+                                        showlegend=True,
+                                        legend=dict(
+                                            orientation="h",
+                                            yanchor="bottom",
+                                            y=1.02,
+                                            xanchor="right",
+                                            x=1,
+                                        ),
+                                    )
+                                    st.plotly_chart(network_fig, use_container_width=True)
+                                else:
+                                    st.info("No neighbors found with UMAP coordinates")
+                            else:
+                                st.info("Query game not found in UMAP coordinates")
+                        else:
+                            st.info("No pre-computed UMAP coordinates available for this experiment")
                     else:
                         st.warning("Game not found in embeddings")
             else:
@@ -716,6 +958,204 @@ with tab3:
         st.warning("No embedding data available")
 
 with tab4:
+    st.header("Compare Embeddings Across Experiments")
+
+    st.markdown("""
+    Compare how a game is represented in different embedding experiments.
+    Select multiple experiments and a game to see side-by-side comparisons.
+    """)
+
+    # Get all experiments for comparison
+    all_experiments = list_experiments()
+    exp_names = [e["name"] for e in all_experiments]
+
+    # Multi-select experiments to compare
+    selected_exp_names = st.multiselect(
+        "Select experiments to compare",
+        exp_names,
+        default=[selected_exp_name] if experiments else [],
+        key="compare_experiments",
+    )
+
+    if len(selected_exp_names) >= 1:
+        # Load game data from first selected experiment to enable search
+        first_exp = next(e for e in all_experiments if e["name"] == selected_exp_names[0])
+        first_exp_path = first_exp["path"]
+
+        # Load all embeddings from first experiment for game search
+        compare_embeddings = []
+        compare_game_data = []
+        for ds in ["train", "tune", "test"]:
+            emb = load_embeddings(str(first_exp_path), ds)
+            data = load_game_data(str(first_exp_path), ds)
+            if emb is not None:
+                compare_embeddings.append(emb)
+            if data is not None:
+                compare_game_data.append(data)
+
+        if compare_embeddings and compare_game_data:
+            compare_emb_df = pl.concat(compare_embeddings).unique(subset=["game_id"])
+            compare_data_df = pl.concat(compare_game_data).unique(subset=["game_id"])
+
+            # Game search
+            compare_search = st.text_input("Search for a game to compare", key="compare_game_search")
+
+            if compare_search:
+                matches = compare_data_df.filter(
+                    pl.col("name").str.to_lowercase().str.contains(compare_search.lower())
+                ).head(20)
+
+                if len(matches) > 0:
+                    matches_sorted = matches.sort(pl.col("name").str.len_chars(), pl.col("name"))
+                    match_options = {}
+                    for row in matches_sorted.iter_rows(named=True):
+                        year = row.get("year_published", "")
+                        year_str = f", {int(year)}" if year else ""
+                        label = f"{row['name']} (ID: {row['game_id']}{year_str})"
+                        match_options[label] = row["game_id"]
+
+                    selected_compare_game = st.selectbox(
+                        "Select a game",
+                        list(match_options.keys()),
+                        key="compare_selected_game",
+                    )
+
+                    if selected_compare_game:
+                        compare_game_id = match_options[selected_compare_game]
+                        game_name = selected_compare_game.split(" (ID:")[0]
+
+                        st.subheader(f"Embedding Comparison: {game_name}")
+
+                        # Collect embeddings from all selected experiments
+                        comparison_data = []
+                        for exp_name in selected_exp_names:
+                            exp_info = next(e for e in all_experiments if e["name"] == exp_name)
+                            exp_path_cmp = exp_info["path"]
+                            algorithm = exp_info["metadata"].get("metadata", {}).get("algorithm", "unknown")
+
+                            # Load embeddings from this experiment
+                            exp_embs = []
+                            for ds in ["train", "tune", "test"]:
+                                emb = load_embeddings(str(exp_path_cmp), ds)
+                                if emb is not None:
+                                    exp_embs.append(emb)
+
+                            if exp_embs:
+                                exp_emb_df = pl.concat(exp_embs).unique(subset=["game_id"])
+                                game_row = exp_emb_df.filter(pl.col("game_id") == compare_game_id)
+
+                                if len(game_row) > 0:
+                                    embedding = np.array(game_row["embedding"].to_list()[0])
+                                    comparison_data.append({
+                                        "experiment": exp_name,
+                                        "algorithm": algorithm,
+                                        "embedding": embedding,
+                                        "n_dims": len(embedding),
+                                    })
+
+                        if comparison_data:
+                            # Show comparison visualization
+                            st.write(f"Comparing {len(comparison_data)} experiments")
+
+                            # Visualization options
+                            viz_type = st.radio(
+                                "Visualization type",
+                                ["Bar chart (first N dims)", "Heatmap (all dims)", "Statistics"],
+                                horizontal=True,
+                                key="compare_viz_type",
+                            )
+
+                            if viz_type == "Bar chart (first N dims)":
+                                n_dims_show = st.slider("Number of dimensions to show", 5, 64, 10, key="compare_n_dims")
+
+                                # Create grouped bar chart
+                                bar_data = []
+                                for item in comparison_data:
+                                    for i in range(min(n_dims_show, item["n_dims"])):
+                                        bar_data.append({
+                                            "Experiment": f"{item['algorithm']} ({item['experiment'].split('/')[0]})",
+                                            "Dimension": f"Dim {i+1}",
+                                            "Value": item["embedding"][i],
+                                        })
+
+                                bar_df = pd.DataFrame(bar_data)
+                                fig = px.bar(
+                                    bar_df,
+                                    x="Dimension",
+                                    y="Value",
+                                    color="Experiment",
+                                    barmode="group",
+                                    title=f"Embedding Values - {game_name}",
+                                )
+                                fig.update_layout(height=500)
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            elif viz_type == "Heatmap (all dims)":
+                                # Create heatmap
+                                max_dims = max(item["n_dims"] for item in comparison_data)
+                                heatmap_data = []
+                                exp_labels = []
+
+                                for item in comparison_data:
+                                    label = f"{item['algorithm']} ({item['experiment'].split('/')[0]})"
+                                    exp_labels.append(label)
+                                    # Pad with zeros if different dimensions
+                                    padded = np.zeros(max_dims)
+                                    padded[:item["n_dims"]] = item["embedding"]
+                                    heatmap_data.append(padded)
+
+                                heatmap_array = np.array(heatmap_data)
+
+                                fig = px.imshow(
+                                    heatmap_array,
+                                    labels=dict(x="Dimension", y="Experiment", color="Value"),
+                                    y=exp_labels,
+                                    aspect="auto",
+                                    title=f"Embedding Heatmap - {game_name}",
+                                    color_continuous_scale="RdBu_r",
+                                    color_continuous_midpoint=0,
+                                )
+                                fig.update_layout(height=200 + 50 * len(comparison_data))
+                                st.plotly_chart(fig, use_container_width=True)
+
+                            else:  # Statistics
+                                stats_data = []
+                                for item in comparison_data:
+                                    emb = item["embedding"]
+                                    stats_data.append({
+                                        "Experiment": f"{item['algorithm']} ({item['experiment'].split('/')[0]})",
+                                        "Dimensions": item["n_dims"],
+                                        "Mean": f"{np.mean(emb):.4f}",
+                                        "Std": f"{np.std(emb):.4f}",
+                                        "Min": f"{np.min(emb):.4f}",
+                                        "Max": f"{np.max(emb):.4f}",
+                                        "L2 Norm": f"{np.linalg.norm(emb):.4f}",
+                                    })
+
+                                st.dataframe(pd.DataFrame(stats_data), use_container_width=True)
+
+                                # Show pairwise cosine similarities
+                                if len(comparison_data) > 1:
+                                    st.subheader("Pairwise Cosine Similarities")
+                                    embeddings_matrix = np.array([item["embedding"] for item in comparison_data])
+                                    # Handle different dimensions by truncating to min
+                                    min_dims = min(item["n_dims"] for item in comparison_data)
+                                    embeddings_truncated = embeddings_matrix[:, :min_dims]
+                                    sim_matrix = cosine_similarity(embeddings_truncated)
+
+                                    labels = [f"{item['algorithm']}" for item in comparison_data]
+                                    sim_df = pd.DataFrame(sim_matrix, index=labels, columns=labels)
+                                    st.dataframe(sim_df.style.format("{:.4f}"), use_container_width=True)
+                        else:
+                            st.warning(f"Game not found in any of the selected experiments")
+                else:
+                    st.info("No games found matching your search")
+        else:
+            st.warning("No embedding data available in selected experiment")
+    else:
+        st.info("Select at least one experiment to compare")
+
+with tab5:
     st.header("Experiment Details")
 
     st.subheader("Metadata")
