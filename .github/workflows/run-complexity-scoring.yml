@@ -59,34 +59,59 @@ jobs:
         echo "::add-mask::$ID_TOKEN"
         echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
 
-    - name: Call Complexity Scoring Endpoint
+    - name: Call Complexity Scoring Endpoint (Batched)
       id: score
       run: |
-        RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/predict_complexity" \
-          -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
-          -H "Content-Type: application/json" \
-          -d '{
-            "complexity_model_name": "${{ github.event.inputs.model_name || 'complexity-v2026' }}"
-          }' \
-          -w "\n%{http_code}" \
-          -s)
+        TOTAL_GAMES=0
+        BATCH_COUNT=0
+        MAX_BATCHES=10  # Safety limit: 10 batches * 25k = 250k games max
 
-        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-        BODY=$(echo "$RESPONSE" | head -n-1)
+        while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
+          BATCH_COUNT=$((BATCH_COUNT + 1))
+          echo "=== Batch $BATCH_COUNT ==="
 
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Error: HTTP $HTTP_CODE"
-          echo "$BODY"
-          exit 1
-        fi
+          RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/predict_complexity" \
+            -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "complexity_model_name": "${{ github.event.inputs.model_name || 'complexity-v2026' }}"
+            }' \
+            -w "\n%{http_code}" \
+            -s \
+            --max-time 600)
 
-        echo "$BODY" | jq '.'
-        GAMES_SCORED=$(echo "$BODY" | jq -r '.games_scored')
-        echo "games_scored=$GAMES_SCORED" >> $GITHUB_OUTPUT
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          echo "$BODY" | jq '.'
+          GAMES_SCORED=$(echo "$BODY" | jq -r '.games_scored')
+          TOTAL_GAMES=$((TOTAL_GAMES + GAMES_SCORED))
+
+          echo "Batch $BATCH_COUNT: Scored $GAMES_SCORED games (Total: $TOTAL_GAMES)"
+
+          # Stop if no more games to score
+          if [ "$GAMES_SCORED" -eq 0 ]; then
+            echo "No more games to score. Stopping."
+            break
+          fi
+
+          # Brief pause between batches
+          sleep 5
+        done
+
+        echo "total_games=$TOTAL_GAMES" >> $GITHUB_OUTPUT
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
 
     - name: Job Summary
       run: |
         echo "## Complexity Scoring Results" >> $GITHUB_STEP_SUMMARY
         echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Model**: ${{ github.event.inputs.model_name || 'complexity-v2026' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Games Scored**: ${{ steps.score.outputs.games_scored }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Batches Completed**: ${{ steps.score.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Games Scored**: ${{ steps.score.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
