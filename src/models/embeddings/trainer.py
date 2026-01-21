@@ -189,8 +189,8 @@ class EmbeddingTrainer:
         all_embeddings: np.ndarray,
         dataset_name: str,
         complexity_values: Optional[np.ndarray] = None,
-        n_neighbors: int = 30,
-        min_dist: float = 0.1,
+        n_neighbors: int = 100,
+        min_dist: float = 0.5,
     ) -> None:
         """Compute UMAP 2D projection and save coordinates and visualization.
 

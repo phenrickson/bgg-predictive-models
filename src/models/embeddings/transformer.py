@@ -12,7 +12,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.features.transformers import BaseBGGTransformer, LogTransformer, YearTransformer
+from src.features.transformers import (
+    BaseBGGTransformer,
+    LogTransformer,
+    YearTransformer,
+)
 
 
 # Default family patterns for embeddings - focus on game characteristic types
@@ -21,7 +25,6 @@ DEFAULT_EMBEDDING_FAMILY_PATTERNS = [
     "^Category",
     "^Sports",
     "^Traditional",
-    "^Series:",
     "^Card",
     "^Collectible",
 ]
@@ -140,22 +143,22 @@ def create_embedding_preprocessor(
 
     # Add additional steps for linear models
     if model_type == "linear":
-        pipeline_steps.extend([
-            ("log", LogTransformer(columns=log_columns)),
-            (
-                "year",
-                YearTransformer(
-                    reference_year=reference_year,
-                    normalization_factor=normalization_factor,
+        pipeline_steps.extend(
+            [
+                ("log", LogTransformer(columns=log_columns)),
+                (
+                    "year",
+                    YearTransformer(
+                        reference_year=reference_year,
+                        normalization_factor=normalization_factor,
+                    ),
                 ),
-            ),
-            ("variance_selector", VarianceThreshold(threshold=0)),
-            ("scaler", StandardScaler()),
-        ])
+                ("variance_selector", VarianceThreshold(threshold=0)),
+                ("scaler", StandardScaler()),
+            ]
+        )
     elif model_type == "tree":
-        pipeline_steps.extend([
-            ("variance_selector", VarianceThreshold(threshold=0))
-        ])
+        pipeline_steps.extend([("variance_selector", VarianceThreshold(threshold=0))])
 
     pipeline = Pipeline(pipeline_steps)
     pipeline.set_output(transform="pandas")

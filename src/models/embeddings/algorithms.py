@@ -256,8 +256,8 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
     def __init__(
         self,
         embedding_dim: int,
-        n_neighbors: int = 15,
-        min_dist: float = 0.1,
+        n_neighbors: int = 100,
+        min_dist: float = 0.5,
         metric: str = "cosine",
         **kwargs,
     ):
