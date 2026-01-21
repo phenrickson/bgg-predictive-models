@@ -127,6 +127,29 @@ embeddings:
     default_distance_type: cosine  # cosine, euclidean, dot_product
     default_top_k: 10
 
+# Collection Modeling Configuration
+collections:
+  storage:
+    bucket_name: bgg-predictive-models
+    base_prefix: collections
+  split:
+    negative_sampling_ratio: 5.0
+    negative_sampling_strategy: popularity_weighted  # random, popularity_weighted, uniform
+    min_ratings_for_negatives: 50
+    validation_ratio: 0.15
+    test_ratio: 0.15
+  model:
+    type: lightgbm
+    use_sample_weights: false
+    handle_imbalance: scale_pos_weight
+    threshold_optimization_metric: f2  # f1, f2, precision, recall
+    tuning_metric: log_loss
+  analysis:
+    top_n_recommendations: 100
+    top_n_categories: 10
+    top_n_mechanics: 10
+  min_ratings_for_universe: 25
+
 # Scoring Configuration
 scoring:
   models:
