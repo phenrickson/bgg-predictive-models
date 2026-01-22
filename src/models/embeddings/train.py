@@ -12,18 +12,28 @@ from .trainer import EmbeddingTrainer
 
 def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     """Configure logging for the training process."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+    # Get root logger and clear any existing handlers to avoid duplication
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+        )
+
     logger = logging.getLogger(__name__)
 
     if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        # Check if file handler already exists
+        has_file_handler = any(
+            isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file)
+            for h in logger.handlers
         )
-        logger.addHandler(file_handler)
+        if not has_file_handler:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+            )
+            logger.addHandler(file_handler)
 
     return logger
 
@@ -38,7 +48,7 @@ def parse_arguments() -> argparse.Namespace:
         "--algorithm",
         type=str,
         default=None,
-        choices=["pca", "svd", "umap", "autoencoder"],
+        choices=["pca", "svd", "umap", "autoencoder", "vae"],
         help="Embedding algorithm to use (default: from config.yaml)",
     )
     parser.add_argument(
@@ -100,20 +110,20 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--epochs",
         type=int,
-        default=100,
-        help="(Autoencoder) Number of training epochs",
+        default=None,
+        help="(Autoencoder) Number of training epochs (default: from config.yaml)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=256,
-        help="(Autoencoder) Batch size",
+        default=None,
+        help="(Autoencoder) Batch size (default: from config.yaml)",
     )
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=0.001,
-        help="(Autoencoder) Learning rate",
+        default=None,
+        help="(Autoencoder) Learning rate (default: from config.yaml)",
     )
     parser.add_argument(
         "--min-ratings",
@@ -126,24 +136,29 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def get_algorithm_params(args: argparse.Namespace) -> dict:
-    """Extract algorithm-specific parameters from args."""
+    """Extract algorithm-specific parameters from args.
+
+    Only includes parameters that were explicitly set (not None).
+    """
+    params = {}
     if args.algorithm == "pca":
-        return {"whiten": args.whiten}
+        params = {"whiten": args.whiten}
     elif args.algorithm == "svd":
-        return {"n_iter": args.n_iter}
+        params = {"n_iter": args.n_iter}
     elif args.algorithm == "umap":
-        return {
+        params = {
             "n_neighbors": args.n_neighbors,
             "min_dist": args.min_dist,
             "metric": args.metric,
         }
-    elif args.algorithm == "autoencoder":
-        return {
+    elif args.algorithm in ("autoencoder", "vae"):
+        params = {
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
         }
-    return {}
+    # Filter out None values so config can provide defaults
+    return {k: v for k, v in params.items() if v is not None}
 
 
 def main():

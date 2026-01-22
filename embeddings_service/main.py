@@ -247,12 +247,14 @@ async def list_models():
 
 
 def load_games_for_embedding(
+    model_name: str,
     game_ids: Optional[List[int]] = None,
     max_games: int = DEFAULT_MAX_GAMES,
 ) -> pd.DataFrame:
     """Load games that need embeddings.
 
     Args:
+        model_name: Name of the embedding model (used for change detection).
         game_ids: Specific game IDs to load.
         max_games: Maximum number of games to load.
 
@@ -266,9 +268,9 @@ def load_games_for_embedding(
         logger.info(f"Loading {len(game_ids)} specific games for embeddings...")
         return emb_loader.load_scoring_data(game_ids=game_ids).to_pandas()
 
-    # Change detection: find games needing embeddings
-    # Games that either don't have embeddings or have updated features
-    logger.info("Loading games needing embeddings via change detection...")
+    # Change detection: find games needing embeddings for THIS model
+    # Games that either don't have embeddings from this model or have updated features
+    logger.info(f"Loading games needing embeddings via change detection (model: {model_name})...")
 
     ml_project = config.ml_project_id
     dw_project = config.data_warehouse.project_id
@@ -277,6 +279,7 @@ def load_games_for_embedding(
     table_id = f"{ml_project}.{emb_config.upload.dataset}.{emb_config.upload.table}"
 
     # Score ALL games regardless of ratings - embeddings should work for everything
+    # Only consider embeddings from the specified model for change detection
     query = f"""
     SELECT gf.game_id
     FROM `{dw_project}.analytics.games_features` gf
@@ -286,6 +289,7 @@ def load_games_for_embedding(
       SELECT game_id, created_ts,
              ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY created_ts DESC) as rn
       FROM `{table_id}`
+      WHERE embedding_model = '{model_name}'
     ) le ON gf.game_id = le.game_id AND le.rn = 1
     WHERE gf.year_published IS NOT NULL
       AND (
@@ -395,8 +399,9 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
             f"(algorithm={algorithm}, dim={embedding_dim})"
         )
 
-        # Load games
+        # Load games (change detection filters by model_name)
         games_df = load_games_for_embedding(
+            model_name=request.model_name,
             game_ids=request.game_ids,
             max_games=request.max_games,
         )

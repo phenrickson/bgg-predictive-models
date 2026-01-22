@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+
+- **VAE Embedding Algorithm**: Added Variational Autoencoder as embedding algorithm option
+- **Validation Loss Tracking**: Autoencoder and VAE now track validation loss during training
+  - `fit()` accepts optional `X_val` parameter for validation data
+  - Early stopping based on validation loss when validation data provided
+  - Training loss plot shows both training and validation curves
+- **Feature Transformer**: Added `include_count_features` parameter to `BaseBGGTransformer`
+  - Controls whether `mechanics_count` and `categories_count` features are included
+  - `EmbeddingTransformer` defaults to `False` (excludes count features from embeddings)
+- **PCA Model Registration**: Registered embedding models now save and load PCA 2D projection models
+  - Mirrors existing UMAP model support for coordinate generation
 - Terraform infrastructure management (`terraform/` directory)
 - GitHub Actions workflow for Terraform deployment (`.github/workflows/terraform.yml`)
 - Collection loader system for user collection predictions (`src/collection/`)
@@ -13,6 +24,18 @@ All notable changes to this project are documented in this file.
 - Dedicated evaluation script (`evaluate.py`) for time-based model evaluation
 
 ### Changed
+
+- **Embedding Training Workflow**: Improved autoencoder/VAE training to follow proper ML workflow
+  - First fit uses tune set as validation for early stopping
+  - Final fit on train+tune uses optimal epochs from tuning (no validation)
+  - Tuning history preserved for loss plot visualization
+- **Embedding Service Change Detection**: Now filters by `embedding_model` name
+  - Promoting a new model triggers full regeneration of embeddings
+  - Previously only checked if any embedding existed for a game
+- **CLI Config Precedence**: Training CLI arguments now default to `None` so `config.yaml` values are used
+  - Explicit CLI args still override config values
+- **Embedding Family Patterns**: Removed `^Series:` from default family patterns
+  - Series families are now excluded from embedding features by default
 - **GCP Project Migration**: Migrated from `gcp-demos-411520` to dedicated two-project architecture
   - `bgg-data-warehouse`: Data storage, BigQuery tables, prediction landing
   - `bgg-predictive-models`: ML models, experiment tracking, scoring service
@@ -22,7 +45,12 @@ All notable changes to this project are documented in this file.
 - **Scoring Service**: Now uploads predictions to both GCS and BigQuery landing table
 - **Streamlit Dashboard**: Reorganized pages, added BGG logo, improved experiment visualization
 
+### Fixed
+
+- **Logging Duplication**: Fixed duplicate log output in embedding training by checking for existing handlers
+
 ### Removed
+
 - `src/data/create_view.py` - Materialized views now managed by Dataform
 - `src/data/games_features_materialized_view.sql` - Moved to data warehouse project
 - `Dockerfile.streamlit` - Replaced by `docker/streamlit.Dockerfile`

@@ -570,11 +570,11 @@ class EmbeddingTrainer:
         exp_dir: Path,
         artifacts: Dict[str, Any],
     ) -> None:
-        """Save training loss plot for autoencoder/VAE models.
+        """Save training and validation loss plot for autoencoder/VAE models.
 
         Args:
             exp_dir: Experiment directory to save to.
-            artifacts: Algorithm artifacts containing training_history.
+            artifacts: Algorithm artifacts containing training_history and validation_history.
         """
         if "training_history" not in artifacts:
             logger.warning("No training_history in artifacts, skipping loss plot")
@@ -582,38 +582,51 @@ class EmbeddingTrainer:
 
         import matplotlib.pyplot as plt
 
-        history = artifacts["training_history"]
-        epochs = list(range(1, len(history) + 1))
+        train_history = artifacts["training_history"]
+        val_history = artifacts.get("validation_history", [])
+        epochs = list(range(1, len(train_history) + 1))
 
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        ax.plot(epochs, history, 'b-', linewidth=1.5, label='Training Loss')
+        # Plot training loss
+        ax.plot(epochs, train_history, 'b-', linewidth=1.5, label='Training Loss')
+
+        # Plot validation loss if available
+        if val_history:
+            ax.plot(epochs, val_history, 'r-', linewidth=1.5, label='Validation Loss')
+
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss (MSE)')
-        ax.set_title('Autoencoder Training Loss')
+        ax.set_title('Training and Validation Loss')
         ax.grid(True, alpha=0.3)
 
-        # Mark final loss
-        final_loss = history[-1]
-        ax.axhline(y=final_loss, color='r', linestyle='--', alpha=0.5, linewidth=1)
-        ax.text(len(epochs) * 0.02, final_loss, f'Final: {final_loss:.6f}',
-                va='bottom', fontsize=9, color='r')
-
-        # Mark minimum loss if different from final
-        min_loss = min(history)
-        min_epoch = history.index(min_loss) + 1
-        if min_epoch != len(history):
-            ax.scatter([min_epoch], [min_loss], color='g', s=50, zorder=5)
-            ax.annotate(f'Min: {min_loss:.6f} (epoch {min_epoch})',
-                       xy=(min_epoch, min_loss), xytext=(min_epoch + len(epochs)*0.05, min_loss),
-                       fontsize=8, color='g')
+        # Mark best validation loss (or best training if no validation)
+        if val_history:
+            best_loss = min(val_history)
+            best_epoch = val_history.index(best_loss) + 1
+            ax.scatter([best_epoch], [best_loss], color='g', s=80, zorder=5, marker='*')
+            ax.annotate(f'Best val: {best_loss:.6f} (epoch {best_epoch})',
+                       xy=(best_epoch, best_loss),
+                       xytext=(best_epoch + len(epochs)*0.05, best_loss * 1.05),
+                       fontsize=9, color='g',
+                       arrowprops=dict(arrowstyle='->', color='g', alpha=0.7))
+        else:
+            best_loss = min(train_history)
+            best_epoch = train_history.index(best_loss) + 1
+            if best_epoch != len(train_history):
+                ax.scatter([best_epoch], [best_loss], color='g', s=50, zorder=5)
+                ax.annotate(f'Best: {best_loss:.6f} (epoch {best_epoch})',
+                           xy=(best_epoch, best_loss),
+                           xytext=(best_epoch + len(epochs)*0.05, best_loss),
+                           fontsize=8, color='g')
 
         # Add early stopping info if present
         if artifacts.get("early_stopped"):
-            stopped_epoch = artifacts.get("stopped_epoch", len(history))
-            ax.axvline(x=stopped_epoch, color='orange', linestyle='--', alpha=0.7)
-            ax.text(stopped_epoch, ax.get_ylim()[1] * 0.95, 'Early stop',
-                   ha='right', va='top', fontsize=8, color='orange')
+            stopped_epoch = artifacts.get("stopped_epoch", len(train_history))
+            ax.axvline(x=stopped_epoch, color='orange', linestyle='--', alpha=0.7, linewidth=2)
+            ax.text(stopped_epoch, ax.get_ylim()[1] * 0.95,
+                   f'Early stop (epoch {stopped_epoch})',
+                   ha='right', va='top', fontsize=9, color='orange')
 
         ax.legend(loc='upper right')
         plt.tight_layout()
@@ -703,7 +716,11 @@ class EmbeddingTrainer:
             embedding_dim=embedding_dim,
             **algorithm_params,
         )
-        embedding_model.fit(train_X)
+        # Pass tune data as validation for autoencoder/VAE (for early stopping and monitoring)
+        if algorithm in ("autoencoder", "vae"):
+            embedding_model.fit(train_X, X_val=tune_X)
+        else:
+            embedding_model.fit(train_X)
 
         # Generate embeddings for evaluation
         train_embeddings = embedding_model.transform(train_X)
@@ -722,12 +739,29 @@ class EmbeddingTrainer:
         combined_df = pl.concat([train_df, tune_df_filtered])
         combined_X, _ = self.prepare_features(combined_df, preprocessor=preprocessor, fit=False)
 
+        # For autoencoder/VAE, use the epochs determined by early stopping on tune set
+        final_algorithm_params = algorithm_params.copy()
+        tuning_history = None  # Save tuning model's history for loss plot
+        if algorithm in ("autoencoder", "vae"):
+            # Use epochs from first fit (early stopping determined optimal stopping point)
+            optimal_epochs = len(embedding_model.training_history)
+            final_algorithm_params["epochs"] = optimal_epochs
+            # Disable early stopping for final fit (we already know optimal epochs)
+            final_algorithm_params["patience"] = optimal_epochs + 1
+            logger.info(f"Final model will train for {optimal_epochs} epochs (from tuning)")
+            # Save tuning history before we overwrite embedding_model
+            tuning_history = {
+                "training_history": embedding_model.training_history.copy(),
+                "validation_history": embedding_model.validation_history.copy(),
+            }
+
         # Create fresh model for final fit
         final_model = create_embedding_algorithm(
             algorithm=algorithm,
             embedding_dim=embedding_dim,
-            **algorithm_params,
+            **final_algorithm_params,
         )
+        # No validation for final fit - epochs already determined from first fit
         final_model.fit(combined_X)
         logger.info(f"Final model trained on {len(combined_X)} samples (train + tune)")
 
@@ -856,8 +890,10 @@ class EmbeddingTrainer:
                 # Generate scree plot
                 self._save_scree_plot(experiment.exp_dir, artifacts)
 
-            # For autoencoder/VAE, save training loss plot
-            if "training_history" in artifacts:
+            # For autoencoder/VAE, save training loss plot (use tuning history for validation curve)
+            if tuning_history:
+                self._save_training_loss_plot(experiment.exp_dir, tuning_history)
+            elif "training_history" in artifacts:
                 self._save_training_loss_plot(experiment.exp_dir, artifacts)
 
         # Generate 2D projection for visualization
