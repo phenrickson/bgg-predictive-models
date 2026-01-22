@@ -22,6 +22,10 @@ jobs:
   generate-embeddings:
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    outputs:
+      total_games: ${{ steps.generate.outputs.total_games }}
+      batch_count: ${{ steps.generate.outputs.batch_count }}
+      env_name: ${{ steps.env.outputs.env_name }}
 
     permissions:
       contents: read
@@ -123,3 +127,79 @@ jobs:
         echo "- **Model**: ${{ github.event.inputs.model_name || 'embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
+
+  generate-coordinates:
+    runs-on: ubuntu-latest
+    needs: generate-embeddings
+    if: needs.generate-embeddings.outputs.total_games != '0'
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    outputs:
+      coordinates_generated: ${{ steps.coordinates.outputs.coordinates_generated }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Get Service URL
+      id: get-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe bgg-embeddings-service \
+          --region us-central1 \
+          --format 'value(status.url)')
+        echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Get ID Token
+      id: id-token
+      run: |
+        ID_TOKEN=$(gcloud auth print-identity-token)
+        echo "::add-mask::$ID_TOKEN"
+        echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
+
+    - name: Generate 2D Coordinates
+      id: coordinates
+      run: |
+        MODEL_NAME="${{ github.event.inputs.model_name || 'embeddings-v2026' }}"
+        MAX_GAMES="${{ github.event.inputs.max_games || '25000' }}"
+
+        echo "Generating 2D coordinates for embeddings..."
+
+        RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_coordinates" \
+          -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"model_name\": \"$MODEL_NAME\",
+            \"max_games\": $MAX_GAMES,
+            \"include_umap\": true,
+            \"include_pca\": true
+          }" \
+          -w "\n%{http_code}" \
+          -s \
+          --max-time 600)
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | head -n-1)
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Error: HTTP $HTTP_CODE"
+          echo "$BODY"
+          exit 1
+        fi
+
+        echo "$BODY" | jq '.'
+        COORDS_GENERATED=$(echo "$BODY" | jq -r '.games_processed')
+        echo "coordinates_generated=$COORDS_GENERATED" >> $GITHUB_OUTPUT
+
+    - name: Job Summary
+      run: |
+        echo "## Coordinate Generation Results" >> $GITHUB_STEP_SUMMARY
+        echo "- **Model**: ${{ github.event.inputs.model_name || 'embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Coordinates Generated**: ${{ steps.coordinates.outputs.coordinates_generated }}" >> $GITHUB_STEP_SUMMARY
