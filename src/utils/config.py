@@ -85,6 +85,7 @@ class EmbeddingAlgorithmConfig:
     svd: Optional[Dict[str, Any]] = None
     umap: Optional[Dict[str, Any]] = None
     autoencoder: Optional[Dict[str, Any]] = None
+    vae: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -328,6 +329,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             svd=emb.get("algorithms", {}).get("svd"),
             umap=emb.get("algorithms", {}).get("umap"),
             autoencoder=emb.get("algorithms", {}).get("autoencoder"),
+            vae=emb.get("algorithms", {}).get("vae"),
         )
         upload_config = EmbeddingUploadConfig(
             dataset=emb.get("upload", {}).get("dataset", "raw"),

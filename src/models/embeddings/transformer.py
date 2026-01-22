@@ -12,7 +12,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.features.transformers import BaseBGGTransformer, LogTransformer, YearTransformer
+from src.features.transformers import (
+    BaseBGGTransformer,
+    LogTransformer,
+    YearTransformer,
+)
 
 
 # Default family patterns for embeddings - focus on game characteristic types
@@ -21,7 +25,6 @@ DEFAULT_EMBEDDING_FAMILY_PATTERNS = [
     "^Category",
     "^Sports",
     "^Traditional",
-    "^Series:",
     "^Card",
     "^Collectible",
 ]
@@ -46,6 +49,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
         create_designer_features: bool = False,
         create_artist_features: bool = False,
         create_publisher_features: bool = False,
+        include_count_features: bool = False,
         family_allow_patterns: Optional[List[str]] = None,
         max_family_features: int = 150,
         # Inherit other defaults from base
@@ -73,6 +77,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
             create_designer_features=create_designer_features,
             create_artist_features=create_artist_features,
             create_publisher_features=create_publisher_features,
+            include_count_features=include_count_features,
             family_allow_patterns=family_allow_patterns,
             max_family_features=max_family_features,
             **kwargs,
@@ -140,22 +145,22 @@ def create_embedding_preprocessor(
 
     # Add additional steps for linear models
     if model_type == "linear":
-        pipeline_steps.extend([
-            ("log", LogTransformer(columns=log_columns)),
-            (
-                "year",
-                YearTransformer(
-                    reference_year=reference_year,
-                    normalization_factor=normalization_factor,
+        pipeline_steps.extend(
+            [
+                ("log", LogTransformer(columns=log_columns)),
+                (
+                    "year",
+                    YearTransformer(
+                        reference_year=reference_year,
+                        normalization_factor=normalization_factor,
+                    ),
                 ),
-            ),
-            ("variance_selector", VarianceThreshold(threshold=0)),
-            ("scaler", StandardScaler()),
-        ])
+                ("variance_selector", VarianceThreshold(threshold=0)),
+                ("scaler", StandardScaler()),
+            ]
+        )
     elif model_type == "tree":
-        pipeline_steps.extend([
-            ("variance_selector", VarianceThreshold(threshold=0))
-        ])
+        pipeline_steps.extend([("variance_selector", VarianceThreshold(threshold=0))])
 
     pipeline = Pipeline(pipeline_steps)
     pipeline.set_output(transform="pandas")

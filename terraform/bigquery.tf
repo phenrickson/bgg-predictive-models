@@ -350,3 +350,82 @@ resource "google_bigquery_table" "game_embeddings" {
     model_type  = "embeddings"
   }
 }
+
+# Game coordinates table for 2D projections (UMAP/PCA)
+resource "google_bigquery_table" "game_coordinates" {
+  dataset_id          = google_bigquery_dataset.raw.dataset_id
+  table_id            = "game_coordinates"
+  project             = var.project_id
+  description         = "2D coordinates (UMAP/PCA) for game embeddings visualization"
+  deletion_protection = true
+
+  time_partitioning {
+    type  = "DAY"
+    field = "created_ts"
+  }
+
+  clustering = ["game_id"]
+
+  schema = jsonencode([
+    {
+      name        = "game_id"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "BGG game ID"
+    },
+    {
+      name        = "embedding_model"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Name of embedding model used"
+    },
+    {
+      name        = "embedding_version"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "Version number of the embedding model"
+    },
+    {
+      name        = "umap_1"
+      type        = "FLOAT"
+      mode        = "NULLABLE"
+      description = "UMAP x coordinate"
+    },
+    {
+      name        = "umap_2"
+      type        = "FLOAT"
+      mode        = "NULLABLE"
+      description = "UMAP y coordinate"
+    },
+    {
+      name        = "pca_1"
+      type        = "FLOAT"
+      mode        = "NULLABLE"
+      description = "PCA x coordinate (PC1)"
+    },
+    {
+      name        = "pca_2"
+      type        = "FLOAT"
+      mode        = "NULLABLE"
+      description = "PCA y coordinate (PC2)"
+    },
+    {
+      name        = "created_ts"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "When these coordinates were generated"
+    },
+    {
+      name        = "job_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique job ID for this coordinate generation run"
+    }
+  ])
+
+  labels = {
+    environment = "production"
+    managed_by  = "terraform"
+    model_type  = "embeddings"
+  }
+}

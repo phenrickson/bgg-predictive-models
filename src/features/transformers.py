@@ -442,6 +442,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         create_family_features: bool = True,
         # Feature selection parameters
         include_base_numeric: bool = True,
+        include_count_features: bool = True,
         include_average_weight: bool = False,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
@@ -518,6 +519,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         # Feature selection parameters
         self.include_base_numeric = include_base_numeric
+        self.include_count_features = include_count_features
         self.include_average_weight = include_average_weight
 
         # Column preservation parameters
@@ -1050,10 +1052,10 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         # Base numeric features
         if self.include_base_numeric:
+            if getattr(self, "include_count_features", True):
+                feature_names.extend(["mechanics_count", "categories_count"])
             feature_names.extend(
                 [
-                    "mechanics_count",
-                    "categories_count",
                     "time_per_player",
                     "description_word_count",
                     "min_age",
@@ -1129,7 +1131,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         feature_dfs = []
 
         # Create mechanics count if mechanics column exists
-        if "mechanics" in X_base.columns:
+        if getattr(self, "include_count_features", True) and "mechanics" in X_base.columns:
             mechanics_df = pd.DataFrame(index=X_base.index)
 
             # Use the more robust count_mechanics function
@@ -1162,7 +1164,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             feature_dfs.append(mechanics_df)
 
         # Create categories count if categories column exists
-        if "categories" in X_base.columns:
+        if getattr(self, "include_count_features", True) and "categories" in X_base.columns:
             categories_df = pd.DataFrame(index=X_base.index)
 
             def count_categories(categories):

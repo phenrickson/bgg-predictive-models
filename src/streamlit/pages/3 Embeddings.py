@@ -265,7 +265,7 @@ def create_2d_embedding_plot(
             try:
                 from umap import UMAP
                 st.info("Computing UMAP projection (this may take a moment)...")
-                umap_2d = UMAP(n_components=2, n_neighbors=15, min_dist=0.1, metric="euclidean", random_state=42)
+                umap_2d = UMAP(n_components=2, n_neighbors=100, min_dist=0.5, metric="euclidean", random_state=42)
                 projection_2d = umap_2d.fit_transform(all_embeddings)
                 x_vals = projection_2d[:, 0]
                 y_vals = projection_2d[:, 1]

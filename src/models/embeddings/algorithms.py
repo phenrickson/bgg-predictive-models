@@ -256,8 +256,8 @@ class UMAPEmbedding(BaseEmbeddingAlgorithm):
     def __init__(
         self,
         embedding_dim: int,
-        n_neighbors: int = 15,
-        min_dist: float = 0.1,
+        n_neighbors: int = 100,
+        min_dist: float = 0.5,
         metric: str = "cosine",
         **kwargs,
     ):
@@ -349,6 +349,8 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         batch_size: int = 256,
         learning_rate: float = 0.001,
         dropout: float = 0.2,
+        patience: int = 10,
+        min_delta: float = 1e-6,
         **kwargs,
     ):
         """Initialize Autoencoder embedding.
@@ -360,6 +362,8 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
             batch_size: Batch size for training.
             learning_rate: Learning rate for optimizer.
             dropout: Dropout rate for regularization.
+            patience: Early stopping patience (epochs without improvement).
+            min_delta: Minimum change to qualify as improvement.
             **kwargs: Additional parameters.
         """
         super().__init__(embedding_dim)
@@ -368,11 +372,16 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.dropout = dropout
+        self.patience = int(patience)
+        self.min_delta = float(min_delta)
 
         self.encoder = None
         self.decoder = None
         self.input_dim = None
         self.training_history = []
+        self.validation_history = []
+        self.early_stopped = False
+        self.stopped_epoch = None
 
     def _build_model(self, input_dim: int):
         """Build the autoencoder architecture."""
@@ -414,10 +423,15 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         decoder_layers.append(nn.Linear(prev_dim, input_dim))
         self.decoder = nn.Sequential(*decoder_layers)
 
-    def fit(self, X: pd.DataFrame) -> "AutoencoderEmbedding":
+    def fit(self, X: pd.DataFrame, X_val: Optional[pd.DataFrame] = None) -> "AutoencoderEmbedding":
         """Train the autoencoder on input data.
 
         Note: Data is assumed to be already centered/scaled by the preprocessor.
+        Uses early stopping based on validation loss if provided.
+
+        Args:
+            X: Training data.
+            X_val: Optional validation data for early stopping and monitoring.
         """
         import torch
         import torch.nn as nn
@@ -430,6 +444,12 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         dataset = TensorDataset(X_tensor, X_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
+        # Prepare validation data if provided
+        val_tensor = None
+        if X_val is not None:
+            X_val_array = X_val.values if hasattr(X_val, "values") else X_val
+            val_tensor = torch.FloatTensor(X_val_array)
+
         optimizer = torch.optim.Adam(
             list(self.encoder.parameters()) + list(self.decoder.parameters()),
             lr=self.learning_rate,
@@ -439,7 +459,16 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         self.encoder.train()
         self.decoder.train()
 
+        # Early stopping tracking (based on validation loss if available)
+        best_loss = float('inf')
+        epochs_without_improvement = 0
+        best_encoder_state = None
+        best_decoder_state = None
+
         for epoch in range(self.epochs):
+            # Training
+            self.encoder.train()
+            self.decoder.train()
             epoch_loss = 0.0
             for batch_X, _ in dataloader:
                 optimizer.zero_grad()
@@ -450,20 +479,66 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
                 optimizer.step()
                 epoch_loss += loss.item()
 
-            avg_loss = epoch_loss / len(dataloader)
-            self.training_history.append(avg_loss)
+            avg_train_loss = epoch_loss / len(dataloader)
+            self.training_history.append(avg_train_loss)
+
+            # Validation loss
+            if val_tensor is not None:
+                self.encoder.eval()
+                self.decoder.eval()
+                with torch.no_grad():
+                    val_encoded = self.encoder(val_tensor)
+                    val_decoded = self.decoder(val_encoded)
+                    val_loss = criterion(val_decoded, val_tensor).item()
+                self.validation_history.append(val_loss)
+                monitor_loss = val_loss
+            else:
+                monitor_loss = avg_train_loss
+
+            # Early stopping check (on validation loss if available)
+            if monitor_loss < best_loss - self.min_delta:
+                best_loss = monitor_loss
+                epochs_without_improvement = 0
+                # Save best model state
+                best_encoder_state = {k: v.clone() for k, v in self.encoder.state_dict().items()}
+                best_decoder_state = {k: v.clone() for k, v in self.decoder.state_dict().items()}
+            else:
+                epochs_without_improvement += 1
 
             if (epoch + 1) % 10 == 0:
-                logger.info(f"Epoch {epoch + 1}/{self.epochs}, Loss: {avg_loss:.6f}")
+                if val_tensor is not None:
+                    logger.info(f"Epoch {epoch + 1}/{self.epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {val_loss:.6f}")
+                else:
+                    logger.info(f"Epoch {epoch + 1}/{self.epochs}, Loss: {avg_train_loss:.6f}")
+
+            # Early stopping trigger
+            if epochs_without_improvement >= self.patience:
+                self.early_stopped = True
+                self.stopped_epoch = epoch + 1
+                logger.info(
+                    f"Early stopping at epoch {epoch + 1} "
+                    f"(no improvement for {self.patience} epochs)"
+                )
+                # Restore best model
+                if best_encoder_state is not None:
+                    self.encoder.load_state_dict(best_encoder_state)
+                    self.decoder.load_state_dict(best_decoder_state)
+                break
 
         self.encoder.eval()
         self.decoder.eval()
         self.is_fitted = True
 
-        logger.info(
-            f"Autoencoder trained for {self.epochs} epochs, "
-            f"final loss: {self.training_history[-1]:.6f}"
-        )
+        epochs_trained = len(self.training_history)
+        final_msg = f"Autoencoder trained for {epochs_trained} epochs"
+        if self.early_stopped:
+            final_msg += f" (early stopped, best val loss: {best_loss:.6f})"
+        else:
+            final_msg += f", final train loss: {self.training_history[-1]:.6f}"
+            if self.validation_history:
+                final_msg += f", final val loss: {self.validation_history[-1]:.6f}"
+        logger.info(final_msg)
+
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
@@ -485,13 +560,21 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
         """Get autoencoder training metrics."""
         if not self.is_fitted:
             return {}
-        return {
-            "final_loss": self.training_history[-1] if self.training_history else None,
+        metrics = {
+            "final_train_loss": self.training_history[-1] if self.training_history else None,
+            "best_train_loss": min(self.training_history) if self.training_history else None,
             "epochs_trained": len(self.training_history),
             "hidden_layers": self.hidden_layers,
             "embedding_dim": self.embedding_dim,
             "input_dim": self.input_dim,
+            "early_stopped": self.early_stopped,
         }
+        if self.validation_history:
+            metrics["final_val_loss"] = self.validation_history[-1]
+            metrics["best_val_loss"] = min(self.validation_history)
+        if self.early_stopped:
+            metrics["stopped_epoch"] = self.stopped_epoch
+        return metrics
 
     def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
         """Get autoencoder artifacts including training history."""
@@ -500,6 +583,7 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
 
         artifacts = {
             "training_history": self.training_history,
+            "validation_history": self.validation_history,
             "hidden_layers": self.hidden_layers,
             "embedding_dim": self.embedding_dim,
             "input_dim": self.input_dim,
@@ -507,7 +591,13 @@ class AutoencoderEmbedding(BaseEmbeddingAlgorithm):
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
             "dropout": self.dropout,
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+            "early_stopped": self.early_stopped,
         }
+
+        if self.early_stopped:
+            artifacts["stopped_epoch"] = self.stopped_epoch
 
         # Add feature names if provided
         if feature_names is not None:
@@ -534,6 +624,8 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         beta: float = 1.0,
         dropout: float = 0.1,
         use_batch_norm: bool = True,
+        patience: int = 10,
+        min_delta: float = 1e-6,
         **kwargs,
     ):
         """Initialize VAE embedding.
@@ -548,6 +640,8 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
                   beta=1.0 is standard VAE, beta>1 pushes harder toward Gaussian.
             dropout: Dropout rate for regularization.
             use_batch_norm: Whether to use batch normalization.
+            patience: Early stopping patience (epochs without improvement).
+            min_delta: Minimum change to qualify as improvement.
             **kwargs: Additional parameters.
         """
         super().__init__(embedding_dim)
@@ -558,6 +652,8 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         self.beta = beta
         self.dropout = dropout
         self.use_batch_norm = use_batch_norm
+        self.patience = patience
+        self.min_delta = min_delta
 
         self.encoder = None
         self.fc_mu = None
@@ -565,8 +661,11 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         self.decoder = None
         self.input_dim = None
         self.training_history = []
+        self.validation_history = []
         self.kl_history = []
         self.recon_history = []
+        self.early_stopped = False
+        self.stopped_epoch = None
 
     def _build_model(self, input_dim: int):
         """Build the VAE architecture."""
@@ -622,8 +721,15 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         """KL divergence from N(mu, sigma) to N(0, 1)."""
         return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=1).mean()
 
-    def fit(self, X: pd.DataFrame) -> "VAEEmbedding":
-        """Train the VAE on input data."""
+    def fit(self, X: pd.DataFrame, X_val: Optional[pd.DataFrame] = None) -> "VAEEmbedding":
+        """Train the VAE on input data.
+
+        Uses early stopping based on validation loss if provided.
+
+        Args:
+            X: Training data.
+            X_val: Optional validation data for early stopping and monitoring.
+        """
         import torch
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
@@ -634,6 +740,12 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         X_tensor = torch.FloatTensor(X_array)
         dataset = TensorDataset(X_tensor)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+
+        # Prepare validation data if provided
+        val_tensor = None
+        if X_val is not None:
+            X_val_array = X_val.values if hasattr(X_val, "values") else X_val
+            val_tensor = torch.FloatTensor(X_val_array)
 
         # Collect all parameters
         params = (
@@ -647,7 +759,15 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         self.encoder.train()
         self.decoder.train()
 
+        # Early stopping tracking (based on validation loss if available)
+        best_loss = float('inf')
+        epochs_without_improvement = 0
+        best_state = None
+
         for epoch in range(self.epochs):
+            # Training
+            self.encoder.train()
+            self.decoder.train()
             epoch_loss = 0.0
             epoch_recon = 0.0
             epoch_kl = 0.0
@@ -679,29 +799,88 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
                 epoch_kl += kl_loss.item()
 
             n_batches = len(dataloader)
-            avg_loss = epoch_loss / n_batches
+            avg_train_loss = epoch_loss / n_batches
             avg_recon = epoch_recon / n_batches
             avg_kl = epoch_kl / n_batches
 
-            self.training_history.append(avg_loss)
+            self.training_history.append(avg_train_loss)
             self.recon_history.append(avg_recon)
             self.kl_history.append(avg_kl)
 
+            # Validation loss
+            if val_tensor is not None:
+                self.encoder.eval()
+                self.decoder.eval()
+                with torch.no_grad():
+                    val_h = self.encoder(val_tensor)
+                    val_mu = self.fc_mu(val_h)
+                    val_logvar = self.fc_logvar(val_h)
+                    val_z = val_mu  # Use mean for validation (no sampling)
+                    val_recon = self.decoder(val_z)
+                    val_recon_loss = nn.functional.mse_loss(val_recon, val_tensor, reduction="mean")
+                    val_kl_loss = self._kl_divergence(val_mu, val_logvar)
+                    val_loss = (val_recon_loss + self.beta * val_kl_loss).item()
+                self.validation_history.append(val_loss)
+                monitor_loss = val_loss
+            else:
+                monitor_loss = avg_train_loss
+
+            # Early stopping check (on validation loss if available)
+            if monitor_loss < best_loss - self.min_delta:
+                best_loss = monitor_loss
+                epochs_without_improvement = 0
+                # Save best model state
+                best_state = {
+                    'encoder': {k: v.clone() for k, v in self.encoder.state_dict().items()},
+                    'fc_mu': {k: v.clone() for k, v in self.fc_mu.state_dict().items()},
+                    'fc_logvar': {k: v.clone() for k, v in self.fc_logvar.state_dict().items()},
+                    'decoder': {k: v.clone() for k, v in self.decoder.state_dict().items()},
+                }
+            else:
+                epochs_without_improvement += 1
+
             if (epoch + 1) % 10 == 0:
+                if val_tensor is not None:
+                    logger.info(
+                        f"Epoch {epoch + 1}/{self.epochs}, "
+                        f"Train Loss: {avg_train_loss:.6f}, Val Loss: {val_loss:.6f}"
+                    )
+                else:
+                    logger.info(
+                        f"Epoch {epoch + 1}/{self.epochs}, "
+                        f"Loss: {avg_train_loss:.6f} (Recon: {avg_recon:.6f}, KL: {avg_kl:.6f})"
+                    )
+
+            # Early stopping trigger
+            if epochs_without_improvement >= self.patience:
+                self.early_stopped = True
+                self.stopped_epoch = epoch + 1
                 logger.info(
-                    f"Epoch {epoch + 1}/{self.epochs}, "
-                    f"Loss: {avg_loss:.6f} (Recon: {avg_recon:.6f}, KL: {avg_kl:.6f})"
+                    f"Early stopping at epoch {epoch + 1} "
+                    f"(no improvement for {self.patience} epochs)"
                 )
+                # Restore best model
+                if best_state is not None:
+                    self.encoder.load_state_dict(best_state['encoder'])
+                    self.fc_mu.load_state_dict(best_state['fc_mu'])
+                    self.fc_logvar.load_state_dict(best_state['fc_logvar'])
+                    self.decoder.load_state_dict(best_state['decoder'])
+                break
 
         self.encoder.eval()
         self.decoder.eval()
         self.is_fitted = True
 
-        logger.info(
-            f"VAE trained for {self.epochs} epochs, "
-            f"final loss: {self.training_history[-1]:.6f} "
-            f"(recon: {self.recon_history[-1]:.6f}, kl: {self.kl_history[-1]:.6f})"
-        )
+        epochs_trained = len(self.training_history)
+        final_msg = f"VAE trained for {epochs_trained} epochs"
+        if self.early_stopped:
+            final_msg += f" (early stopped, best val loss: {best_loss:.6f})"
+        else:
+            final_msg += f", final train loss: {self.training_history[-1]:.6f}"
+            if self.validation_history:
+                final_msg += f", final val loss: {self.validation_history[-1]:.6f}"
+        logger.info(final_msg)
+
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
@@ -725,8 +904,9 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
         """Get VAE training metrics."""
         if not self.is_fitted:
             return {}
-        return {
-            "final_loss": self.training_history[-1] if self.training_history else None,
+        metrics = {
+            "final_train_loss": self.training_history[-1] if self.training_history else None,
+            "best_train_loss": min(self.training_history) if self.training_history else None,
             "final_recon_loss": self.recon_history[-1] if self.recon_history else None,
             "final_kl_loss": self.kl_history[-1] if self.kl_history else None,
             "epochs_trained": len(self.training_history),
@@ -734,7 +914,14 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
             "embedding_dim": self.embedding_dim,
             "input_dim": self.input_dim,
             "beta": self.beta,
+            "early_stopped": self.early_stopped,
         }
+        if self.validation_history:
+            metrics["final_val_loss"] = self.validation_history[-1]
+            metrics["best_val_loss"] = min(self.validation_history)
+        if self.early_stopped:
+            metrics["stopped_epoch"] = self.stopped_epoch
+        return metrics
 
     def get_artifacts(self, feature_names: Optional[List[str]] = None) -> Dict[str, Any]:
         """Get VAE artifacts including training history."""
@@ -743,6 +930,7 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
 
         artifacts = {
             "training_history": self.training_history,
+            "validation_history": self.validation_history,
             "recon_history": self.recon_history,
             "kl_history": self.kl_history,
             "hidden_layers": self.hidden_layers,
@@ -754,7 +942,13 @@ class VAEEmbedding(BaseEmbeddingAlgorithm):
             "beta": self.beta,
             "dropout": self.dropout,
             "use_batch_norm": self.use_batch_norm,
+            "patience": self.patience,
+            "min_delta": self.min_delta,
+            "early_stopped": self.early_stopped,
         }
+
+        if self.early_stopped:
+            artifacts["stopped_epoch"] = self.stopped_epoch
 
         if feature_names is not None:
             artifacts["feature_names"] = feature_names

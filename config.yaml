@@ -96,7 +96,7 @@ evaluate:
 
 # Embeddings Configuration
 embeddings:
-  algorithm: umap  # pca, svd, umap, autoencoder
+  algorithm: svd  # pca, svd, umap, autoencoder
   embedding_dim: 64
   experiment_name: game-embeddings
   min_ratings: 5  # Minimum users_rated for training data
@@ -105,15 +105,21 @@ embeddings:
       whiten: true
     svd:
       n_iter: 5
-    umap:
-      n_neighbors: 15
-      min_dist: 0.1
-      metric: cosine
     autoencoder:
       hidden_layers: [512, 256, 128]
-      epochs: 100
+      epochs: 200
       batch_size: 256
       learning_rate: 0.001
+      patience: 15
+      min_delta: 0.000001
+    vae:
+      hidden_layers: [512, 256, 128]
+      epochs: 150
+      batch_size: 256
+      learning_rate: 0.001
+      beta: 1.0
+      patience: 15
+      min_delta: 0.000001
   upload:
     # Raw table where new embeddings are written (Dataform pulls from here)
     dataset: raw
@@ -126,6 +132,29 @@ embeddings:
   search:
     default_distance_type: cosine  # cosine, euclidean, dot_product
     default_top_k: 10
+
+# Collection Modeling Configuration
+collections:
+  storage:
+    bucket_name: bgg-predictive-models
+    base_prefix: collections
+  split:
+    negative_sampling_ratio: 5.0
+    negative_sampling_strategy: popularity_weighted  # random, popularity_weighted, uniform
+    min_ratings_for_negatives: 50
+    validation_ratio: 0.15
+    test_ratio: 0.15
+  model:
+    type: lightgbm
+    use_sample_weights: false
+    handle_imbalance: scale_pos_weight
+    threshold_optimization_metric: f2  # f1, f2, precision, recall
+    tuning_metric: log_loss
+  analysis:
+    top_n_recommendations: 100
+    top_n_categories: 10
+    top_n_mechanics: 10
+  min_ratings_for_universe: 25
 
 # Scoring Configuration
 scoring:
