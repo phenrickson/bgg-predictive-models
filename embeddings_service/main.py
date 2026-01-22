@@ -177,6 +177,40 @@ class ModelsResponse(BaseModel):
     models: List[ModelInfo]
 
 
+class GenerateCoordinatesRequest(BaseModel):
+    """Request for generating 2D coordinates from embeddings."""
+
+    model_name: str = Field("bgg-embeddings", description="Name of registered embedding model")
+    model_version: Optional[int] = Field(None, description="Specific model version")
+    game_ids: Optional[List[int]] = Field(None, description="Specific game IDs to process")
+    max_games: int = Field(DEFAULT_MAX_GAMES, description="Maximum games to process")
+    include_umap: bool = Field(True, description="Generate UMAP coordinates")
+    include_pca: bool = Field(True, description="Generate PCA coordinates")
+
+
+class GameCoordinates(BaseModel):
+    """2D coordinates for a single game."""
+
+    game_id: int
+    umap_1: Optional[float] = None
+    umap_2: Optional[float] = None
+    pca_1: Optional[float] = None
+    pca_2: Optional[float] = None
+
+
+class GenerateCoordinatesResponse(BaseModel):
+    """Response for coordinate generation."""
+
+    job_id: str
+    model_details: Dict[str, Any]
+    games_processed: int
+    coordinates: Optional[List[GameCoordinates]] = Field(
+        None, description="Coordinates (only returned for specific game_ids)"
+    )
+    table_id: Optional[str] = Field(None, description="BigQuery table (if uploaded)")
+    bq_job_id: Optional[str] = None
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -561,8 +595,9 @@ def fetch_game_embeddings(
         raise
 
 
-# Cache for loaded UMAP models (keyed by model_name:version)
+# Cache for loaded UMAP and PCA models (keyed by model_name:version)
 _umap_model_cache: Dict[str, Any] = {}
+_pca_model_cache: Dict[str, Any] = {}
 
 
 def get_umap_model(model_name: str = "bgg-embeddings", model_version: Optional[int] = None) -> Optional[Any]:
@@ -622,6 +657,65 @@ def transform_to_umap(
         return [[float(x), float(y)] for x, y in umap_coords]
     except Exception as e:
         logger.warning(f"UMAP transform failed: {e}")
+        return None
+
+
+def get_pca_model(model_name: str = "bgg-embeddings", model_version: Optional[int] = None) -> Optional[Any]:
+    """Load and cache the PCA model for transforming embeddings to 2D.
+
+    Args:
+        model_name: Name of the registered embedding model.
+        model_version: Specific version, or None for latest.
+
+    Returns:
+        Fitted PCA model, or None if not available.
+    """
+    cache_key = f"{model_name}:{model_version or 'latest'}"
+
+    if cache_key in _pca_model_cache:
+        return _pca_model_cache[cache_key]
+
+    try:
+        registered_model = RegisteredEmbeddingModel()
+        pca_model = registered_model.load_pca_model(model_name, model_version)
+
+        if pca_model is not None:
+            _pca_model_cache[cache_key] = pca_model
+            logger.info(f"Loaded PCA model for {cache_key}")
+
+        return pca_model
+    except Exception as e:
+        logger.warning(f"Could not load PCA model for {cache_key}: {e}")
+        return None
+
+
+def transform_to_pca(
+    embeddings: List[List[float]],
+    model_name: str = "bgg-embeddings",
+    model_version: Optional[int] = None,
+) -> Optional[List[List[float]]]:
+    """Transform embeddings to 2D PCA coordinates.
+
+    Args:
+        embeddings: List of embedding vectors (must be full 64-dim for PCA).
+        model_name: Name of the registered embedding model.
+        model_version: Specific version, or None for latest.
+
+    Returns:
+        List of [pca_1, pca_2] coordinates, or None if PCA not available.
+    """
+    import numpy as np
+
+    pca_model = get_pca_model(model_name, model_version)
+    if pca_model is None:
+        return None
+
+    try:
+        embeddings_array = np.array(embeddings)
+        pca_coords = pca_model.transform(embeddings_array)
+        return [[float(x), float(y)] for x, y in pca_coords]
+    except Exception as e:
+        logger.warning(f"PCA transform failed: {e}")
         return None
 
 
@@ -945,6 +1039,189 @@ async def get_embedding_profile(request: EmbeddingProfileRequest):
         raise
     except Exception as e:
         logger.error(f"Error getting embedding profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/generate_coordinates", response_model=GenerateCoordinatesResponse)
+async def generate_coordinates(request: GenerateCoordinatesRequest):
+    """Generate 2D coordinates (UMAP and/or PCA) for game embeddings.
+
+    This endpoint fetches existing embeddings from BigQuery and projects them
+    to 2D space using the registered UMAP and PCA models. Use this to:
+    - Get coordinates for specific games for visualization
+    - Batch process games for the coordinate table
+
+    If game_ids is provided, returns coordinates in the response.
+    Otherwise, processes games needing updates and uploads to BigQuery.
+    """
+    import numpy as np
+
+    job_id = str(uuid.uuid4())
+    logger.info(f"Starting coordinate generation job {job_id}")
+
+    try:
+        # Get model info
+        registered_model = RegisteredEmbeddingModel()
+        versions = registered_model.list_model_versions(request.model_name)
+        if not versions:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No registered model found: {request.model_name}"
+            )
+
+        model_version = request.model_version or max(v["version"] for v in versions)
+        model_details = {
+            "name": request.model_name,
+            "version": model_version,
+            "include_umap": request.include_umap,
+            "include_pca": request.include_pca,
+        }
+
+        # Determine which games to process
+        if request.game_ids:
+            game_ids = request.game_ids
+            logger.info(f"Processing {len(game_ids)} specific games")
+        else:
+            # For batch processing, get games from embeddings table
+            # that need coordinate updates
+            emb_config = config.embeddings
+            project = emb_config.vector_search.project or config.ml_project_id
+            dataset = emb_config.vector_search.dataset
+            table = emb_config.vector_search.table
+            table_id = f"{project}.{dataset}.{table}"
+
+            query = f"""
+            SELECT DISTINCT game_id
+            FROM `{table_id}`
+            WHERE embedding_version = {model_version}
+            LIMIT {request.max_games}
+            """
+
+            client = bigquery.Client(project=config.ml_project_id)
+            result = client.query(query).to_dataframe()
+            game_ids = result["game_id"].tolist()
+            logger.info(f"Found {len(game_ids)} games to process")
+
+        if not game_ids:
+            return GenerateCoordinatesResponse(
+                job_id=job_id,
+                model_details=model_details,
+                games_processed=0,
+            )
+
+        # Fetch embeddings (need full 64-dim for projection)
+        embeddings_map = fetch_game_embeddings(
+            game_ids=game_ids,
+            embedding_dims=None,  # Full embeddings
+            model_version=model_version,
+        )
+
+        if not embeddings_map:
+            return GenerateCoordinatesResponse(
+                job_id=job_id,
+                model_details=model_details,
+                games_processed=0,
+            )
+
+        # Build ordered lists for batch transform
+        ordered_game_ids = [gid for gid in game_ids if gid in embeddings_map]
+        ordered_embeddings = [embeddings_map[gid]["embedding"] for gid in ordered_game_ids]
+
+        # Transform to UMAP coordinates
+        umap_coords = None
+        if request.include_umap:
+            umap_coords = transform_to_umap(
+                ordered_embeddings,
+                model_name=request.model_name,
+                model_version=model_version,
+            )
+            if umap_coords:
+                logger.info(f"Generated UMAP coordinates for {len(umap_coords)} games")
+            else:
+                logger.warning("UMAP model not available")
+
+        # Transform to PCA coordinates
+        pca_coords = None
+        if request.include_pca:
+            pca_coords = transform_to_pca(
+                ordered_embeddings,
+                model_name=request.model_name,
+                model_version=model_version,
+            )
+            if pca_coords:
+                logger.info(f"Generated PCA coordinates for {len(pca_coords)} games")
+            else:
+                logger.warning("PCA model not available")
+
+        # Build coordinate results
+        coordinates = []
+        for i, game_id in enumerate(ordered_game_ids):
+            coord = GameCoordinates(game_id=game_id)
+            if umap_coords and i < len(umap_coords):
+                coord.umap_1 = umap_coords[i][0]
+                coord.umap_2 = umap_coords[i][1]
+            if pca_coords and i < len(pca_coords):
+                coord.pca_1 = pca_coords[i][0]
+                coord.pca_2 = pca_coords[i][1]
+            coordinates.append(coord)
+
+        # If specific game_ids were requested, return in response
+        if request.game_ids:
+            return GenerateCoordinatesResponse(
+                job_id=job_id,
+                model_details=model_details,
+                games_processed=len(coordinates),
+                coordinates=coordinates,
+            )
+
+        # Otherwise, upload to BigQuery
+        # Build DataFrame for upload
+        upload_data = []
+        for coord in coordinates:
+            row = {
+                "game_id": coord.game_id,
+                "embedding_model": request.model_name,
+                "embedding_version": model_version,
+                "umap_1": coord.umap_1,
+                "umap_2": coord.umap_2,
+                "pca_1": coord.pca_1,
+                "pca_2": coord.pca_2,
+                "created_ts": datetime.now(),
+                "job_id": job_id,
+            }
+            upload_data.append(row)
+
+        upload_df = pd.DataFrame(upload_data)
+
+        # Upload to coordinates table
+        emb_config = config.embeddings
+        coords_table_id = f"{config.ml_project_id}.{emb_config.upload.dataset}.game_coordinates"
+
+        client = bigquery.Client(project=config.ml_project_id)
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
+        )
+
+        load_job = client.load_table_from_dataframe(
+            upload_df, coords_table_id, job_config=job_config
+        )
+        load_job.result()
+
+        logger.info(f"Uploaded {len(upload_df)} coordinates to {coords_table_id}")
+
+        return GenerateCoordinatesResponse(
+            job_id=job_id,
+            model_details=model_details,
+            games_processed=len(coordinates),
+            table_id=coords_table_id,
+            bq_job_id=load_job.job_id,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating coordinates: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

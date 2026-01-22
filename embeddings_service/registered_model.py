@@ -143,6 +143,19 @@ class RegisteredEmbeddingModel(ExperimentTracker):
         else:
             registration["has_umap_model"] = False
 
+        # Save PCA model if it exists in the experiment directory
+        pca_model_path = experiment.exp_dir / "pca_2d_model.pkl"
+        if pca_model_path.exists():
+            with open(pca_model_path, "rb") as f:
+                pca_model_bytes = f.read()
+            pca_blob = self.bucket.blob(f"{version_prefix}/pca_2d_model.pkl")
+            pca_blob.upload_from_string(
+                pca_model_bytes, content_type="application/octet-stream"
+            )
+            registration["has_pca_model"] = True
+        else:
+            registration["has_pca_model"] = False
+
         return registration
 
     def list_registered_models(self) -> List[Dict[str, Any]]:
@@ -240,6 +253,37 @@ class RegisteredEmbeddingModel(ExperimentTracker):
         try:
             umap_model = pickle.loads(umap_blob.download_as_string())
             return umap_model
+        except Exception:
+            return None
+
+    def load_pca_model(
+        self, name: str, version: Optional[int] = None
+    ) -> Optional[Any]:
+        """Load the PCA model for a registered embedding model.
+
+        Args:
+            name: Name of the registered model.
+            version: Optional specific version (latest if None).
+
+        Returns:
+            Fitted PCA model, or None if not available.
+        """
+        versions = self.list_model_versions(name)
+        if not versions:
+            return None
+
+        if version is None:
+            version = max(v["version"] for v in versions)
+
+        version_prefix = f"{self.base_prefix}/{name}/v{version}"
+        pca_blob = self.bucket.blob(f"{version_prefix}/pca_2d_model.pkl")
+
+        if not pca_blob.exists():
+            return None
+
+        try:
+            pca_model = pickle.loads(pca_blob.download_as_string())
+            return pca_model
         except Exception:
             return None
 

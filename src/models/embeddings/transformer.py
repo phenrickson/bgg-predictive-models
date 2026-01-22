@@ -49,6 +49,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
         create_designer_features: bool = False,
         create_artist_features: bool = False,
         create_publisher_features: bool = False,
+        include_count_features: bool = False,
         family_allow_patterns: Optional[List[str]] = None,
         max_family_features: int = 150,
         # Inherit other defaults from base
@@ -76,6 +77,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
             create_designer_features=create_designer_features,
             create_artist_features=create_artist_features,
             create_publisher_features=create_publisher_features,
+            include_count_features=include_count_features,
             family_allow_patterns=family_allow_patterns,
             max_family_features=max_family_features,
             **kwargs,

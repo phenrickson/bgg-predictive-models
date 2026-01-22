@@ -265,6 +265,103 @@ class EmbeddingTrainer:
         plt.close(fig)
         logger.info(f"Saved UMAP 2D plot to {png_path}")
 
+    def _compute_and_save_pca_coordinates(
+        self,
+        exp_dir: Path,
+        game_ids: list,
+        fit_embeddings: np.ndarray,
+        all_embeddings: np.ndarray,
+        dataset_name: str,
+        complexity_values: Optional[np.ndarray] = None,
+    ) -> None:
+        """Compute PCA 2D projection and save coordinates, model, and loadings.
+
+        Fits PCA on fit_embeddings (train+tune), then transforms all embeddings.
+
+        Args:
+            exp_dir: Experiment directory to save to.
+            game_ids: List of game IDs corresponding to all_embeddings.
+            fit_embeddings: Embeddings to fit PCA on (typically train+tune filtered).
+            all_embeddings: All embeddings (train + tune + test) to transform.
+            dataset_name: Name of dataset (train/tune/test/all).
+            complexity_values: Optional array of complexity values for coloring.
+        """
+        from sklearn.decomposition import PCA
+        import pandas as pd
+
+        logger.info(f"Fitting PCA on {len(fit_embeddings)} samples (train + tune filtered)...")
+
+        pca_2d = PCA(n_components=2, random_state=42)
+        pca_2d.fit(fit_embeddings)
+
+        logger.info(f"PCA explained variance: {pca_2d.explained_variance_ratio_.sum():.1%}")
+
+        # Save fitted PCA model for later use
+        pca_model_path = exp_dir / "pca_2d_model.pkl"
+        with open(pca_model_path, "wb") as f:
+            pickle.dump(pca_2d, f)
+        logger.info(f"Saved fitted PCA model to {pca_model_path}")
+
+        logger.info(f"Transforming all embeddings ({len(all_embeddings)} samples)...")
+        projection_2d = pca_2d.transform(all_embeddings)
+
+        # Save coordinates as parquet with game_id
+        pca_df = pl.DataFrame({
+            "game_id": game_ids,
+            "pca_1": projection_2d[:, 0],
+            "pca_2": projection_2d[:, 1],
+        })
+        pca_path = exp_dir / f"{dataset_name}_pca_coords.parquet"
+        pca_df.write_parquet(pca_path)
+        logger.info(f"Saved PCA 2D coordinates to {pca_path}")
+
+        # Save PCA loadings (component weights for each embedding dimension)
+        pca_loadings = pd.DataFrame(
+            pca_2d.components_.T,
+            columns=["PC1", "PC2"],
+            index=[f"emb_{i}" for i in range(pca_2d.components_.shape[1])],
+        )
+        pca_loadings.index.name = "embedding_dim"
+        pca_loadings["PC1_abs"] = pca_loadings["PC1"].abs()
+        pca_loadings["PC2_abs"] = pca_loadings["PC2"].abs()
+        pca_loadings_path = exp_dir / "pca_2d_loadings.parquet"
+        pca_loadings.to_parquet(pca_loadings_path)
+        logger.info(f"Saved PCA loadings to {pca_loadings_path}")
+
+        # Save PCA metadata (explained variance)
+        pca_metadata = pd.DataFrame({
+            "component": ["PC1", "PC2"],
+            "explained_variance_ratio": pca_2d.explained_variance_ratio_,
+            "explained_variance": pca_2d.explained_variance_,
+            "singular_values": pca_2d.singular_values_,
+        })
+        pca_metadata_path = exp_dir / "pca_2d_metadata.parquet"
+        pca_metadata.to_parquet(pca_metadata_path, index=False)
+        logger.info(f"Saved PCA metadata to {pca_metadata_path}")
+
+        # Save 2D PNG visualization
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(12, 8))
+        scatter = ax.scatter(
+            projection_2d[:, 0],
+            projection_2d[:, 1],
+            c=complexity_values,
+            cmap="viridis",
+            s=2,
+            alpha=0.5,
+        )
+        if complexity_values is not None:
+            plt.colorbar(scatter, ax=ax, label="Predicted Complexity")
+        ax.set_xlabel("PC1")
+        ax.set_ylabel("PC2")
+        ax.set_title(f"PCA 2D Projection - {dataset_name} ({len(projection_2d)} games, {pca_2d.explained_variance_ratio_.sum():.1%} variance)")
+
+        png_path = exp_dir / f"{dataset_name}_pca_2d.png"
+        fig.savefig(png_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info(f"Saved PCA 2D plot to {png_path}")
+
     def _save_visualization_data(
         self,
         exp_dir: Path,
@@ -467,6 +564,65 @@ class EmbeddingTrainer:
         plt.close(fig)
 
         logger.info(f"Saved scree plot to {plot_path}")
+
+    def _save_training_loss_plot(
+        self,
+        exp_dir: Path,
+        artifacts: Dict[str, Any],
+    ) -> None:
+        """Save training loss plot for autoencoder/VAE models.
+
+        Args:
+            exp_dir: Experiment directory to save to.
+            artifacts: Algorithm artifacts containing training_history.
+        """
+        if "training_history" not in artifacts:
+            logger.warning("No training_history in artifacts, skipping loss plot")
+            return
+
+        import matplotlib.pyplot as plt
+
+        history = artifacts["training_history"]
+        epochs = list(range(1, len(history) + 1))
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        ax.plot(epochs, history, 'b-', linewidth=1.5, label='Training Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss (MSE)')
+        ax.set_title('Autoencoder Training Loss')
+        ax.grid(True, alpha=0.3)
+
+        # Mark final loss
+        final_loss = history[-1]
+        ax.axhline(y=final_loss, color='r', linestyle='--', alpha=0.5, linewidth=1)
+        ax.text(len(epochs) * 0.02, final_loss, f'Final: {final_loss:.6f}',
+                va='bottom', fontsize=9, color='r')
+
+        # Mark minimum loss if different from final
+        min_loss = min(history)
+        min_epoch = history.index(min_loss) + 1
+        if min_epoch != len(history):
+            ax.scatter([min_epoch], [min_loss], color='g', s=50, zorder=5)
+            ax.annotate(f'Min: {min_loss:.6f} (epoch {min_epoch})',
+                       xy=(min_epoch, min_loss), xytext=(min_epoch + len(epochs)*0.05, min_loss),
+                       fontsize=8, color='g')
+
+        # Add early stopping info if present
+        if artifacts.get("early_stopped"):
+            stopped_epoch = artifacts.get("stopped_epoch", len(history))
+            ax.axvline(x=stopped_epoch, color='orange', linestyle='--', alpha=0.7)
+            ax.text(stopped_epoch, ax.get_ylim()[1] * 0.95, 'Early stop',
+                   ha='right', va='top', fontsize=8, color='orange')
+
+        ax.legend(loc='upper right')
+        plt.tight_layout()
+
+        plot_path = exp_dir / "training_loss.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        logger.info(f"Saved training loss plot to {plot_path}")
 
     def train(
         self,
@@ -700,6 +856,10 @@ class EmbeddingTrainer:
                 # Generate scree plot
                 self._save_scree_plot(experiment.exp_dir, artifacts)
 
+            # For autoencoder/VAE, save training loss plot
+            if "training_history" in artifacts:
+                self._save_training_loss_plot(experiment.exp_dir, artifacts)
+
         # Generate 2D projection for visualization
         self._save_visualization_data(
             experiment.exp_dir,
@@ -740,6 +900,15 @@ class EmbeddingTrainer:
             ])
 
         self._compute_and_save_umap_coordinates(
+            experiment.exp_dir,
+            all_game_ids,
+            fit_embeddings=combined_embeddings,
+            all_embeddings=all_embeddings,
+            dataset_name="all",
+            complexity_values=all_complexity,
+        )
+
+        self._compute_and_save_pca_coordinates(
             experiment.exp_dir,
             all_game_ids,
             fit_embeddings=combined_embeddings,

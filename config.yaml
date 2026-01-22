@@ -96,7 +96,7 @@ evaluate:
 
 # Embeddings Configuration
 embeddings:
-  algorithm: umap  # pca, svd, umap, autoencoder
+  algorithm: svd  # pca, svd, umap, autoencoder
   embedding_dim: 64
   experiment_name: game-embeddings
   min_ratings: 5  # Minimum users_rated for training data
@@ -105,15 +105,21 @@ embeddings:
       whiten: true
     svd:
       n_iter: 5
-    umap:
-      n_neighbors: 15
-      min_dist: 0.1
-      metric: cosine
     autoencoder:
       hidden_layers: [512, 256, 128]
-      epochs: 100
+      epochs: 200
       batch_size: 256
       learning_rate: 0.001
+      patience: 15
+      min_delta: 0.000001
+    vae:
+      hidden_layers: [512, 256, 128]
+      epochs: 200
+      batch_size: 256
+      learning_rate: 0.001
+      beta: 1.0
+      patience: 15
+      min_delta: 0.000001
   upload:
     # Raw table where new embeddings are written (Dataform pulls from here)
     dataset: raw
