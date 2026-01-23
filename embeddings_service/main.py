@@ -248,6 +248,7 @@ async def list_models():
 
 def load_games_for_embedding(
     model_name: str,
+    model_version: int,
     game_ids: Optional[List[int]] = None,
     max_games: int = DEFAULT_MAX_GAMES,
 ) -> pd.DataFrame:
@@ -255,6 +256,7 @@ def load_games_for_embedding(
 
     Args:
         model_name: Name of the embedding model (used for change detection).
+        model_version: Version of the model (games with older versions will be re-embedded).
         game_ids: Specific game IDs to load.
         max_games: Maximum number of games to load.
 
@@ -280,13 +282,14 @@ def load_games_for_embedding(
 
     # Score ALL games regardless of ratings - embeddings should work for everything
     # Only consider embeddings from the specified model for change detection
+    # Re-embed if: no embedding exists, features changed, OR version is outdated
     query = f"""
     SELECT gf.game_id
     FROM `{dw_project}.analytics.games_features` gf
     LEFT JOIN `{dw_project}.staging.game_features_hash` fh
       ON gf.game_id = fh.game_id
     LEFT JOIN (
-      SELECT game_id, created_ts,
+      SELECT game_id, created_ts, embedding_version,
              ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY created_ts DESC) as rn
       FROM `{table_id}`
       WHERE embedding_model = '{model_name}'
@@ -295,6 +298,7 @@ def load_games_for_embedding(
       AND (
         le.game_id IS NULL
         OR fh.last_updated > le.created_ts
+        OR le.embedding_version != {model_version}
       )
     LIMIT {max_games}
     """
@@ -399,9 +403,10 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
             f"(algorithm={algorithm}, dim={embedding_dim})"
         )
 
-        # Load games (change detection filters by model_name)
+        # Load games (change detection filters by model_name and model_version)
         games_df = load_games_for_embedding(
             model_name=request.model_name,
+            model_version=registration["version"],
             game_ids=request.game_ids,
             max_games=request.max_games,
         )
