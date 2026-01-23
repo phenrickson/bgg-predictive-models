@@ -141,6 +141,40 @@ class EmbeddingConfig:
 
 
 @dataclass
+class TextEmbeddingAlgorithmConfig:
+    """Configuration for text embedding algorithms."""
+
+    pmi: Optional[Dict[str, Any]] = None
+    word2vec: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class TextEmbeddingUploadConfig:
+    """Configuration for uploading text embeddings to BigQuery."""
+
+    dataset: str = "raw"
+    table: str = "description_embeddings"
+
+
+@dataclass
+class TextEmbeddingConfig:
+    """Configuration for text embeddings from descriptions."""
+
+    algorithm: str  # pmi, word2vec
+    embedding_dim: int
+    experiment_name: str
+    document_method: str  # mean, tfidf, sif
+    algorithms: TextEmbeddingAlgorithmConfig
+    upload: Optional[TextEmbeddingUploadConfig] = None
+
+    def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
+        """Get parameters for a specific algorithm."""
+        algo = algorithm or self.algorithm
+        params = getattr(self.algorithms, algo, None)
+        return params if params is not None else {}
+
+
+@dataclass
 class ModelConfig:
     """Configuration for model settings."""
 
@@ -179,6 +213,7 @@ class Config:
     ml_project_id: str
     scoring: Optional[ScoringConfig] = None
     embeddings: Optional[EmbeddingConfig] = None
+    text_embeddings: Optional[TextEmbeddingConfig] = None
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -355,6 +390,29 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_ratings=emb.get("min_ratings", 25),
         )
 
+    # Create text embeddings config if present
+    text_embeddings_config = None
+    if "text_embeddings" in config:
+        te = config["text_embeddings"]
+        te_algorithms_config = TextEmbeddingAlgorithmConfig(
+            pmi=te.get("algorithms", {}).get("pmi"),
+            word2vec=te.get("algorithms", {}).get("word2vec"),
+        )
+        te_upload_config = None
+        if "upload" in te:
+            te_upload_config = TextEmbeddingUploadConfig(
+                dataset=te["upload"].get("dataset", "raw"),
+                table=te["upload"].get("table", "description_embeddings"),
+            )
+        text_embeddings_config = TextEmbeddingConfig(
+            algorithm=te.get("algorithm", "pmi"),
+            embedding_dim=te.get("embedding_dim", 100),
+            experiment_name=te.get("experiment_name", "text-embeddings"),
+            document_method=te.get("document_method", "mean"),
+            algorithms=te_algorithms_config,
+            upload=te_upload_config,
+        )
+
     return Config(
         bucket_name=bucket_name,
         default_environment=config.get("default_environment", "dev"),
@@ -365,4 +423,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         ml_project_id=ml_project_id,
         scoring=scoring_config,
         embeddings=embeddings_config,
+        text_embeddings=text_embeddings_config,
     )

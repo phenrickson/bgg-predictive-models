@@ -63,6 +63,9 @@ help:  ## Show this help message
 	@echo '  make embeddings_svd              Train SVD embeddings'
 	@echo '  make embeddings_umap             Train UMAP embeddings'
 	@echo '  make embeddings_autoencoder      Train Autoencoder embeddings (requires torch)'
+	@echo '  make text_embeddings             Train text embeddings from descriptions (PMI+SVD)'
+	@echo '  make register_text_embeddings   Register text embeddings model to GCS'
+	@echo '  make description_embeddings     Generate description embeddings and upload to BigQuery'
 	@echo '  make experiment_dashboard        Launch predictions dashboard'
 	@echo '  make predictions_dashboard       Launch geek rating dashboard'
 	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
@@ -126,8 +129,8 @@ USERS_RATED_MODEL ?= $(RIDGE)
 models: hurdle complexity rating users_rated geek_rating
 
 ## register models
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register
-register: register_complexity register_rating register_users_rated register_hurdle register_embeddings
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings register
+register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
 
 # train individual models
 hurdle: train_hurdle finalize_hurdle score_hurdle
@@ -247,6 +250,27 @@ embeddings_svd:
 
 embeddings_autoencoder:
 	uv run -m src.models.embeddings.train --algorithm autoencoder
+
+## text embeddings (word embeddings from descriptions)
+.PHONY: text_embeddings text_embeddings_pmi
+text_embeddings: text_embeddings_pmi
+
+text_embeddings_pmi:
+	uv run -m src.models.text_embeddings.train --algorithm pmi
+
+## text embeddings registration and scoring
+TEXT_EMBEDDINGS_CANDIDATE ?= text-embeddings
+
+register_text_embeddings:
+	uv run -m text_embeddings_service.register_model \
+	--experiment $(TEXT_EMBEDDINGS_CANDIDATE) \
+	--name text-embeddings-v$(CURRENT_YEAR) \
+	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
+
+description_embeddings:
+	uv run -m src.models.text_embeddings.score \
+	--model text-embeddings-v$(CURRENT_YEAR) \
+	--upload-to-bigquery
 
 # predict geek rating given models
 geek_rating: 

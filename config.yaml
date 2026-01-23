@@ -133,6 +133,26 @@ embeddings:
     default_distance_type: cosine  # cosine, euclidean, dot_product
     default_top_k: 10
 
+# Text Embeddings Configuration (word embeddings from descriptions)
+text_embeddings:
+  algorithm: pmi  # pmi, word2vec
+  embedding_dim: 100
+  experiment_name: text-embeddings
+  document_method: sif  # mean, tfidf, sif
+  algorithms:
+    pmi:
+      window_size: 5
+      min_count: 5
+    word2vec:
+      window_size: 5
+      min_count: 5
+      sg: 1  # 1 for skip-gram, 0 for CBOW
+      epochs: 10
+  # Upload configuration for BigQuery (same pattern as game_embeddings)
+  upload:
+    dataset: raw
+    table: description_embeddings
+
 # Collection Modeling Configuration
 collections:
   storage:

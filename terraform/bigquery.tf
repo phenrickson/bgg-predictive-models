@@ -351,6 +351,91 @@ resource "google_bigquery_table" "game_embeddings" {
   }
 }
 
+# Description embeddings table for text-based features
+resource "google_bigquery_table" "description_embeddings" {
+  dataset_id          = google_bigquery_dataset.raw.dataset_id
+  table_id            = "description_embeddings"
+  project             = var.project_id
+  description         = "Text embeddings from game descriptions - used as features in predictive models"
+  deletion_protection = true
+
+  time_partitioning {
+    type  = "DAY"
+    field = "created_ts"
+  }
+
+  clustering = ["game_id"]
+
+  schema = jsonencode([
+    {
+      name        = "game_id"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "BGG game ID"
+    },
+    {
+      name        = "name"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Game name"
+    },
+    {
+      name        = "embedding"
+      type        = "FLOAT64"
+      mode        = "REPEATED"
+      description = "Text embedding vector from game description"
+    },
+    {
+      name        = "embedding_model"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Name of text embedding model used"
+    },
+    {
+      name        = "embedding_version"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "Version number of the text embedding model"
+    },
+    {
+      name        = "embedding_dim"
+      type        = "INTEGER"
+      mode        = "REQUIRED"
+      description = "Dimensionality of the embedding"
+    },
+    {
+      name        = "algorithm"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Algorithm used (pmi, word2vec)"
+    },
+    {
+      name        = "document_method"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "Document aggregation method (mean, tfidf, sif)"
+    },
+    {
+      name        = "created_ts"
+      type        = "TIMESTAMP"
+      mode        = "REQUIRED"
+      description = "When this embedding was created"
+    },
+    {
+      name        = "job_id"
+      type        = "STRING"
+      mode        = "REQUIRED"
+      description = "Unique job ID for this embedding run"
+    }
+  ])
+
+  labels = {
+    environment = "production"
+    managed_by  = "terraform"
+    model_type  = "text_embeddings"
+  }
+}
+
 # Game coordinates table for 2D projections (UMAP/PCA)
 resource "google_bigquery_table" "game_coordinates" {
   dataset_id          = google_bigquery_dataset.raw.dataset_id
