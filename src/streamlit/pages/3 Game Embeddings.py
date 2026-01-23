@@ -1,5 +1,7 @@
 """
-Streamlit page for exploring embedding experiment results locally.
+Streamlit page for exploring game embedding experiment results locally.
+
+Game embeddings are learned from user rating patterns (collaborative filtering).
 
 This page allows you to:
 - Select and compare embedding experiments
@@ -30,8 +32,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from src.streamlit.components.footer import render_footer
 
 # Page config
-st.set_page_config(page_title="Embeddings | BGG Models Dashboard", layout="wide")
-st.title("Embedding Explorer")
+st.set_page_config(page_title="Game Embeddings | BGG Models Dashboard", layout="wide")
+st.title("🎯 Game Embeddings Explorer")
 
 # Constants
 EXPERIMENTS_DIR = Path(project_root) / "models" / "experiments" / "embeddings"

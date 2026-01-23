@@ -35,6 +35,20 @@ Monitor and analyze model experiments:
 - Explore feature importance and model parameters
 - Access experiment metadata and details
 
+### 🎯 Embeddings
+Explore game embeddings from user ratings:
+- View scree plots and explained variance
+- Explore component loadings
+- Visualize embeddings in 2D
+- Search for games and find similar games
+
+### 📝 Text Embeddings
+Explore word embeddings learned from game descriptions:
+- Search for words and find similar words
+- Compare word similarities
+- Generate document embeddings from descriptions
+- Visualize word embeddings in 2D
+
 Use the sidebar navigation to explore different sections of the dashboard.
 """
 )
