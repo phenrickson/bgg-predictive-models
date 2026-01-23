@@ -288,119 +288,117 @@ with tab1:
     st.header("Word Explorer")
     st.markdown("Search for a word to see its similar words and embedding information.")
 
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        search_word = (
-            st.text_input(
-                "Enter a word",
-                placeholder="strategy",
-                key="word_search",
-            )
-            .lower()
-            .strip()
+    search_word = (
+        st.text_input(
+            "Enter a word",
+            placeholder="strategy",
+            key="word_search",
         )
+        .lower()
+        .strip()
+    )
 
-        n_similar = st.slider("Number of similar words", 5, 50, 15)
+    n_similar = st.slider("Number of similar words", 5, 50, 15, step=5)
 
-    with col2:
-        if search_word:
-            vec = generator.get_word_vector(search_word)
-            if vec is not None:
-                st.success(f"Found '{search_word}' in vocabulary")
+    if search_word:
+        vec = generator.get_word_vector(search_word)
+        if vec is not None:
+            st.success(f"Found '{search_word}' in vocabulary")
 
-                # Get similar words
-                similar_words = generator.most_similar_words(search_word, n=n_similar)
+            # Get similar words
+            similar_words = generator.most_similar_words(search_word, n=n_similar)
 
-                if similar_words:
-                    st.subheader("Most Similar Words")
-                    sim_df = pl.DataFrame(
-                        [
-                            {"word": w, "similarity": round(s, 4)}
-                            for w, s in similar_words
-                        ]
-                    )
-                    st.dataframe(
-                        sim_df.to_pandas(),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+            if similar_words:
+                st.subheader("Most Similar Words")
+                sim_df = pl.DataFrame(
+                    [
+                        {"rank": i + 1, "word": w, "similarity": round(s, 4)}
+                        for i, (w, s) in enumerate(similar_words)
+                    ]
+                )
+                st.dataframe(
+                    sim_df.to_pandas(),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "rank": {"alignment": "center"},
+                        "similarity": {"alignment": "center"},
+                    },
+                )
 
-                # Show vector stats
-                with st.expander("Embedding Vector Details"):
-                    st.write(f"**Dimension:** {len(vec)}")
-                    st.write(f"**Norm:** {np.linalg.norm(vec):.4f}")
-                    st.write(f"**Mean:** {vec.mean():.4f}")
-                    st.write(f"**Std:** {vec.std():.4f}")
-                    st.code(f"[{', '.join(f'{v:.3f}' for v in vec[:10])}...]")
-            else:
-                st.warning(f"'{search_word}' not found in vocabulary")
+            # Show vector stats
+            with st.expander("Embedding Vector Details"):
+                st.write(f"**Dimension:** {len(vec)}")
+                st.write(f"**Norm:** {np.linalg.norm(vec):.4f}")
+                st.write(f"**Mean:** {vec.mean():.4f}")
+                st.write(f"**Std:** {vec.std():.4f}")
+                st.code(f"[{', '.join(f'{v:.3f}' for v in vec[:10])}...]")
+        else:
+            st.warning(f"'{search_word}' not found in vocabulary")
 
 # Tab 2: Word Relationships
 with tab2:
     st.header("Word Relationships")
 
-    col1, col2 = st.columns(2)
+    st.subheader("Compare Two Words")
+    word1 = (
+        st.text_input("First word", placeholder="strategy", key="word1")
+        .lower()
+        .strip()
+    )
+    word2 = (
+        st.text_input("Second word", placeholder="tactical", key="word2")
+        .lower()
+        .strip()
+    )
 
-    with col1:
-        st.subheader("Compare Two Words")
-        word1 = (
-            st.text_input("First word", placeholder="strategy", key="word1")
-            .lower()
-            .strip()
-        )
-        word2 = (
-            st.text_input("Second word", placeholder="tactical", key="word2")
-            .lower()
-            .strip()
-        )
+    if word1 and word2:
+        vec1 = generator.get_word_vector(word1)
+        vec2 = generator.get_word_vector(word2)
 
-        if word1 and word2:
-            vec1 = generator.get_word_vector(word1)
-            vec2 = generator.get_word_vector(word2)
-
-            if vec1 is not None and vec2 is not None:
-                similarity = np.dot(vec1, vec2) / (
-                    np.linalg.norm(vec1) * np.linalg.norm(vec2) + 1e-10
-                )
-                st.metric("Cosine Similarity", f"{similarity:.4f}")
-
-                # Visual indicator
-                if similarity > 0.7:
-                    st.success("Very similar")
-                elif similarity > 0.4:
-                    st.info("Somewhat similar")
-                elif similarity > 0.1:
-                    st.warning("Weakly related")
-                else:
-                    st.error("Not related")
-            else:
-                missing = []
-                if vec1 is None:
-                    missing.append(word1)
-                if vec2 is None:
-                    missing.append(word2)
-                st.warning(f"Word(s) not in vocabulary: {', '.join(missing)}")
-
-    with col2:
-        st.subheader("Pre-computed Similarities")
-        st.markdown("Similar words for common game terms:")
-
-        if word_similarities:
-            seed_word = st.selectbox(
-                "Select seed word",
-                list(word_similarities.keys()),
+        if vec1 is not None and vec2 is not None:
+            similarity = np.dot(vec1, vec2) / (
+                np.linalg.norm(vec1) * np.linalg.norm(vec2) + 1e-10
             )
-            if seed_word in word_similarities:
-                sim_list = word_similarities[seed_word]
-                sim_df = pl.DataFrame(sim_list)
-                st.dataframe(
-                    sim_df.to_pandas(),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            st.metric("Cosine Similarity", f"{similarity:.4f}")
+
+            # Visual indicator
+            if similarity > 0.7:
+                st.success("Very similar")
+            elif similarity > 0.4:
+                st.info("Somewhat similar")
+            elif similarity > 0.1:
+                st.warning("Weakly related")
+            else:
+                st.error("Not related")
         else:
-            st.info("No pre-computed similarities available")
+            missing = []
+            if vec1 is None:
+                missing.append(word1)
+            if vec2 is None:
+                missing.append(word2)
+            st.warning(f"Word(s) not in vocabulary: {', '.join(missing)}")
+
+    st.markdown("---")
+
+    st.subheader("Pre-computed Similarities")
+    st.markdown("Similar words for common game terms:")
+
+    if word_similarities:
+        seed_word = st.selectbox(
+            "Select seed word",
+            list(word_similarities.keys()),
+        )
+        if seed_word in word_similarities:
+            sim_list = word_similarities[seed_word]
+            sim_df = pl.DataFrame(sim_list)
+            st.dataframe(
+                sim_df.to_pandas(),
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.info("No pre-computed similarities available")
 
 # Tab 3: Document Embeddings
 with tab3:
@@ -750,6 +748,22 @@ with tab5:
 with tab6:
     st.header("Vocabulary & Analysis")
 
+    # Common English stopwords to filter out
+    STOPWORDS = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+        "be", "have", "has", "had", "do", "does", "did", "will", "would",
+        "could", "should", "may", "might", "must", "shall", "can", "need",
+        "it", "its", "this", "that", "these", "those", "i", "you", "he",
+        "she", "we", "they", "what", "which", "who", "when", "where", "why",
+        "how", "all", "each", "every", "both", "few", "more", "most", "other",
+        "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+        "than", "too", "very", "just", "also", "now", "here", "there", "then",
+        "once", "if", "into", "through", "during", "before", "after", "above",
+        "below", "between", "under", "again", "further", "any", "about", "out",
+        "up", "down", "off", "over", "your", "their", "his", "her", "our",
+    }
+
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -757,7 +771,11 @@ with tab6:
         if vocab_stats:
             top_words = vocab_stats.get("top_words", [])
             if top_words:
-                top_df = pl.DataFrame(top_words)
+                # Filter out stopwords
+                filtered_words = [
+                    w for w in top_words if w["word"].lower() not in STOPWORDS
+                ]
+                top_df = pl.DataFrame(filtered_words)
                 st.dataframe(
                     top_df.to_pandas(),
                     use_container_width=True,
@@ -773,8 +791,13 @@ with tab6:
             st.metric("Total Vocabulary", f"{vocab_stats.get('vocab_size', 0):,}")
             top_words = vocab_stats.get("top_words", [])
             if top_words:
-                st.metric("Most Common Word", top_words[0]["word"])
-                st.metric("Top Word Count", f"{top_words[0]['count']:,}")
+                # Filter out stopwords for most common word stat too
+                filtered_words = [
+                    w for w in top_words if w["word"].lower() not in STOPWORDS
+                ]
+                if filtered_words:
+                    st.metric("Most Common Word", filtered_words[0]["word"])
+                    st.metric("Top Word Count", f"{filtered_words[0]['count']:,}")
 
     # SVD Analysis
     st.markdown("---")
