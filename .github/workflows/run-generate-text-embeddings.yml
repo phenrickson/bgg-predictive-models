@@ -1,0 +1,129 @@
+name: Run Text Embeddings
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 8 AM UTC (after game embeddings at 7 AM)
+
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Model name to use'
+        required: false
+        default: 'text-embeddings-v2026'
+      max_games:
+        description: 'Maximum games to process per batch'
+        required: false
+        default: '25000'
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  generate-text-embeddings:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    outputs:
+      total_games: ${{ steps.generate.outputs.total_games }}
+      batch_count: ${{ steps.generate.outputs.batch_count }}
+      env_name: ${{ steps.env.outputs.env_name }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set Environment Variables
+      id: env
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "env_name=prod" >> $GITHUB_OUTPUT
+        else
+          echo "env_name=dev" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Get Service URL
+      id: get-url
+      run: |
+        SERVICE_URL=$(gcloud run services describe bgg-text-embeddings-service \
+          --region us-central1 \
+          --format 'value(status.url)')
+        echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Get ID Token
+      id: id-token
+      run: |
+        ID_TOKEN=$(gcloud auth print-identity-token)
+        echo "::add-mask::$ID_TOKEN"
+        echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
+
+    - name: Call Text Embeddings Generation Endpoint (Batched)
+      id: generate
+      run: |
+        MODEL_NAME="${{ github.event.inputs.model_name || 'text-embeddings-v2026' }}"
+        MAX_GAMES="${{ github.event.inputs.max_games || '25000' }}"
+
+        TOTAL_GAMES=0
+        BATCH_COUNT=0
+        MAX_BATCHES=10  # Safety limit: 10 batches * 25k = 250k games max
+
+        while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
+          BATCH_COUNT=$((BATCH_COUNT + 1))
+          echo "=== Batch $BATCH_COUNT ==="
+
+          RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_embeddings" \
+            -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model_name\": \"$MODEL_NAME\",
+              \"max_games\": $MAX_GAMES
+            }" \
+            -w "\n%{http_code}" \
+            -s \
+            --max-time 600)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          echo "$BODY" | jq '.'
+          GAMES_EMBEDDED=$(echo "$BODY" | jq -r '.games_embedded')
+          TOTAL_GAMES=$((TOTAL_GAMES + GAMES_EMBEDDED))
+
+          echo "Batch $BATCH_COUNT: Embedded $GAMES_EMBEDDED games (Total: $TOTAL_GAMES)"
+
+          # Stop if no more games to embed
+          if [ "$GAMES_EMBEDDED" -eq 0 ]; then
+            echo "No more games to embed. Stopping."
+            break
+          fi
+
+          # Brief pause between batches
+          sleep 5
+        done
+
+        echo "total_games=$TOTAL_GAMES" >> $GITHUB_OUTPUT
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+
+    - name: Job Summary
+      run: |
+        echo "## Text Embeddings Generation Results" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Model**: ${{ github.event.inputs.model_name || 'text-embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY

@@ -65,7 +65,6 @@ help:  ## Show this help message
 	@echo '  make embeddings_autoencoder      Train Autoencoder embeddings (requires torch)'
 	@echo '  make text_embeddings             Train text embeddings from descriptions (PMI+SVD)'
 	@echo '  make register_text_embeddings   Register text embeddings model to GCS'
-	@echo '  make description_embeddings     Generate description embeddings and upload to BigQuery'
 	@echo '  make experiment_dashboard        Launch predictions dashboard'
 	@echo '  make predictions_dashboard       Launch geek rating dashboard'
 	@echo '  make unsupervised_dashboard      Launch unsupervised learning dashboard'
@@ -266,11 +265,6 @@ register_text_embeddings:
 	--experiment $(TEXT_EMBEDDINGS_CANDIDATE) \
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
-
-description_embeddings:
-	uv run -m src.models.text_embeddings.score \
-	--model text-embeddings-v$(CURRENT_YEAR) \
-	--upload-to-bigquery
 
 # predict geek rating given models
 geek_rating: 
