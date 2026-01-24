@@ -25,6 +25,7 @@ jobs:
     outputs:
       total_games: ${{ steps.generate.outputs.total_games }}
       batch_count: ${{ steps.generate.outputs.batch_count }}
+      games_remaining: ${{ steps.generate.outputs.games_remaining }}
       env_name: ${{ steps.env.outputs.env_name }}
 
     permissions:
@@ -105,7 +106,8 @@ jobs:
           GAMES_EMBEDDED=$(echo "$BODY" | jq -r '.games_embedded')
           TOTAL_GAMES=$((TOTAL_GAMES + GAMES_EMBEDDED))
 
-          echo "Batch $BATCH_COUNT: Embedded $GAMES_EMBEDDED games (Total: $TOTAL_GAMES)"
+          GAMES_REMAINING=$(echo "$BODY" | jq -r '.games_remaining')
+          echo "Batch $BATCH_COUNT: Embedded $GAMES_EMBEDDED games (Total: $TOTAL_GAMES, Remaining: $GAMES_REMAINING)"
 
           # Stop if no more games to embed
           if [ "$GAMES_EMBEDDED" -eq 0 ]; then
@@ -119,6 +121,7 @@ jobs:
 
         echo "total_games=$TOTAL_GAMES" >> $GITHUB_OUTPUT
         echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+        echo "games_remaining=$GAMES_REMAINING" >> $GITHUB_OUTPUT
 
     - name: Job Summary
       run: |
@@ -127,6 +130,7 @@ jobs:
         echo "- **Model**: ${{ github.event.inputs.model_name || 'embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Games Remaining**: ${{ steps.generate.outputs.games_remaining }}" >> $GITHUB_STEP_SUMMARY
 
   generate-coordinates:
     runs-on: ubuntu-latest
@@ -134,7 +138,9 @@ jobs:
     if: needs.generate-embeddings.outputs.total_games != '0'
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     outputs:
-      coordinates_generated: ${{ steps.coordinates.outputs.coordinates_generated }}
+      total_coordinates: ${{ steps.coordinates.outputs.total_coordinates }}
+      batch_count: ${{ steps.coordinates.outputs.batch_count }}
+      games_remaining: ${{ steps.coordinates.outputs.games_remaining }}
 
     permissions:
       contents: read
@@ -164,42 +170,67 @@ jobs:
         echo "::add-mask::$ID_TOKEN"
         echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
 
-    - name: Generate 2D Coordinates
+    - name: Generate 2D Coordinates (Batched)
       id: coordinates
       run: |
         MODEL_NAME="${{ github.event.inputs.model_name || 'embeddings-v2026' }}"
         MAX_GAMES="${{ github.event.inputs.max_games || '25000' }}"
 
-        echo "Generating 2D coordinates for embeddings..."
+        TOTAL_COORDINATES=0
+        BATCH_COUNT=0
+        MAX_BATCHES=10  # Safety limit: 10 batches * 25k = 250k games max
 
-        RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_coordinates" \
-          -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"model_name\": \"$MODEL_NAME\",
-            \"max_games\": $MAX_GAMES,
-            \"include_umap\": true,
-            \"include_pca\": true
-          }" \
-          -w "\n%{http_code}" \
-          -s \
-          --max-time 600)
+        while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
+          BATCH_COUNT=$((BATCH_COUNT + 1))
+          echo "=== Batch $BATCH_COUNT ==="
 
-        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-        BODY=$(echo "$RESPONSE" | head -n-1)
+          RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/generate_coordinates" \
+            -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model_name\": \"$MODEL_NAME\",
+              \"max_games\": $MAX_GAMES,
+              \"include_umap\": true,
+              \"include_pca\": true
+            }" \
+            -w "\n%{http_code}" \
+            -s \
+            --max-time 600)
 
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "Error: HTTP $HTTP_CODE"
-          echo "$BODY"
-          exit 1
-        fi
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
 
-        echo "$BODY" | jq '.'
-        COORDS_GENERATED=$(echo "$BODY" | jq -r '.games_processed')
-        echo "coordinates_generated=$COORDS_GENERATED" >> $GITHUB_OUTPUT
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          echo "$BODY" | jq '.'
+          COORDS_GENERATED=$(echo "$BODY" | jq -r '.games_processed')
+          COORDS_REMAINING=$(echo "$BODY" | jq -r '.games_remaining')
+          TOTAL_COORDINATES=$((TOTAL_COORDINATES + COORDS_GENERATED))
+
+          echo "Batch $BATCH_COUNT: Generated coordinates for $COORDS_GENERATED games (Total: $TOTAL_COORDINATES, Remaining: $COORDS_REMAINING)"
+
+          # Stop if no more games to process
+          if [ "$COORDS_GENERATED" -eq 0 ]; then
+            echo "No more games need coordinates. Stopping."
+            break
+          fi
+
+          # Brief pause between batches
+          sleep 5
+        done
+
+        echo "total_coordinates=$TOTAL_COORDINATES" >> $GITHUB_OUTPUT
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+        echo "games_remaining=$COORDS_REMAINING" >> $GITHUB_OUTPUT
 
     - name: Job Summary
       run: |
         echo "## Coordinate Generation Results" >> $GITHUB_STEP_SUMMARY
         echo "- **Model**: ${{ github.event.inputs.model_name || 'embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Coordinates Generated**: ${{ steps.coordinates.outputs.coordinates_generated }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Batches Completed**: ${{ steps.coordinates.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Coordinates Generated**: ${{ steps.coordinates.outputs.total_coordinates }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Games Remaining**: ${{ steps.coordinates.outputs.games_remaining }}" >> $GITHUB_STEP_SUMMARY

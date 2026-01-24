@@ -54,6 +54,7 @@ class GenerateEmbeddingsResponse(BaseModel):
     job_id: str
     model_details: Dict[str, Any]
     games_embedded: int
+    games_remaining: int = 0
     table_id: str
     bq_job_id: Optional[str] = None
 
@@ -204,6 +205,7 @@ class GenerateCoordinatesResponse(BaseModel):
     job_id: str
     model_details: Dict[str, Any]
     games_processed: int
+    games_remaining: int = 0
     coordinates: Optional[List[GameCoordinates]] = Field(
         None, description="Coordinates (only returned for specific game_ids)"
     )
@@ -420,6 +422,7 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
                     "algorithm": algorithm,
                 },
                 games_embedded=0,
+                games_remaining=0,
                 table_id=f"{config.ml_project_id}.{config.embeddings.upload.dataset}.{config.embeddings.upload.table}",
             )
 
@@ -450,6 +453,38 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
                 embedding_dim=embedding_dim,
             )
 
+        # Count remaining games needing embeddings
+        games_remaining = 0
+        if request.game_ids is None:
+            ml_project = config.ml_project_id
+            dw_project = config.data_warehouse.project_id
+            emb_config = config.embeddings
+            emb_table_id = f"{ml_project}.{emb_config.upload.dataset}.{emb_config.upload.table}"
+            count_query = f"""
+            SELECT COUNT(*) as cnt
+            FROM `{dw_project}.analytics.games_features` gf
+            LEFT JOIN `{dw_project}.staging.game_features_hash` fh
+              ON gf.game_id = fh.game_id
+            LEFT JOIN (
+              SELECT game_id, created_ts, embedding_version,
+                     ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY created_ts DESC) as rn
+              FROM `{emb_table_id}`
+              WHERE embedding_model = '{request.model_name}'
+            ) le ON gf.game_id = le.game_id AND le.rn = 1
+            WHERE gf.year_published IS NOT NULL
+              AND (
+                le.game_id IS NULL
+                OR fh.last_updated > le.created_ts
+                OR le.embedding_version != {registration['version']}
+              )
+            """
+            try:
+                client = bigquery.Client(project=ml_project)
+                count_result = client.query(count_query).to_dataframe()
+                games_remaining = int(count_result["cnt"].iloc[0])
+            except Exception as e:
+                logger.warning(f"Could not count remaining games: {e}")
+
         return GenerateEmbeddingsResponse(
             job_id=job_id,
             model_details={
@@ -459,6 +494,7 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
                 "embedding_dim": embedding_dim,
             },
             games_embedded=len(results_df),
+            games_remaining=games_remaining,
             table_id=f"{config.ml_project_id}.{config.embeddings.upload.dataset}.{config.embeddings.upload.table}",
             bq_job_id=bq_job_id,
         )
@@ -1099,18 +1135,28 @@ async def generate_coordinates(request: GenerateCoordinatesRequest):
             dataset = emb_config.vector_search.dataset
             table = emb_config.vector_search.table
             table_id = f"{project}.{dataset}.{table}"
+            coords_table_id = f"{config.ml_project_id}.{emb_config.upload.dataset}.game_coordinates"
 
+            # Get games that have embeddings but don't have coordinates yet
+            # for this model version
             query = f"""
-            SELECT DISTINCT game_id
-            FROM `{table_id}`
-            WHERE embedding_version = {model_version}
+            SELECT DISTINCT e.game_id
+            FROM `{table_id}` e
+            LEFT JOIN (
+                SELECT game_id, embedding_version
+                FROM `{coords_table_id}`
+                WHERE embedding_model = '{request.model_name}'
+                  AND embedding_version = {model_version}
+            ) c ON e.game_id = c.game_id AND e.embedding_version = c.embedding_version
+            WHERE e.embedding_version = {model_version}
+              AND c.game_id IS NULL
             LIMIT {request.max_games}
             """
 
             client = bigquery.Client(project=config.ml_project_id)
             result = client.query(query).to_dataframe()
             game_ids = result["game_id"].tolist()
-            logger.info(f"Found {len(game_ids)} games to process")
+            logger.info(f"Found {len(game_ids)} games needing coordinates")
 
         if not game_ids:
             return GenerateCoordinatesResponse(
@@ -1220,10 +1266,36 @@ async def generate_coordinates(request: GenerateCoordinatesRequest):
 
         logger.info(f"Uploaded {len(upload_df)} coordinates to {coords_table_id}")
 
+        # Count remaining games needing coordinates
+        games_remaining = 0
+        emb_config = config.embeddings
+        project = emb_config.vector_search.project or config.ml_project_id
+        dataset = emb_config.vector_search.dataset
+        table = emb_config.vector_search.table
+        emb_table_id = f"{project}.{dataset}.{table}"
+        count_query = f"""
+        SELECT COUNT(DISTINCT e.game_id) as cnt
+        FROM `{emb_table_id}` e
+        LEFT JOIN (
+            SELECT game_id, embedding_version
+            FROM `{coords_table_id}`
+            WHERE embedding_model = '{request.model_name}'
+              AND embedding_version = {model_version}
+        ) c ON e.game_id = c.game_id AND e.embedding_version = c.embedding_version
+        WHERE e.embedding_version = {model_version}
+          AND c.game_id IS NULL
+        """
+        try:
+            count_result = client.query(count_query).to_dataframe()
+            games_remaining = int(count_result["cnt"].iloc[0])
+        except Exception as e:
+            logger.warning(f"Could not count remaining games: {e}")
+
         return GenerateCoordinatesResponse(
             job_id=job_id,
             model_details=model_details,
             games_processed=len(coordinates),
+            games_remaining=games_remaining,
             table_id=coords_table_id,
             bq_job_id=load_job.job_id,
         )
