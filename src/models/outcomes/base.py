@@ -203,7 +203,7 @@ class TrainableModel(ABC):
         end_year: Optional[int] = None,
         description: Optional[str] = None,
         complexity_predictions_path: Optional[Union[str, Path]] = None,
-        use_embeddings: bool = False,
+        use_embeddings: Optional[bool] = None,
         local_data_path: Optional[Union[str, Path]] = None,
         recent_year_threshold: int = 2,
         version: Optional[int] = None,
@@ -222,6 +222,7 @@ class TrainableModel(ABC):
             complexity_predictions_path: Path to complexity predictions.
                 Required if model requires complexity predictions.
             use_embeddings: Whether to include embeddings in features.
+                If None, reads from experiment metadata.
             local_data_path: Optional path to local data file.
             recent_year_threshold: Years to exclude from current year
                 when end_year is None. Default 2.
@@ -286,9 +287,12 @@ class TrainableModel(ABC):
                 )
             logger.info(f"Using complexity predictions: {complexity_predictions_path}")
 
-        # Check if embeddings were used in training
+        # Determine use_embeddings from experiment metadata if not specified
         trained_with_embeddings = experiment.metadata.get("use_embeddings", False)
-        if use_embeddings and not trained_with_embeddings:
+        if use_embeddings is None:
+            use_embeddings = trained_with_embeddings
+            logger.info(f"Using embeddings setting from experiment: {use_embeddings}")
+        elif use_embeddings and not trained_with_embeddings:
             logger.warning(
                 "use_embeddings=True but experiment was not trained with embeddings. "
                 "Using embeddings anyway for finalization."

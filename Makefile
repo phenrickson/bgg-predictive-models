@@ -141,22 +141,23 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 # hurdle model
 HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
 train_hurdle:
-	uv run -m src.models.hurdle \
+	uv run -m src.pipeline.train \
+	--model hurdle \
+	--algorithm $(HURDLE_MODEL) \
 	--experiment $(HURDLE_CANDIDATE) \
-	--model $(HURDLE_MODEL) \
 	--train-end-year $(TRAIN_END_YEAR) \
 	--tune-start-year $(TRAIN_END_YEAR) \
 	--tune-end-year $(TUNE_END_YEAR) \
 	--test-start-year $(TEST_START_YEAR) \
 	--test-end-year $(TEST_END_YEAR)
 
-finalize_hurdle: 
-	uv run -m src.models.finalize_model \
-	--model-type hurdle \
+finalize_hurdle:
+	uv run -m src.pipeline.finalize \
+	--model hurdle \
 	--experiment $(HURDLE_CANDIDATE)
 
-score_hurdle: 
-	uv run -m src.models.score \
+score_hurdle:
+	uv run -m src.pipeline.score \
 	--model-type hurdle \
 	--experiment $(HURDLE_CANDIDATE)
 
@@ -164,8 +165,9 @@ score_hurdle:
 COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
 COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/$(COMPLEXITY_CANDIDATE).parquet
 train_complexity:
-	uv run -m src.models.complexity \
-	--model $(COMPLEXITY_MODEL) \
+	uv run -m src.pipeline.train \
+	--model complexity \
+	--algorithm $(COMPLEXITY_MODEL) \
 	--use-sample-weights \
 	--experiment $(COMPLEXITY_CANDIDATE) \
 	--train-end-year $(TRAIN_END_YEAR) \
@@ -174,24 +176,24 @@ train_complexity:
 	--test-start-year $(TEST_START_YEAR) \
 	--test-end-year $(TEST_END_YEAR)
 
-finalize_complexity: 
-	uv run -m src.models.finalize_model \
-	--model-type complexity \
+finalize_complexity:
+	uv run -m src.pipeline.finalize \
+	--model complexity \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
-score_complexity: 
-	uv run -m src.models.score \
+score_complexity:
+	uv run -m src.pipeline.score \
 	--model-type complexity \
 	--experiment $(COMPLEXITY_CANDIDATE)
 
 # rating model
 RATING_CANDIDATE ?= $(RATING_MODEL)-rating
 train_rating:
-	uv run -m src.models.rating \
+	uv run -m src.pipeline.train \
+	--model rating \
+	--algorithm $(RATING_MODEL) \
 	--use-sample-weights \
-	--model $(RATING_MODEL) \
-	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
-	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(RATING_CANDIDATE) \
 	--train-end-year $(TRAIN_END_YEAR) \
 	--tune-start-year $(TRAIN_END_YEAR) \
@@ -199,13 +201,14 @@ train_rating:
 	--test-start-year $(TEST_START_YEAR) \
 	--test-end-year $(TEST_END_YEAR)
 
-finalize_rating: 
-	uv run -m src.models.finalize_model \
-	--model-type rating \
-	--experiment $(RATING_CANDIDATE)
+finalize_rating:
+	uv run -m src.pipeline.finalize \
+	--model rating \
+	--experiment $(RATING_CANDIDATE) \
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
 score_rating:
-	uv run -m src.models.score \
+	uv run -m src.pipeline.score \
 	--model-type rating \
 	--experiment $(RATING_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
@@ -214,25 +217,25 @@ score_rating:
 USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
 
 train_users_rated:
-	uv run -m src.models.users_rated \
-	--model $(USERS_RATED_MODEL) \
-	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
-	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
+	uv run -m src.pipeline.train \
+	--model users_rated \
+	--algorithm $(USERS_RATED_MODEL) \
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS) \
 	--experiment $(USERS_RATED_CANDIDATE) \
-	--min-ratings 0 \
 	--train-end-year $(TRAIN_END_YEAR) \
 	--tune-start-year $(TRAIN_END_YEAR) \
 	--tune-end-year $(TUNE_END_YEAR) \
 	--test-start-year $(TEST_START_YEAR) \
 	--test-end-year $(TEST_END_YEAR)
 
-finalize_users_rated: 
-	uv run -m src.models.finalize_model \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE)
+finalize_users_rated:
+	uv run -m src.pipeline.finalize \
+	--model users_rated \
+	--experiment $(USERS_RATED_CANDIDATE) \
+	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
 
 score_users_rated:
-	uv run -m src.models.score \
+	uv run -m src.pipeline.score \
 	--model-type users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--complexity-predictions $(COMPLEXITY_PREDICTIONS)

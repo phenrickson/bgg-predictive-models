@@ -448,8 +448,8 @@ def parse_finalize_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--use-embeddings",
         action="store_true",
-        default=False,
-        help="Include text embeddings as features",
+        default=None,
+        help="Include text embeddings as features (default: read from experiment)",
     )
     parser.add_argument(
         "--local-data",
@@ -474,7 +474,7 @@ def finalize_model(
     end_year: Optional[int] = None,
     description: Optional[str] = None,
     complexity_predictions_path: Optional[str] = None,
-    use_embeddings: bool = False,
+    use_embeddings: Optional[bool] = None,
     local_data_path: Optional[str] = None,
     recent_year_threshold: int = 2,
 ) -> str:
