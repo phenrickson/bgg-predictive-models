@@ -272,6 +272,7 @@ def train_model(
         model_type=args.preprocessor_type,
         model_name=algorithm,
         preserve_columns=preserve_columns,
+        include_description_embeddings=args.use_embeddings,
     )
 
     pipeline = Pipeline([("preprocessor", preprocessor), ("model", estimator)])

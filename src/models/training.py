@@ -276,6 +276,7 @@ def create_preprocessing_pipeline(
         "create_family_features": True,
         "create_player_dummies": True,
         "include_base_numeric": True,
+        "include_description_embeddings": False,
         "verbose": False,
         "preserve_columns": ["year_published"],
     }

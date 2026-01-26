@@ -446,6 +446,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         include_average_weight: bool = False,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
+        # Embedding features
+        include_description_embeddings: bool = False,
         # Family pattern filters (regex patterns to match against family names)
         family_allow_patterns: Optional[List[str]] = None,
         family_remove_patterns: Optional[List[str]] = None,
@@ -525,12 +527,16 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Column preservation parameters
         self.preserve_columns = preserve_columns or ["year_published"]
 
+        # Embedding features
+        self.include_description_embeddings = include_description_embeddings
+
         # Family pattern filters (use defaults if not provided)
         self.family_allow_patterns = family_allow_patterns
         self.family_remove_patterns = family_remove_patterns
 
         # Fitted attributes (will be populated during fit)
         self.feature_names_ = None
+        self.embedding_columns_ = None
         self.frequent_categories_ = None
         self.frequent_mechanics_ = None
         self.frequent_designers_ = None
@@ -1018,6 +1024,14 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         self.frequent_publishers_ = None
         self.frequent_families_ = None
 
+        # Detect embedding columns if enabled
+        self.embedding_columns_ = []
+        if self.include_description_embeddings:
+            self.embedding_columns_ = [col for col in X.columns if col.startswith("emb_")]
+            if self.embedding_columns_:
+                logger = logging.getLogger(__name__)
+                logger.info(f"Detected {len(self.embedding_columns_)} embedding columns")
+
         # Fit array features
         if self.create_category_features:
             self.frequent_categories_ = self._fit_array_features(
@@ -1116,6 +1130,10 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         if self.create_family_features and self.frequent_families_:
             for family in self.frequent_families_:
                 feature_names.append(f"family_{self._safe_column_name(family)}")
+
+        # Embedding features (passthrough)
+        if self.include_description_embeddings and self.embedding_columns_:
+            feature_names.extend(self.embedding_columns_)
 
         self.feature_names_ = feature_names
 
@@ -1335,6 +1353,13 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         if self.include_average_weight and "average_weight" in X_base.columns:
             weight_df = pd.DataFrame({"average_weight": X_base["average_weight"]})
             feature_dfs.append(weight_df)
+
+        # Add embedding columns if enabled (passthrough unchanged)
+        if self.include_description_embeddings and self.embedding_columns_:
+            available_emb_cols = [col for col in self.embedding_columns_ if col in X_base.columns]
+            if available_emb_cols:
+                embedding_df = X_base[available_emb_cols].copy()
+                feature_dfs.append(embedding_df)
 
         # Concatenate all feature DataFrames
         if feature_dfs:
