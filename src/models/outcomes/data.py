@@ -17,24 +17,27 @@ from src.models.splitting import time_based_split
 logger = logging.getLogger(__name__)
 
 
-def load_training_data(
+def load_data(
     data_config: DataConfig,
-    end_year: int,
+    start_year: Optional[int] = None,
+    end_year: Optional[int] = None,
     use_embeddings: bool = False,
     complexity_predictions_path: Optional[Union[str, Path]] = None,
     local_data_path: Optional[Union[str, Path]] = None,
 ) -> pl.DataFrame:
-    """Load training data based on model's data configuration.
+    """Unified data loader for training and scoring.
 
     This is the centralized data loader that handles:
     1. Loading base features (from BigQuery or local parquet)
-    2. Applying filters (min_ratings, min_weights)
-    3. Joining complexity predictions (if required)
-    4. Joining embeddings (if enabled and supported)
+    2. Applying year filters (start_year, end_year)
+    3. Applying data filters (min_ratings, min_weights from data_config)
+    4. Joining complexity predictions (if required by data_config)
+    5. Joining embeddings (if enabled and supported by data_config)
 
     Args:
         data_config: Model's data requirements specification.
-        end_year: Maximum year to include in the data.
+        start_year: Minimum year to include (inclusive). None for no lower bound.
+        end_year: Maximum year to include (inclusive). None for no upper bound.
         use_embeddings: Whether to load and join embeddings.
         complexity_predictions_path: Path to complexity predictions parquet.
             Required if data_config.requires_complexity_predictions is True.
@@ -49,6 +52,7 @@ def load_training_data(
     # Load base features
     df = _load_base_features(
         local_data_path=local_data_path,
+        start_year=start_year,
         end_year=end_year,
         min_ratings=data_config.min_ratings,
         min_weights=data_config.min_weights,
@@ -76,9 +80,74 @@ def load_training_data(
     return df
 
 
+def load_training_data(
+    data_config: DataConfig,
+    end_year: int,
+    use_embeddings: bool = False,
+    complexity_predictions_path: Optional[Union[str, Path]] = None,
+    local_data_path: Optional[Union[str, Path]] = None,
+) -> pl.DataFrame:
+    """Load training data (convenience wrapper around load_data).
+
+    Loads data up to and including end_year.
+
+    Args:
+        data_config: Model's data requirements specification.
+        end_year: Maximum year to include in the data.
+        use_embeddings: Whether to load and join embeddings.
+        complexity_predictions_path: Path to complexity predictions parquet.
+        local_data_path: Optional path to local parquet file instead of BigQuery.
+
+    Returns:
+        Polars DataFrame with all required features joined.
+    """
+    return load_data(
+        data_config=data_config,
+        start_year=None,
+        end_year=end_year,
+        use_embeddings=use_embeddings,
+        complexity_predictions_path=complexity_predictions_path,
+        local_data_path=local_data_path,
+    )
+
+
+def load_scoring_data(
+    data_config: DataConfig,
+    start_year: int,
+    end_year: Optional[int] = None,
+    use_embeddings: bool = False,
+    complexity_predictions_path: Optional[Union[str, Path]] = None,
+    local_data_path: Optional[Union[str, Path]] = None,
+) -> pl.DataFrame:
+    """Load scoring data (convenience wrapper around load_data).
+
+    Loads data from start_year onwards (typically after the model's training cutoff).
+
+    Args:
+        data_config: Model's data requirements specification.
+        start_year: Minimum year to include (inclusive).
+        end_year: Maximum year to include (inclusive). None for no upper bound.
+        use_embeddings: Whether to load and join embeddings.
+        complexity_predictions_path: Path to complexity predictions parquet.
+        local_data_path: Optional path to local parquet file instead of BigQuery.
+
+    Returns:
+        Polars DataFrame with all required features joined.
+    """
+    return load_data(
+        data_config=data_config,
+        start_year=start_year,
+        end_year=end_year,
+        use_embeddings=use_embeddings,
+        complexity_predictions_path=complexity_predictions_path,
+        local_data_path=local_data_path,
+    )
+
+
 def _load_base_features(
     local_data_path: Optional[Union[str, Path]],
-    end_year: int,
+    start_year: Optional[int] = None,
+    end_year: Optional[int] = None,
     min_ratings: Optional[int] = None,
     min_weights: Optional[int] = None,
 ) -> pl.DataFrame:
@@ -86,7 +155,8 @@ def _load_base_features(
 
     Args:
         local_data_path: Path to local parquet file, or None for BigQuery.
-        end_year: Maximum year to include.
+        start_year: Minimum year to include (inclusive). None for no lower bound.
+        end_year: Maximum year to include (inclusive). None for no upper bound.
         min_ratings: Minimum user ratings filter.
         min_weights: Minimum complexity weights filter.
 
@@ -99,7 +169,12 @@ def _load_base_features(
 
         # Apply filters
         df = df.filter(pl.col("year_published").is_not_null())
-        df = df.filter(pl.col("year_published") <= end_year)
+
+        if start_year is not None:
+            df = df.filter(pl.col("year_published") >= start_year)
+
+        if end_year is not None:
+            df = df.filter(pl.col("year_published") <= end_year)
 
         if min_ratings is not None:
             df = df.filter(pl.col("users_rated") >= min_ratings)
@@ -114,7 +189,13 @@ def _load_base_features(
     loader = BGGDataLoader(config.get_bigquery_config())
 
     # Build where clause
-    where_clauses = [f"year_published <= {end_year}"]
+    where_clauses = []
+
+    if start_year is not None:
+        where_clauses.append(f"year_published >= {start_year}")
+
+    if end_year is not None:
+        where_clauses.append(f"year_published <= {end_year}")
 
     if min_ratings is not None:
         where_clauses.append(f"users_rated >= {min_ratings}")
@@ -122,7 +203,7 @@ def _load_base_features(
     if min_weights is not None:
         where_clauses.append(f"num_weights >= {min_weights}")
 
-    where_clause = " AND ".join(where_clauses)
+    where_clause = " AND ".join(where_clauses) if where_clauses else None
 
     logger.info(f"Loading data from BigQuery with filter: {where_clause}")
     return loader.load_data(where_clause=where_clause)

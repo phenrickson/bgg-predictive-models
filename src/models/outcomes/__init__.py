@@ -13,11 +13,13 @@ from src.models.outcomes.rating import RatingModel
 from src.models.outcomes.users_rated import UsersRatedModel
 from src.models.outcomes.geek_rating import GeekRatingModel
 from src.models.outcomes.data import (
+    load_data,
     load_training_data,
+    load_scoring_data,
     create_data_splits,
     select_X_y,
 )
-from src.models.outcomes.train import train_model, get_model_class
+from src.models.outcomes.train import train_model, finalize_model, get_model_class
 
 __all__ = [
     # Base classes
@@ -33,10 +35,13 @@ __all__ = [
     "UsersRatedModel",
     "GeekRatingModel",
     # Data utilities
+    "load_data",
     "load_training_data",
+    "load_scoring_data",
     "create_data_splits",
     "select_X_y",
-    # Training
+    # Training and finalization
     "train_model",
+    "finalize_model",
     "get_model_class",
 ]

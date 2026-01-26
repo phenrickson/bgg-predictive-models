@@ -2,12 +2,17 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Protocol, Union
+import logging
 
 import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -191,6 +196,170 @@ class TrainableModel(ABC):
             Dictionary of additional metrics.
         """
         return {}
+
+    def finalize(
+        self,
+        experiment_name: str,
+        end_year: Optional[int] = None,
+        description: Optional[str] = None,
+        complexity_predictions_path: Optional[Union[str, Path]] = None,
+        use_embeddings: bool = False,
+        local_data_path: Optional[Union[str, Path]] = None,
+        recent_year_threshold: int = 2,
+        version: Optional[int] = None,
+    ) -> Path:
+        """Finalize a model by refitting on full dataset for production.
+
+        Loads the trained experiment and refits the pipeline on all available
+        data up to end_year. Uses the model's data_config to ensure correct
+        data loading (filters, joins, embeddings).
+
+        Args:
+            experiment_name: Name of the experiment to finalize.
+            end_year: End year for training data. If None, defaults to
+                current year minus recent_year_threshold.
+            description: Optional description for the finalized model.
+            complexity_predictions_path: Path to complexity predictions.
+                Required if model requires complexity predictions.
+            use_embeddings: Whether to include embeddings in features.
+            local_data_path: Optional path to local data file.
+            recent_year_threshold: Years to exclude from current year
+                when end_year is None. Default 2.
+            version: Optional specific experiment version to finalize.
+
+        Returns:
+            Path to the finalized model directory.
+
+        Raises:
+            ValueError: If required complexity predictions not provided.
+        """
+        from src.models.experiments import ExperimentTracker
+        from src.models.outcomes.data import load_training_data, select_X_y
+        from src.models.training import calculate_sample_weights
+
+        # Load experiment
+        tracker = ExperimentTracker(self.model_type)
+
+        # Handle experiment names that include version
+        base_experiment_name = experiment_name
+        if "_v" in experiment_name:
+            base_experiment_name = experiment_name.split("_v")[0]
+
+        experiment = tracker.load_experiment(base_experiment_name, version)
+        logger.info(f"Loaded experiment: {experiment.name}")
+
+        # Determine end year
+        current_year = datetime.now().year
+        if end_year is None:
+            end_year = current_year - recent_year_threshold
+        elif current_year - end_year <= recent_year_threshold:
+            logger.info(
+                f"End year {end_year} is within {recent_year_threshold} years "
+                f"of current year. Adjusting to {current_year - recent_year_threshold}"
+            )
+            end_year = current_year - recent_year_threshold
+
+        logger.info(f"Finalizing model with data through {end_year}")
+
+        # Get complexity predictions path from experiment metadata if not provided
+        if self.data_config.requires_complexity_predictions:
+            if complexity_predictions_path is None:
+                # Try to get from experiment metadata
+                complexity_predictions_path = experiment.metadata.get(
+                    "complexity_predictions_path"
+                ) or experiment.metadata.get("config", {}).get(
+                    "complexity_predictions_path"
+                )
+                # Also check for complexity_experiment and construct path
+                complexity_experiment = experiment.metadata.get(
+                    "complexity_experiment"
+                ) or experiment.metadata.get("config", {}).get("complexity_experiment")
+                if complexity_experiment and not complexity_predictions_path:
+                    complexity_predictions_path = (
+                        f"models/experiments/predictions/{complexity_experiment}.parquet"
+                    )
+
+            if complexity_predictions_path is None:
+                raise ValueError(
+                    f"Model type '{self.model_type}' requires complexity predictions "
+                    "but no path provided and none found in experiment metadata."
+                )
+            logger.info(f"Using complexity predictions: {complexity_predictions_path}")
+
+        # Check if embeddings were used in training
+        trained_with_embeddings = experiment.metadata.get("use_embeddings", False)
+        if use_embeddings and not trained_with_embeddings:
+            logger.warning(
+                "use_embeddings=True but experiment was not trained with embeddings. "
+                "Using embeddings anyway for finalization."
+            )
+        elif trained_with_embeddings and not use_embeddings:
+            logger.warning(
+                "Experiment was trained with embeddings but use_embeddings=False. "
+                "Finalized model will NOT include embeddings."
+            )
+
+        # Load data using model's data config
+        df = load_training_data(
+            data_config=self.data_config,
+            end_year=end_year,
+            use_embeddings=use_embeddings,
+            complexity_predictions_path=complexity_predictions_path,
+            local_data_path=local_data_path,
+        )
+
+        logger.info(f"Loaded {len(df)} rows for finalization")
+        logger.info(
+            f"Year range: {df['year_published'].min()} - {df['year_published'].max()}"
+        )
+
+        # Prepare X and y
+        X, y = select_X_y(df, self.target_column)
+        logger.info(f"Features shape: {X.shape}, Target shape: {y.shape}")
+
+        # Extract sample weights if used during training
+        sample_weights = None
+        sample_weights_info = experiment.metadata.get("sample_weights", {})
+        weight_column = sample_weights_info.get("column")
+
+        if weight_column and weight_column in df.columns:
+            logger.info(f"Calculating sample weights from column: {weight_column}")
+            sample_weights = calculate_sample_weights(
+                df.to_pandas(), weight_column=weight_column
+            )
+            logger.info(
+                f"Sample weights: min={sample_weights.min():.4f}, "
+                f"max={sample_weights.max():.4f}, mean={sample_weights.mean():.4f}"
+            )
+
+        # Build description
+        if description is None:
+            description = f"Production {self.model_type} model trained through {end_year}"
+
+        # Add metadata to description
+        description_parts = [description]
+        threshold = experiment.metadata.get("model_info", {}).get("threshold")
+        if threshold is not None:
+            description_parts.append(f"Optimal threshold: {threshold:.4f}")
+        if self.data_config.min_ratings is not None:
+            description_parts.append(f"Min ratings: {self.data_config.min_ratings}")
+        if self.data_config.min_weights is not None:
+            description_parts.append(f"Min weights: {self.data_config.min_weights}")
+
+        final_description = ". ".join(description_parts)
+
+        # Finalize the model
+        logger.info("Fitting pipeline on full dataset...")
+        finalized_dir = experiment.finalize_model(
+            X=X,
+            y=y,
+            description=final_description,
+            final_end_year=end_year,
+            sample_weight=np.asarray(sample_weights) if sample_weights is not None else None,
+        )
+
+        logger.info(f"Model finalized and saved to {finalized_dir}")
+        return finalized_dir
 
 
 class CompositeModel(ABC):
