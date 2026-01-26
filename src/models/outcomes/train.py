@@ -404,11 +404,138 @@ def train_model(
     return model
 
 
+def parse_finalize_arguments() -> argparse.Namespace:
+    """Parse command-line arguments for finalization."""
+    parser = argparse.ArgumentParser(description="Finalize a trained model for production")
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["hurdle", "complexity", "rating", "users_rated"],
+        help="Model type to finalize",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        required=True,
+        help="Experiment name to finalize",
+    )
+    parser.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Optional specific experiment version",
+    )
+    parser.add_argument(
+        "--end-year",
+        type=int,
+        default=None,
+        help="End year for training data (default: current year - 2)",
+    )
+    parser.add_argument(
+        "--description",
+        type=str,
+        default=None,
+        help="Optional description for finalized model",
+    )
+    parser.add_argument(
+        "--complexity-predictions",
+        type=str,
+        default=None,
+        help="Path to complexity predictions parquet (for rating/users_rated)",
+    )
+    parser.add_argument(
+        "--use-embeddings",
+        action="store_true",
+        default=False,
+        help="Include text embeddings as features",
+    )
+    parser.add_argument(
+        "--local-data",
+        type=str,
+        default=None,
+        help="Path to local parquet file (instead of BigQuery)",
+    )
+    parser.add_argument(
+        "--recent-year-threshold",
+        type=int,
+        default=2,
+        help="Years to exclude from current year when end_year not specified",
+    )
+
+    return parser.parse_args()
+
+
+def finalize_model(
+    model_type: str,
+    experiment_name: str,
+    version: Optional[int] = None,
+    end_year: Optional[int] = None,
+    description: Optional[str] = None,
+    complexity_predictions_path: Optional[str] = None,
+    use_embeddings: bool = False,
+    local_data_path: Optional[str] = None,
+    recent_year_threshold: int = 2,
+) -> str:
+    """Finalize a trained model for production use.
+
+    Args:
+        model_type: Type of model (hurdle, complexity, rating, users_rated).
+        experiment_name: Name of experiment to finalize.
+        version: Optional specific version.
+        end_year: End year for training data.
+        description: Optional description.
+        complexity_predictions_path: Path to complexity predictions.
+        use_embeddings: Whether to include embeddings.
+        local_data_path: Optional local data path.
+        recent_year_threshold: Years to exclude from current.
+
+    Returns:
+        Path to finalized model directory.
+    """
+    setup_logging()
+
+    # Get model class and instantiate
+    model_class = get_model_class(model_type)
+    model = model_class()
+
+    # Call finalize on the model instance
+    finalized_dir = model.finalize(
+        experiment_name=experiment_name,
+        end_year=end_year,
+        description=description,
+        complexity_predictions_path=complexity_predictions_path,
+        use_embeddings=use_embeddings,
+        local_data_path=local_data_path,
+        recent_year_threshold=recent_year_threshold,
+        version=version,
+    )
+
+    return str(finalized_dir)
+
+
 def main():
     """Main entry point for unified training."""
     args = parse_arguments()
     model_class = get_model_class(args.model)
     train_model(model_class, args)
+
+
+def main_finalize():
+    """Entry point for finalization."""
+    args = parse_finalize_arguments()
+    finalize_model(
+        model_type=args.model,
+        experiment_name=args.experiment,
+        version=args.version,
+        end_year=args.end_year,
+        description=args.description,
+        complexity_predictions_path=args.complexity_predictions,
+        use_embeddings=args.use_embeddings,
+        local_data_path=args.local_data,
+        recent_year_threshold=args.recent_year_threshold,
+    )
 
 
 if __name__ == "__main__":

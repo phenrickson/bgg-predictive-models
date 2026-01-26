@@ -11,31 +11,75 @@ from typing import Optional, Tuple
 
 from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker
+from src.models.outcomes.train import get_model_class
+from src.models.outcomes.data import load_scoring_data as _load_scoring_data
 
 logger = setup_logging()
 
 
-def get_model_info(finalized_dir: Path) -> Optional[int]:
-    """Extract final end year from finalized model directory.
+def get_model_info(finalized_dir: Path) -> dict:
+    """Extract metadata from finalized model directory.
 
     Args:
         finalized_dir: Path to finalized model directory
 
     Returns:
-        Final training end year if found, None otherwise
+        Dictionary with model info including:
+        - final_end_year: Training cutoff year
+        - use_embeddings: Whether model was trained with embeddings
     """
     info_path = finalized_dir / "info.json"
-    final_end_year = None
+    info = {}
 
     if info_path.exists():
         try:
             with open(info_path, "r") as f:
                 info = json.load(f)
-                final_end_year = info.get("final_end_year")
         except Exception as e:
             logger.info(f"Warning: Error reading model info: {e}")
 
-    return final_end_year
+    return info
+
+
+def get_finalized_model_info(
+    experiment_name: str,
+    model_type: str,
+) -> dict:
+    """Get metadata from the finalized model for an experiment.
+
+    Args:
+        experiment_name: Name of the experiment
+        model_type: Type of model
+
+    Returns:
+        Dictionary with finalized model metadata.
+    """
+    tracker = ExperimentTracker(model_type)
+
+    # Find the latest version of the experiment
+    experiments = tracker.list_experiments()
+    matching_experiments = [
+        exp for exp in experiments if exp["name"] == experiment_name
+    ]
+
+    if not matching_experiments:
+        raise ValueError(f"No experiments found matching {experiment_name}")
+
+    latest_experiment = max(matching_experiments, key=lambda x: x["version"])
+
+    # Load the experiment
+    experiment = tracker.load_experiment(
+        latest_experiment["name"], latest_experiment["version"]
+    )
+
+    # Get finalized model info
+    finalized_dir = experiment.exp_dir / "finalized"
+    info = get_model_info(finalized_dir)
+
+    # Also include experiment metadata for use_embeddings
+    info["use_embeddings"] = experiment.metadata.get("use_embeddings", False)
+
+    return info
 
 
 def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
@@ -105,6 +149,23 @@ def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
     return None
 
 
+def get_known_model_types() -> list:
+    """Get list of known model types from the model registry.
+
+    Returns:
+        List of model type strings.
+    """
+    # Trigger registry population
+    try:
+        get_model_class("hurdle")
+    except ValueError:
+        pass
+
+    from src.models.outcomes.train import MODEL_REGISTRY
+
+    return list(MODEL_REGISTRY.keys())
+
+
 def load_model(experiment_name: str, model_type: Optional[str] = None):
     """Load the finalized model and preprocessing pipeline.
 
@@ -123,8 +184,8 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
         # If model_type is provided, only search in that type
         model_types = [model_type]
     else:
-        # Otherwise, search in all known model types
-        model_types = ["hurdle", "rating", "complexity", "users_rated"]
+        # Otherwise, search in all known model types from registry
+        model_types = get_known_model_types()
 
     # logger.info diagnostic information
     logger.info(f"Attempting to load experiment: {experiment_name}")
@@ -233,9 +294,13 @@ def load_scoring_data(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     complexity_predictions: Optional[pl.DataFrame] = None,
+    use_embeddings: Optional[bool] = None,
 ) -> pl.DataFrame:
     """
     Load data for scoring based on provided parameters.
+
+    Uses the centralized data loader from src.models.outcomes.data to ensure
+    consistent feature loading between training and scoring.
 
     Args:
         data_path: Optional path to a CSV file for scoring
@@ -244,68 +309,61 @@ def load_scoring_data(
         start_year: First year of data to include
         end_year: Last year of data to include
         complexity_predictions: Optional DataFrame with pre-computed complexity predictions
+            (alternative to complexity_predictions_path)
+        use_embeddings: Whether to load embeddings. If None, reads from finalized model info.
 
     Returns:
         Polars DataFrame with data to be scored
     """
-    from src.data.loader import BGGDataLoader
-    from src.utils.config import load_config
-    from src.models.experiments import ExperimentTracker
-
-    # Load configuration and data loader
-    config = load_config()
-    loader = BGGDataLoader(config.get_bigquery_config())
-
     # If data path is provided, load directly from CSV
     if data_path:
         return pl.read_csv(data_path)
 
-    # Retrieve the finalized model metadata
-    tracker = ExperimentTracker(model_type)
+    # Get model class for data_config
+    model_class = get_model_class(model_type)
+    model = model_class()
+    data_config = model.data_config
 
-    # Find the latest version of the experiment
-    experiments = tracker.list_experiments()
-    matching_experiments = [
-        exp for exp in experiments if exp["name"] == experiment_name
-    ]
-    if not matching_experiments:
-        raise ValueError(f"No experiments found matching {experiment_name}")
+    # Get finalized model info to determine start_year and use_embeddings
+    model_info = get_finalized_model_info(experiment_name, model_type)
+    final_end_year = model_info.get("final_end_year")
 
-    latest_experiment = max(matching_experiments, key=lambda x: x["version"])
-
-    # Load the experiment with the latest version
-    experiment = tracker.load_experiment(
-        latest_experiment["name"], latest_experiment["version"]
-    )
-
-    # Get model info
-    finalized_dir = experiment.exp_dir / "finalized"
-    final_end_year = get_model_info(finalized_dir)
-
-    # Determine start and end years for scoring
+    # Determine start year for scoring (year after training cutoff)
     if start_year is None:
         start_year = final_end_year + 1 if final_end_year else 0
 
+    # Default end year to far future
     if end_year is None:
-        # Default to 5 years greater than the current year
         end_year = datetime.now().year + 5
 
-    # Construct where clause for year filtering
-    where_clause = [f"year_published >= {start_year}"]
+    # Determine whether to use embeddings from model info if not specified
+    if use_embeddings is None:
+        use_embeddings = model_info.get("use_embeddings", False)
 
-    # Add end year filtering if specified
-    if end_year is not None:
-        where_clause.append(f"year_published <= {end_year}")
+    logger.info(f"Loading scoring data: years {start_year}-{end_year}")
+    logger.info(f"Use embeddings: {use_embeddings}")
 
-    # Combine where clauses
-    where_str = " AND ".join(where_clause)
+    # Handle complexity predictions - can be passed as DataFrame or path
+    complexity_predictions_path = None
+    if complexity_predictions is not None:
+        # If passed as DataFrame, save to temp file for the loader
+        # Or we could modify the loader to accept DataFrame directly
+        # For now, skip the centralized loader for complexity if DataFrame provided
+        pass
 
-    # Load data with optional filtering
-    df = loader.load_data(where_clause=where_str, preprocessor=None)
+    # Use centralized data loader
+    df = _load_scoring_data(
+        data_config=data_config,
+        start_year=start_year,
+        end_year=end_year,
+        use_embeddings=use_embeddings,
+        complexity_predictions_path=complexity_predictions_path,
+        local_data_path=None,
+    )
 
-    # If complexity predictions are provided and model requires them, join predictions
-    if complexity_predictions is not None and model_type in ["rating", "users_rated"]:
-        logger.info("Joining pre-computed complexity predictions")
+    # If complexity predictions provided as DataFrame, join them manually
+    if complexity_predictions is not None and data_config.requires_complexity_predictions:
+        logger.info("Joining pre-computed complexity predictions from DataFrame")
         df = df.join(
             complexity_predictions.select(["game_id", "predicted_complexity"]),
             on="game_id",
@@ -330,102 +388,62 @@ def predict_data(
     """
     Predict data using the given pipeline and model type.
 
+    Uses model classes from src.models.outcomes to handle model-specific
+    prediction logic and post-processing.
+
     Args:
         pipeline: Trained model pipeline
         df: Input DataFrame to predict
         experiment_name: Name of experiment for threshold retrieval
         model_type: Type of model being used
+        complexity_predictions: Unused, kept for backward compatibility
 
     Returns:
-        Tuple of (predicted_values, None, threshold)
+        Tuple of (predicted_values, predicted_class, threshold)
     """
-    import numpy as np
+    # Get the model class for this type
+    model_class = get_model_class(model_type)
+    model = model_class()
+    model.pipeline = pipeline
 
-    # Predict based on model type
-    if model_type == "hurdle":
-        # Use predict_proba for hurdle model
-        predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
+    df_pandas = df.to_pandas()
 
-        # Try to extract threshold from the experiment
+    logger.info(f"{model_type.capitalize()} Model Prediction:")
+    logger.info(f"Input DataFrame shape: {df.shape}")
+
+    # Handle classification vs regression
+    if model.model_task == "classification":
+        # For hurdle model, get probabilities
+        raw_predictions = model.predict_proba(df_pandas)[:, 1]
+
+        # Get threshold from experiment metadata
         threshold = extract_threshold(experiment_name, model_type)
-
-        # Use default threshold of 0.5 if none found
         threshold = threshold if threshold is not None else 0.5
+        model.optimal_threshold = threshold
+
         logger.info(f"Using classification threshold: {threshold}")
 
-        predicted_class = predictions >= threshold
-        predicted_values = predictions
-    elif model_type == "complexity":
-        # Diagnostic logging for complexity model
-        logger.info("Complexity Model Prediction Diagnostics:")
-
-        # Convert to pandas for prediction
-        df_pandas = df.to_pandas()
-
-        logger.info(f"Input DataFrame shape: {df.shape}")
-        logger.info(f"Input columns: {df.columns}")
-
-        # logger.info first few rows of input data
-        logger.info("First few rows of input data:")
-        logger.info(df_pandas.head())
-
-        # Predict and log details
-        predictions = pipeline.predict(df_pandas)
-        logger.info(f"Raw predictions: {predictions}")
-        logger.info(
-            f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
-        )
-
-        # Constrain predictions to 1-5 range
-        predicted_values = np.clip(predictions, 1, 5)
-        logger.info(f"Constrained predictions: {predicted_values}")
-
-        predicted_class = None  # No predicted_class for regression
-        threshold = None  # No threshold for complexity
-    elif model_type in ["users_rated", "rating"]:
-        # Regression outcome for rating and users_rated models
-        logger.info(f"{model_type.capitalize()} Model Prediction Diagnostics:")
-
-        # Convert to pandas for prediction
-        df_pandas = df.to_pandas()
-
-        logger.info(f"Input DataFrame shape: {df.shape}")
-        logger.info(f"Input columns: {df.columns}")
-
-        # Predict and log details
-        predictions = pipeline.predict(df_pandas)
-        logger.info(f"Raw predictions: {predictions}")
-        logger.info(
-            f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
-        )
-
-        # Inverse transform log predictions for users_rated
-        if model_type == "users_rated":
-            # First apply expm1, then round to nearest 50, with a minimum of 25
-            predicted_values = np.maximum(np.round(np.expm1(predictions) / 50) * 50, 25)
-        else:
-            # Constrain rating predictions to appropriate range
-            predicted_values = np.clip(predictions, 1, 10)
-
-        logger.info(f"Transformed predictions: {predicted_values}")
-
-        predicted_class = None  # No predicted_class for regression
-        threshold = None  # No threshold for regression
-    elif model_type == "hurdle":
-        # Use predict_proba for hurdle model
-        predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
-
-        # Try to extract threshold from the experiment
-        threshold = extract_threshold(experiment_name, model_type)
-
-        # Use default threshold of 0.5 if none found
-        threshold = threshold if threshold is not None else 0.5
-        logger.info(f"Using classification threshold: {threshold}")
-
-        predicted_class = predictions >= threshold
-        predicted_values = predictions
+        predicted_class = raw_predictions >= threshold
+        predicted_values = raw_predictions
     else:
-        raise ValueError(f"Unsupported model type: {model_type}")
+        # For regression models, get predictions and post-process
+        raw_predictions = pipeline.predict(df_pandas)
+
+        logger.info(
+            f"Raw prediction stats: min={raw_predictions.min():.4f}, "
+            f"max={raw_predictions.max():.4f}, mean={raw_predictions.mean():.4f}"
+        )
+
+        # Use model's post-processing (clipping, inverse transforms, etc.)
+        predicted_values = model.post_process_predictions(raw_predictions)
+
+        logger.info(
+            f"Post-processed stats: min={predicted_values.min():.4f}, "
+            f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
+        )
+
+        predicted_class = None
+        threshold = None
 
     return predicted_values, predicted_class, threshold
 

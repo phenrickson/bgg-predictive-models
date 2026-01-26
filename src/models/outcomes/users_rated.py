@@ -105,14 +105,16 @@ class UsersRatedModel(TrainableModel):
     def post_process_predictions(self, predictions: np.ndarray) -> np.ndarray:
         """Transform log predictions back to count scale, rounded to nearest 50.
 
+        Target is log1p(users_rated), so inverse is expm1.
+
         Args:
-            predictions: Log-scale predictions.
+            predictions: Log-scale predictions (from log1p transform).
 
         Returns:
             User count predictions, minimum 25, rounded to nearest 50.
         """
-        # Exponentiate to get raw count
-        raw_counts = np.exp(predictions)
+        # Inverse of log1p is expm1
+        raw_counts = np.expm1(predictions)
 
         # Round to nearest 50 and ensure minimum of 25
         rounded = np.maximum(np.round(raw_counts / 50) * 50, 25)
