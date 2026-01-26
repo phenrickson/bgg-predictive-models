@@ -15,6 +15,14 @@ on:
         description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
         required: false
         default: ''
+      use_change_detection:
+        description: 'Only score games with changed features (recommended for daily runs)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
   schedule:
     # Run daily at 7 AM UTC
@@ -99,11 +107,19 @@ jobs:
 
     - name: Trigger Predictions using score.py
       run: |
+        USE_CHANGE_DETECTION="${{ github.event.inputs.use_change_detection || 'true' }}"
+
+        CHANGE_DETECTION_FLAG=""
+        if [ "$USE_CHANGE_DETECTION" = "true" ]; then
+          CHANGE_DETECTION_FLAG="--use-change-detection"
+        fi
+
         uv run -m scoring_service.score \
           --service-url "${{ steps.get-url.outputs.service_url }}" \
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
           --upload-to-bigquery \
+          $CHANGE_DETECTION_FLAG \
           ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
 
     - name: Log Prediction Metadata
