@@ -194,6 +194,31 @@ class GeekRatingModel(CompositeModel):
         self._metadata = experiment.metadata
         self.version = experiment.version
 
+    def load_sub_models(self, experiments: Dict[str, str]) -> None:
+        """Load sub-models from experiment names and extract hurdle threshold.
+
+        Overrides base class to also load optimal threshold from hurdle experiment.
+
+        Args:
+            experiments: Dictionary mapping model types to experiment names.
+                e.g., {"hurdle": "lightgbm-hurdle", "complexity": "catboost-complexity"}
+        """
+        from src.models.score import load_model, extract_threshold
+
+        logger.info("Loading sub-models:")
+        for model_type, experiment_name in experiments.items():
+            logger.info(f"  {model_type}: {experiment_name}")
+            self.sub_models[model_type] = load_model(experiment_name, model_type)
+
+        # Extract optimal threshold from hurdle experiment if not already set
+        if self.hurdle_threshold is None and "hurdle" in experiments:
+            loaded_threshold = extract_threshold(experiments["hurdle"], "hurdle")
+            if loaded_threshold is not None:
+                self.hurdle_threshold = loaded_threshold
+                logger.info(f"Using threshold from hurdle experiment: {self.hurdle_threshold}")
+
+        self._metadata["model_experiments"] = experiments
+
     @classmethod
     def from_experiments(
         cls,
@@ -203,6 +228,7 @@ class GeekRatingModel(CompositeModel):
         users_rated_experiment: str,
         prior_rating: float = 5.5,
         prior_weight: float = 2000,
+        hurdle_threshold: Optional[float] = None,
     ) -> "GeekRatingModel":
         """Create GeekRatingModel from experiment names.
 
@@ -213,6 +239,8 @@ class GeekRatingModel(CompositeModel):
             users_rated_experiment: Experiment name for users_rated model.
             prior_rating: Prior mean rating for Bayesian average.
             prior_weight: Weight given to prior rating.
+            hurdle_threshold: Optional threshold override. If None, loads from
+                hurdle experiment metadata.
 
         Returns:
             Initialized GeekRatingModel with loaded sub-models.
@@ -220,6 +248,7 @@ class GeekRatingModel(CompositeModel):
         model = cls(
             prior_rating=prior_rating,
             prior_weight=prior_weight,
+            hurdle_threshold=hurdle_threshold,
         )
 
         experiments = {
@@ -230,7 +259,6 @@ class GeekRatingModel(CompositeModel):
         }
 
         model.load_sub_models(experiments)
-        model._metadata["model_experiments"] = experiments
 
         return model
 

@@ -270,14 +270,15 @@ register_text_embeddings:
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
 
 # predict geek rating given models
-geek_rating: 
-	uv run -m src.models.geek_rating \
+geek_rating:
+	uv run -m src.pipeline.geek_rating \
 	--start-year $(TEST_START_YEAR) \
 	--end-year $(TEST_END_YEAR) \
 	--hurdle $(HURDLE_CANDIDATE) \
 	--complexity $(COMPLEXITY_CANDIDATE) \
 	--rating $(RATING_CANDIDATE) \
 	--users-rated $(USERS_RATED_CANDIDATE) \
+	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
 	--experiment estimated-geek-rating
 
 # evaluate over time using config.yaml settings
