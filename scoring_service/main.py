@@ -104,6 +104,8 @@ class PredictGamesResponse(BaseModel):
     data_warehouse_job_id: Optional[str] = None
     data_warehouse_table: Optional[str] = None
     predictions: Optional[List[Dict[str, Any]]] = None
+    games_scored: Optional[int] = None      # NEW: Number of games actually scored
+    skipped_reason: Optional[str] = None    # NEW: Why scoring was skipped (e.g., "no_changes")
 
 
 class PredictComplexityRequest(BaseModel):
