@@ -212,6 +212,64 @@ def load_game_data(
     return df.to_pandas()
 
 
+def load_games_for_main_scoring(
+    start_year: int,
+    end_year: int,
+    max_games: int = 50000
+) -> pd.DataFrame:
+    """
+    Load games that need main predictions (hurdle, rating, users_rated).
+
+    Returns games that are:
+    - In the year range AND
+    - Either never scored OR have changed features since last scoring
+
+    Args:
+        start_year: Start year for predictions (inclusive)
+        end_year: End year for predictions (exclusive)
+        max_games: Maximum number of games to load
+
+    Returns:
+        DataFrame with game features for scoring
+    """
+    config = load_config()
+    data_warehouse_config = config.get_data_warehouse_config()
+    loader = BGGDataLoader(data_warehouse_config)
+
+    ml_project = config.ml_project_id
+    dw_project = config.data_warehouse.project_id
+
+    where_clause = f"""
+    game_id IN (
+      SELECT gf.game_id
+      FROM `{dw_project}.analytics.games_features` gf
+      LEFT JOIN `{dw_project}.staging.game_features_hash` fh
+        ON gf.game_id = fh.game_id
+      LEFT JOIN (
+        SELECT
+          game_id,
+          score_ts,
+          ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
+        FROM `{ml_project}.raw.ml_predictions_landing`
+      ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
+      WHERE
+        gf.year_published IS NOT NULL
+        AND gf.year_published >= {start_year}
+        AND gf.year_published < {end_year}
+        AND (
+          lp.game_id IS NULL
+          OR fh.last_updated > lp.score_ts
+        )
+      LIMIT {max_games}
+    )
+    """
+
+    logger.info(f"Loading games needing main predictions (years {start_year}-{end_year}, max {max_games})...")
+    df = loader.load_data(where_clause=where_clause, preprocessor=None)
+    logger.info(f"Found {len(df)} games needing main predictions")
+    return df.to_pandas()
+
+
 def predict_hurdle_probabilities(
     hurdle_model: Any, features: pd.DataFrame, threshold: float = 0.5
 ) -> pd.Series:
