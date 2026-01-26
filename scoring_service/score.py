@@ -34,6 +34,7 @@ def submit_scoring_request(
     prior_rating: Optional[float] = None,
     prior_weight: Optional[float] = None,
     upload_to_data_warehouse: bool = True,
+    use_change_detection: bool = False,
 ) -> dict:
     """
     Submit request to scoring service and return response.
@@ -74,6 +75,7 @@ def submit_scoring_request(
             "prior_rating": prior_rating or param_config.get("prior_rating", 5.5),
             "prior_weight": prior_weight or param_config.get("prior_weight", 2000),
             "upload_to_data_warehouse": upload_to_data_warehouse,
+            "use_change_detection": use_change_detection,
         }
 
         if output_path:
@@ -92,6 +94,7 @@ def submit_scoring_request(
             "prior_rating": prior_rating or 5.5,
             "prior_weight": prior_weight or 2000,
             "upload_to_data_warehouse": upload_to_data_warehouse,
+            "use_change_detection": use_change_detection,
         }
         if output_path:
             payload["output_path"] = output_path
@@ -219,6 +222,14 @@ def main():
         "--prior-weight", type=float, default=2000, help="Weight given to prior rating"
     )
 
+    # Change detection argument
+    parser.add_argument(
+        "--use-change-detection",
+        action="store_true",
+        default=False,
+        help="Only score games with changed features (recommended for daily runs)",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -240,7 +251,14 @@ def main():
             prior_rating=args.prior_rating,
             prior_weight=args.prior_weight,
             upload_to_data_warehouse=upload_to_data_warehouse,
+            use_change_detection=args.use_change_detection,
         )
+
+        # Check if run was skipped due to no changes
+        if response.get("skipped_reason") == "no_changes":
+            logger.info("Scoring skipped - no games have changed features")
+            logger.info(f"Job ID: {response['job_id']}")
+            return
 
         # Log job details
         logger.info(f"Scoring Job ID: {response['job_id']}")
