@@ -1,6 +1,12 @@
 name: Run Scoring Service
 
 on:
+  # Triggered after complexity scoring completes
+  workflow_run:
+    workflows: ["Score Complexity Predictions"]
+    types: [completed]
+    branches: [main]
+
   workflow_dispatch:
     inputs:
       start_year:
@@ -12,11 +18,11 @@ on:
         required: false
         default: '2030'
       output_path:
-        description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
+        description: 'Cloud storage path for predictions (optional)'
         required: false
         default: ''
       use_change_detection:
-        description: 'Only score games with changed features (recommended for daily runs)'
+        description: 'Only score games with changed features'
         required: false
         default: 'true'
         type: choice
@@ -24,8 +30,8 @@ on:
           - 'true'
           - 'false'
 
+  # Keep schedule as fallback during transition
   schedule:
-    # Run daily at 7 AM UTC
     - cron: '0 7 * * *'
 
 env:
@@ -62,7 +68,9 @@ jobs:
     needs: [setup]
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-    
+    # Skip if triggered by workflow_run and upstream failed
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
     permissions:
       contents: read
       id-token: write
