@@ -92,6 +92,8 @@ class PredictGamesRequest(BaseModel):
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
     upload_to_data_warehouse: bool = True
     game_ids: Optional[List[int]] = None
+    use_change_detection: bool = False  # NEW: Enable incremental scoring
+    max_games: Optional[int] = 50000    # NEW: Limit for change detection mode
 
 
 class PredictGamesResponse(BaseModel):
