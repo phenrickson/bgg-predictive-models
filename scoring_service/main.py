@@ -478,9 +478,41 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         threshold = hurdle_registration.get("metadata", {}).get("threshold", 0.5)
 
         # Load game data
-        df_pandas = load_game_data(
-            request.start_year, request.end_year, game_ids=request.game_ids
-        )
+        if request.game_ids:
+            # Specific games requested - load directly
+            logger.info(f"Loading {len(request.game_ids)} specific games")
+            df_pandas = load_game_data(game_ids=request.game_ids)
+        elif request.use_change_detection:
+            # Use change detection to find games needing scoring
+            logger.info("Using change detection to find games needing scoring")
+            df_pandas = load_games_for_main_scoring(
+                request.start_year or 2024,
+                request.end_year or 2029,
+                max_games=request.max_games or 50000
+            )
+            if len(df_pandas) == 0:
+                logger.info("No games need scoring - all features unchanged")
+                return PredictGamesResponse(
+                    job_id=job_id,
+                    model_details={
+                        "hurdle": {"name": request.hurdle_model_name},
+                        "complexity": {"name": request.complexity_model_name},
+                        "rating": {"name": request.rating_model_name},
+                        "users_rated": {"name": request.users_rated_model_name},
+                    },
+                    scoring_parameters={
+                        "start_year": request.start_year,
+                        "end_year": request.end_year,
+                        "prior_rating": request.prior_rating,
+                        "prior_weight": request.prior_weight,
+                    },
+                    games_scored=0,
+                    skipped_reason="no_changes"
+                )
+        else:
+            # Original behavior - load by year range
+            logger.info(f"Loading all games for years {request.start_year}-{request.end_year}")
+            df_pandas = load_game_data(request.start_year, request.end_year)
 
         # Predict hurdle probabilities
         predicted_hurdle_prob = predict_hurdle_probabilities(
@@ -656,6 +688,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             data_warehouse_job_id=data_warehouse_job_id,
             data_warehouse_table=data_warehouse_table,
             predictions=predictions_list,
+            games_scored=len(results),
         )
 
         return response
