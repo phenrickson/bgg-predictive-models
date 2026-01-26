@@ -1,8 +1,11 @@
 name: Run Text Embeddings
 
 on:
-  schedule:
-    - cron: '0 8 * * *'  # Daily at 8 AM UTC (after game embeddings at 7 AM)
+  # Triggered after game embeddings complete
+  workflow_run:
+    workflows: ["Run Game Embeddings"]
+    types: [completed]
+    branches: [main]
 
   workflow_dispatch:
     inputs:
@@ -15,6 +18,10 @@ on:
         required: false
         default: '25000'
 
+  # Keep schedule as fallback during transition
+  schedule:
+    - cron: '0 8 * * *'
+
 env:
   GCP_PROJECT_ID: bgg-predictive-models
 
@@ -22,6 +29,8 @@ jobs:
   generate-text-embeddings:
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    # Skip if triggered by workflow_run and upstream failed
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       total_games: ${{ steps.generate.outputs.total_games }}
       batch_count: ${{ steps.generate.outputs.batch_count }}
@@ -127,3 +136,14 @@ jobs:
         echo "- **Model**: ${{ github.event.inputs.model_name || 'text-embeddings-v2026' }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify Data Warehouse
+      if: success() && github.ref == 'refs/heads/main'
+      env:
+        GITHUB_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+      run: |
+        curl -X POST \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/phenrickson/bgg-data-warehouse/dispatches \
+          -d '{"event_type": "predictions_complete", "client_payload": {"run_id": "${{ github.run_id }}", "total_games": "${{ steps.generate.outputs.total_games }}"}}'
