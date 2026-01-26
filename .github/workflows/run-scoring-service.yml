@@ -1,6 +1,12 @@
 name: Run Scoring Service
 
 on:
+  # Triggered after complexity scoring completes
+  workflow_run:
+    workflows: ["Score Complexity Predictions"]
+    types: [completed]
+    branches: [main]
+
   workflow_dispatch:
     inputs:
       start_year:
@@ -12,12 +18,20 @@ on:
         required: false
         default: '2030'
       output_path:
-        description: 'Cloud storage path for predictions (optional, determined by environment if not provided)'
+        description: 'Cloud storage path for predictions (optional)'
         required: false
         default: ''
+      use_change_detection:
+        description: 'Only score games with changed features'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
+  # Keep schedule as fallback during transition
   schedule:
-    # Run daily at 7 AM UTC
     - cron: '0 7 * * *'
 
 env:
@@ -54,7 +68,9 @@ jobs:
     needs: [setup]
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-    
+    # Skip if triggered by workflow_run and upstream failed
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
     permissions:
       contents: read
       id-token: write
@@ -99,11 +115,19 @@ jobs:
 
     - name: Trigger Predictions using score.py
       run: |
+        USE_CHANGE_DETECTION="${{ github.event.inputs.use_change_detection || 'true' }}"
+
+        CHANGE_DETECTION_FLAG=""
+        if [ "$USE_CHANGE_DETECTION" = "true" ]; then
+          CHANGE_DETECTION_FLAG="--use-change-detection"
+        fi
+
         uv run -m scoring_service.score \
           --service-url "${{ steps.get-url.outputs.service_url }}" \
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
           --upload-to-bigquery \
+          $CHANGE_DETECTION_FLAG \
           ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
 
     - name: Log Prediction Metadata

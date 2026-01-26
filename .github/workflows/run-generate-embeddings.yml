@@ -1,8 +1,11 @@
 name: Run Game Embeddings
 
 on:
-  schedule:
-    - cron: '0 7 * * *'  # Daily at 7 AM UTC (after complexity scoring at 6 AM)
+  # Triggered after main scoring completes
+  workflow_run:
+    workflows: ["Run Scoring Service"]
+    types: [completed]
+    branches: [main]
 
   workflow_dispatch:
     inputs:
@@ -15,6 +18,10 @@ on:
         required: false
         default: '50000'
 
+  # Keep schedule as fallback during transition
+  schedule:
+    - cron: '0 7 * * *'
+
 env:
   GCP_PROJECT_ID: bgg-predictive-models
 
@@ -22,6 +29,8 @@ jobs:
   generate-embeddings:
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    # Skip if triggered by workflow_run and upstream failed
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       total_games: ${{ steps.generate.outputs.total_games }}
       batch_count: ${{ steps.generate.outputs.batch_count }}

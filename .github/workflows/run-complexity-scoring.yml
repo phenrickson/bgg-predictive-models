@@ -1,8 +1,13 @@
 name: Score Complexity Predictions
 
 on:
+  # Triggered by data warehouse after Dataform completes
+  repository_dispatch:
+    types: [dataform_complete]
+
+  # Keep schedule as fallback during transition
   schedule:
-    - cron: '0 6 * * *'  # Daily at 6 AM UTC (before main scoring at 7 AM)
+    - cron: '0 6 * * *'  # Daily at 6 AM UTC
 
   workflow_dispatch:
     inputs:

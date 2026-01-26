@@ -92,6 +92,8 @@ class PredictGamesRequest(BaseModel):
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
     upload_to_data_warehouse: bool = True
     game_ids: Optional[List[int]] = None
+    use_change_detection: bool = False  # NEW: Enable incremental scoring
+    max_games: Optional[int] = 50000    # NEW: Limit for change detection mode
 
 
 class PredictGamesResponse(BaseModel):
@@ -102,6 +104,8 @@ class PredictGamesResponse(BaseModel):
     data_warehouse_job_id: Optional[str] = None
     data_warehouse_table: Optional[str] = None
     predictions: Optional[List[Dict[str, Any]]] = None
+    games_scored: Optional[int] = None      # NEW: Number of games actually scored
+    skipped_reason: Optional[str] = None    # NEW: Why scoring was skipped (e.g., "no_changes")
 
 
 class PredictComplexityRequest(BaseModel):
@@ -205,6 +209,64 @@ def load_game_data(
 
     df = loader.load_data(where_clause=where_clause, preprocessor=None)
 
+    return df.to_pandas()
+
+
+def load_games_for_main_scoring(
+    start_year: int,
+    end_year: int,
+    max_games: int = 50000
+) -> pd.DataFrame:
+    """
+    Load games that need main predictions (hurdle, rating, users_rated).
+
+    Returns games that are:
+    - In the year range AND
+    - Either never scored OR have changed features since last scoring
+
+    Args:
+        start_year: Start year for predictions (inclusive)
+        end_year: End year for predictions (exclusive)
+        max_games: Maximum number of games to load
+
+    Returns:
+        DataFrame with game features for scoring
+    """
+    config = load_config()
+    data_warehouse_config = config.get_data_warehouse_config()
+    loader = BGGDataLoader(data_warehouse_config)
+
+    ml_project = config.ml_project_id
+    dw_project = config.data_warehouse.project_id
+
+    where_clause = f"""
+    game_id IN (
+      SELECT gf.game_id
+      FROM `{dw_project}.analytics.games_features` gf
+      LEFT JOIN `{dw_project}.staging.game_features_hash` fh
+        ON gf.game_id = fh.game_id
+      LEFT JOIN (
+        SELECT
+          game_id,
+          score_ts,
+          ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
+        FROM `{ml_project}.raw.ml_predictions_landing`
+      ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
+      WHERE
+        gf.year_published IS NOT NULL
+        AND gf.year_published >= {start_year}
+        AND gf.year_published < {end_year}
+        AND (
+          lp.game_id IS NULL
+          OR fh.last_updated > lp.score_ts
+        )
+      LIMIT {max_games}
+    )
+    """
+
+    logger.info(f"Loading games needing main predictions (years {start_year}-{end_year}, max {max_games})...")
+    df = loader.load_data(where_clause=where_clause, preprocessor=None)
+    logger.info(f"Found {len(df)} games needing main predictions")
     return df.to_pandas()
 
 
@@ -416,9 +478,41 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         threshold = hurdle_registration.get("metadata", {}).get("threshold", 0.5)
 
         # Load game data
-        df_pandas = load_game_data(
-            request.start_year, request.end_year, game_ids=request.game_ids
-        )
+        if request.game_ids:
+            # Specific games requested - load directly
+            logger.info(f"Loading {len(request.game_ids)} specific games")
+            df_pandas = load_game_data(game_ids=request.game_ids)
+        elif request.use_change_detection:
+            # Use change detection to find games needing scoring
+            logger.info("Using change detection to find games needing scoring")
+            df_pandas = load_games_for_main_scoring(
+                request.start_year or 2024,
+                request.end_year or 2029,
+                max_games=request.max_games or 50000
+            )
+            if len(df_pandas) == 0:
+                logger.info("No games need scoring - all features unchanged")
+                return PredictGamesResponse(
+                    job_id=job_id,
+                    model_details={
+                        "hurdle": {"name": request.hurdle_model_name},
+                        "complexity": {"name": request.complexity_model_name},
+                        "rating": {"name": request.rating_model_name},
+                        "users_rated": {"name": request.users_rated_model_name},
+                    },
+                    scoring_parameters={
+                        "start_year": request.start_year,
+                        "end_year": request.end_year,
+                        "prior_rating": request.prior_rating,
+                        "prior_weight": request.prior_weight,
+                    },
+                    games_scored=0,
+                    skipped_reason="no_changes"
+                )
+        else:
+            # Original behavior - load by year range
+            logger.info(f"Loading all games for years {request.start_year}-{request.end_year}")
+            df_pandas = load_game_data(request.start_year, request.end_year)
 
         # Predict hurdle probabilities
         predicted_hurdle_prob = predict_hurdle_probabilities(
@@ -594,6 +688,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             data_warehouse_job_id=data_warehouse_job_id,
             data_warehouse_table=data_warehouse_table,
             predictions=predictions_list,
+            games_scored=len(results),
         )
 
         return response
