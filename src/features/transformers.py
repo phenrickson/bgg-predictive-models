@@ -665,6 +665,25 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "^Toys",
         ]
 
+    def __getattr__(self, name: str):
+        """Handle missing attributes for backwards compatibility with older pickled models.
+
+        When models are unpickled, they may be missing attributes that were added
+        in newer versions of the class. This method provides sensible defaults
+        for those attributes.
+        """
+        # Attributes added in later versions that older pickled models may lack
+        backwards_compat_defaults = {
+            "family_remove_patterns": None,
+            "family_allow_patterns": None,
+            "include_description_embeddings": False,
+        }
+
+        if name in backwards_compat_defaults:
+            return backwards_compat_defaults[name]
+
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def _safe_column_name(self, name: str) -> str:
         """Create a safe column name from a string."""
         # Convert to string and lowercase
