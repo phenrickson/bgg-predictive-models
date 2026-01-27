@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Pipeline event flow redesign**: Fixed data dependency bug where embeddings used stale complexity predictions
+  - Complexity scoring now sends `complexity_complete` event to trigger Dataform
+  - Scoring service triggered by `dataform_complexity_ready` (after complexity materialized)
+  - Text embeddings now runs before game embeddings (future-proofing for dependency)
+  - Game embeddings sends `embeddings_complete` to trigger final Dataform run
+  - Removed all cron schedules - pipeline is purely event-driven
+  - See bgg-data-warehouse `docs/plans/2026-01-27-pipeline-event-flow-design.md` for full design
+
 ### Added
 
 - **VAE Embedding Algorithm**: Added Variational Autoencoder as embedding algorithm option

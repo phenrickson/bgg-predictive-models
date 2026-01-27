@@ -1,11 +1,9 @@
 name: Run Scoring Service
 
 on:
-  # Triggered after complexity scoring completes
-  workflow_run:
-    workflows: ["Score Complexity Predictions"]
-    types: [completed]
-    branches: [main]
+  # Triggered by data warehouse after Dataform materializes complexity predictions
+  repository_dispatch:
+    types: [dataform_complexity_ready]
 
   workflow_dispatch:
     inputs:
@@ -29,10 +27,6 @@ on:
         options:
           - 'true'
           - 'false'
-
-  # Keep schedule as fallback during transition
-  schedule:
-    - cron: '0 7 * * *'
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -68,8 +62,6 @@ jobs:
     needs: [setup]
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-    # Skip if triggered by workflow_run and upstream failed
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     permissions:
       contents: read
