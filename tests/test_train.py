@@ -20,10 +20,11 @@ def sample_config():
     """Sample configuration for testing"""
     return {
         "current_year": 2025,
-        "train_end_year": 2021,
-        "tune_end_year": 2022,
-        "test_start_year": 2023,
-        "test_end_year": 2023,
+        "train_through": 2021,
+        "tune_start": 2022,
+        "tune_through": 2022,
+        "test_start": 2023,
+        "test_through": 2023,
         "models": {
             "hurdle": "lightgbm",
             "complexity": "catboost",
@@ -66,10 +67,10 @@ class TestConfigLoading:
 
         # Verify expected keys exist
         assert "current_year" in config
-        assert "train_end_year" in config
-        assert "tune_end_year" in config
-        assert "test_start_year" in config
-        assert "test_end_year" in config
+        assert "train_through" in config
+        assert "tune_through" in config
+        assert "test_start" in config
+        assert "test_through" in config
         assert "models" in config
         assert "experiments" in config
         assert "model_settings" in config
@@ -124,15 +125,15 @@ class TestModelTrainingFunctions:
             "lightgbm-hurdle",
             "--model",
             "lightgbm",
-            "--train-end-year",
+            "--train-through",
             "2021",
-            "--tune-start-year",
-            "2021",
-            "--tune-end-year",
+            "--tune-start",
             "2022",
-            "--test-start-year",
+            "--tune-through",
+            "2022",
+            "--test-start",
             "2023",
-            "--test-end-year",
+            "--test-through",
             "2023",
         ]
 
@@ -261,10 +262,10 @@ class TestIntegration:
             # Check required keys exist
             required_keys = [
                 "current_year",
-                "train_end_year",
-                "tune_end_year",
-                "test_start_year",
-                "test_end_year",
+                "train_through",
+                "tune_through",
+                "test_start",
+                "test_through",
                 "models",
                 "experiments",
                 "model_settings",

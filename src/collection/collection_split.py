@@ -110,7 +110,7 @@ class CollectionSplit:
 
     def create_ownership_splits(
         self,
-        train_end_year: Optional[int] = None,
+        train_through: Optional[int] = None,
         time_column: str = "year_published",
         return_dict: bool = False,
     ) -> Union[
@@ -119,8 +119,8 @@ class CollectionSplit:
         """Create train/val/test splits for ownership prediction.
 
         Args:
-            train_end_year: For time-based splits, the year to end training data.
-                If None, uses random stratified splitting.
+            train_through: For time-based splits, the last year to include in training data
+                (inclusive). If None, uses random stratified splitting.
             time_column: Column to use for time-based splitting.
                 Default is 'year_published' (splits by game publication year).
             return_dict: If True, return dict; if False, return tuple.
@@ -140,9 +140,9 @@ class CollectionSplit:
         logger.info(f"Creating splits for {len(owned_df)} owned games")
 
         # Split owned games into train/val/test
-        if train_end_year is not None and time_column in owned_df.columns:
+        if train_through is not None and time_column in owned_df.columns:
             train_owned, val_owned, test_owned = self._time_based_split_owned(
-                owned_df, train_end_year, time_column
+                owned_df, train_through, time_column
             )
         else:
             train_owned, val_owned, test_owned = self._random_split_owned(owned_df)
@@ -211,14 +211,14 @@ class CollectionSplit:
     def _time_based_split_owned(
         self,
         owned_df: pl.DataFrame,
-        train_end_year: int,
+        train_through: int,
         time_column: str,
     ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
         """Split owned games by time (e.g., year published).
 
         Args:
             owned_df: Owned games with features
-            train_end_year: Year to end training data (exclusive)
+            train_through: Last year to include in training data (inclusive)
             time_column: Column with year or datetime for splitting
 
         Returns:
@@ -247,19 +247,16 @@ class CollectionSplit:
 
         # Handle nulls - put them in training
         owned_df = owned_df.with_columns(
-            pl.col("_split_year").fill_null(train_end_year - 1)
+            pl.col("_split_year").fill_null(train_through)
         )
 
-        # Calculate validation and test years
-        val_end_year = train_end_year + 1
-        test_end_year = val_end_year + 1
+        # Calculate validation and test years (train_through is inclusive)
+        val_year = train_through + 1
+        test_start_year = val_year + 1
 
-        train_df = owned_df.filter(pl.col("_split_year") < train_end_year)
-        val_df = owned_df.filter(
-            (pl.col("_split_year") >= train_end_year)
-            & (pl.col("_split_year") < val_end_year)
-        )
-        test_df = owned_df.filter(pl.col("_split_year") >= val_end_year)
+        train_df = owned_df.filter(pl.col("_split_year") <= train_through)
+        val_df = owned_df.filter(pl.col("_split_year") == val_year)
+        test_df = owned_df.filter(pl.col("_split_year") >= test_start_year)
 
         # Drop helper column
         train_df = train_df.drop("_split_year")
@@ -275,8 +272,8 @@ class CollectionSplit:
             return self._random_split_owned(owned_df.drop("_split_year"))
 
         logger.info(
-            f"Time-based split: train < {train_end_year}, "
-            f"val {train_end_year}-{val_end_year}, test >= {val_end_year}"
+            f"Time-based split: train <= {train_through}, "
+            f"val = {val_year}, test >= {test_start_year}"
         )
 
         return train_df, val_df, test_df

@@ -72,10 +72,10 @@ Examples:
         help="Model type to use (default: lightgbm)",
     )
     run_parser.add_argument(
-        "--train-end-year",
+        "--train-through",
         type=int,
         default=None,
-        help="End year for training data (for time-based splits)",
+        help="Last year to include in training data (inclusive, for time-based splits)",
     )
     run_parser.add_argument(
         "--negative-ratio",
@@ -136,7 +136,7 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
             model_type=args.model_type,
         ),
         analyzer_config=AnalyzerConfig(),
-        train_end_year=args.train_end_year,
+        train_through=args.train_through,
     )
 
     # Run pipeline

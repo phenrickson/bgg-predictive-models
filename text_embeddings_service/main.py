@@ -143,7 +143,7 @@ def load_games_for_embedding(
 
     # Determine end year from config if not specified
     if end_year is None:
-        end_year = config.years.score_end
+        end_year = config.years.score.end
 
     if game_ids:
         logger.info(f"Loading {len(game_ids)} specific games for text embeddings...")

@@ -31,8 +31,8 @@ class PipelineConfig:
     model_config: ModelConfig = field(default_factory=ModelConfig)
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
-    train_end_year: Optional[int] = None
-    """Year to end training data for time-based splits."""
+    train_through: Optional[int] = None
+    """Last year to include in training data (inclusive, for time-based splits)."""
 
     min_ratings_for_universe: int = 25
     """Minimum ratings for games in the universe."""
@@ -131,7 +131,7 @@ class CollectionPipeline:
             )
 
             train_df, val_df, test_df = splitter.create_ownership_splits(
-                train_end_year=self.config.train_end_year
+                train_through=self.config.train_through
             )
 
             results["steps"]["splits"] = {

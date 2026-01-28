@@ -23,6 +23,7 @@ from src.models.training import (
 )
 from src.models.experiments import ExperimentTracker, log_experiment
 from src.utils.logging import setup_logging
+from src.utils.config import load_config
 
 
 logger = logging.getLogger(__name__)
@@ -106,8 +107,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--experiment",
         type=str,
-        required=True,
-        help="Experiment name",
+        default=None,
+        help="Experiment name (default: from config)",
     )
     parser.add_argument(
         "--description",
@@ -142,12 +143,12 @@ def parse_arguments() -> argparse.Namespace:
         help="Include text embeddings as features",
     )
 
-    # Year splits
-    parser.add_argument("--train-end-year", type=int, default=2022)
-    parser.add_argument("--tune-start-year", type=int, default=2022)
-    parser.add_argument("--tune-end-year", type=int, default=2023)
-    parser.add_argument("--test-start-year", type=int, default=2024)
-    parser.add_argument("--test-end-year", type=int, default=2025)
+    # Year splits (all boundaries are inclusive)
+    parser.add_argument("--train-through", type=int, default=2022)
+    parser.add_argument("--tune-start", type=int, default=2022)
+    parser.add_argument("--tune-through", type=int, default=2023)
+    parser.add_argument("--test-start", type=int, default=2024)
+    parser.add_argument("--test-through", type=int, default=2025)
 
     # Training options
     parser.add_argument(
@@ -184,22 +185,44 @@ def parse_arguments() -> argparse.Namespace:
 
     args = parser.parse_args()
 
+    # Load defaults from config if not provided
+    config = load_config()
+    model_config = config.models.get(args.model)
+
+    if args.experiment is None:
+        if model_config is None:
+            raise ValueError(
+                f"--experiment not provided and no config found for model '{args.model}'"
+            )
+        args.experiment = model_config.experiment_name
+
+    if args.algorithm is None and model_config is not None:
+        args.algorithm = model_config.type
+
+    # Load use_embeddings from config if not explicitly set via CLI
+    if not args.use_embeddings and model_config is not None:
+        args.use_embeddings = model_config.use_embeddings
+
+    # Load use_sample_weights from config if not explicitly set via CLI
+    if not args.use_sample_weights and model_config is not None:
+        args.use_sample_weights = model_config.use_sample_weights
+
     # Validate year ranges
-    if args.tune_start_year != args.train_end_year:
+    if args.tune_start != args.train_through:
         raise ValueError(
-            f"tune_start_year ({args.tune_start_year}) must equal "
-            f"train_end_year ({args.train_end_year})"
+            f"tune_start ({args.tune_start}) must equal "
+            f"train_through ({args.train_through})"
         )
 
     if not (
-        args.tune_start_year
-        <= args.tune_end_year
-        < args.test_start_year
-        <= args.test_end_year
+        args.tune_start
+        <= args.tune_through
+        < args.test_start
+        <= args.test_through
     ):
         raise ValueError(
             "Invalid year ranges. Must satisfy: "
-            "tune_start <= tune_end < test_start <= test_end"
+            "tune_start <= tune_through < test_start <= test_through"
         )
 
     return args
@@ -237,7 +260,7 @@ def train_model(
     # Load data
     df = load_training_data(
         data_config=model.data_config,
-        end_year=args.test_end_year,
+        end_year=args.test_through,
         use_embeddings=args.use_embeddings,
         complexity_predictions_path=args.complexity_predictions,
         local_data_path=args.local_data,
@@ -246,11 +269,11 @@ def train_model(
     # Create splits
     train_df, tune_df, test_df = create_data_splits(
         df,
-        train_end_year=args.train_end_year,
-        tune_start_year=args.tune_start_year,
-        tune_end_year=args.tune_end_year,
-        test_start_year=args.test_start_year,
-        test_end_year=args.test_end_year,
+        train_through=args.train_through,
+        tune_start=args.tune_start,
+        tune_through=args.tune_through,
+        test_start=args.test_start,
+        test_through=args.test_through,
     )
 
     # Extract X, y
@@ -362,9 +385,9 @@ def train_model(
         "model_task": model.model_task,
         "algorithm": algorithm,
         "target_column": model.target_column,
-        "train_end_year": args.train_end_year,
-        "tune_end_year": args.tune_end_year,
-        "test_end_year": args.test_end_year,
+        "train_through": args.train_through,
+        "tune_through": args.tune_through,
+        "test_through": args.test_through,
         "use_embeddings": args.use_embeddings,
     }
 

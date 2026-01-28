@@ -7,7 +7,7 @@ from src.models.training import load_data
 from src.utils.config import load_config
 
 config = load_config()
-df = load_data(end_train_year=config.years.train_end)
+df = load_data(end_train_year=config.years.training.train_through)
 
 descriptions = df["description"].fill_null("").to_list()
 

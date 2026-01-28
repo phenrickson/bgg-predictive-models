@@ -101,7 +101,7 @@ def main():
     logger.info(f"  Vocab size: {model_info.get('vocab_size')}")
 
     # Load games data
-    end_year = args.end_year or config.years.score_end
+    end_year = args.end_year or config.years.score.end
     logger.info(f"Loading games data (up to year {end_year})...")
 
     if args.local_data:

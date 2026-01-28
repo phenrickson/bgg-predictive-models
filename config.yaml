@@ -27,12 +27,15 @@ ml_project:
 default_environment: dev
 
 # Year Configuration
+# All years are inclusive (e.g., train_through: 2021 means include 2021)
 years:
   current: 2026
-  train_end: 2022  # current - 4
-  tune_end: 2023   # train_end + 1
-  test_start: 2024 # tune_end + 1
-  test_end: 2024   # test_start
+  training:
+    train_through: 2021  # train on data through this year (inclusive)
+    tune_start: 2022
+    tune_through: 2023
+    test_start: 2024
+    test_through: 2024
   eval:
     start: 2018
     end: 2024
@@ -43,8 +46,9 @@ years:
 # Model Configuration
 models:
   hurdle:
-    type: lightgbm
-    experiment_name: lightgbm-hurdle
+    type: ridge
+    experiment_name: ridge-hurdle
+    use_embeddings: true
   complexity:
     type: catboost
     experiment_name: catboost-complexity
@@ -60,39 +64,9 @@ models:
     experiment_name: ridge-users_rated
     min_ratings: 0
 
-# evaluate models over time
+# Evaluate models over time
 evaluate:
-  # Available model types (like Makefile variables)
-  model_types:
-    linear: linear
-    ridge: ridge
-    logistic: logistic
-    catboost: catboost
-    lightgbm: lightgbm
-    lightgbm_linear: lightgbm_linear
-  
-  # Default model assignments 
-  defaults:
-    hurdle_model: lightgbm      
-    complexity_model: catboost
-    rating_model: catboost
-    users_rated_model: ridge
-  
-  # Model-specific settings (like individual Makefile targets)
-  settings:
-    hurdle:
-      # No special settings for hurdle
-    complexity:
-      use_sample_weights: true
-    rating:
-      use_sample_weights: true
-      min_ratings: 5
-    users_rated:
-      min_ratings: 0
-  
-  # Evaluation-specific settings
   output_dir: "./models/experiments"
-  min_ratings_threshold: 0
 
 # Embeddings Configuration
 embeddings:

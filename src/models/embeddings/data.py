@@ -49,7 +49,7 @@ class EmbeddingDataLoader:
             DataFrame with game features and predicted_complexity.
         """
         if end_year is None:
-            end_year = self.config.years.test_end
+            end_year = self.config.years.training.test_through
 
         # Query that joins games_features with latest complexity predictions
         # Complexity predictions are in bgg-data-warehouse.predictions

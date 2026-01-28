@@ -40,13 +40,13 @@ def generate_time_splits(
     logger.info(f"Generating time splits from {start_year} to {end_year}")
 
     splits = []
-    for train_end_year in range(start_year, end_year):
+    for train_through in range(start_year, end_year):
         split_config = {
-            "train_end_year": train_end_year,
-            "tune_start_year": train_end_year,
-            "tune_end_year": train_end_year + 1,
-            "test_start_year": train_end_year + prediction_window,
-            "test_end_year": train_end_year + prediction_window + 1,
+            "train_through": train_through,
+            "tune_start": train_through,
+            "tune_through": train_through + 1,
+            "test_start": train_through + prediction_window,
+            "test_through": train_through + prediction_window + 1,
         }
         splits.append(split_config)
 
@@ -180,7 +180,7 @@ def run_time_based_evaluation(
     df = load_data(
         local_data_path=local_data_path,
         min_ratings=min_ratings,
-        end_train_year=max(split["test_end_year"] for split in splits),
+        end_train_year=max(split["test_through"] for split in splits),
     )
 
     # Iterate through splits
@@ -190,16 +190,16 @@ def run_time_based_evaluation(
         # Create data splits
         train_df, tune_df, test_df = create_data_splits(
             df,
-            train_end_year=split_config["train_end_year"],
-            tune_start_year=split_config["tune_start_year"],
-            tune_end_year=split_config["tune_end_year"],
-            test_start_year=split_config["test_start_year"],
-            test_end_year=split_config["test_end_year"],
+            train_through=split_config["train_through"],
+            tune_start=split_config["tune_start"],
+            tune_through=split_config["tune_through"],
+            test_start=split_config["test_start"],
+            test_through=split_config["test_through"],
         )
 
         # Experiment naming
         experiment_base = (
-            f"{split_config['train_end_year']}_{split_config['test_start_year']}"
+            f"{split_config['train_through']}_{split_config['test_start']}"
         )
 
         # Run individual model training scripts
@@ -219,11 +219,11 @@ def run_time_based_evaluation(
                 sys.executable,
                 "-m",
                 module_path,
-                f"--train-end-year={split_config['train_end_year']}",
-                f"--tune-start-year={split_config['tune_start_year']}",
-                f"--tune-end-year={split_config['tune_end_year']}",
-                f"--test-start-year={split_config['test_start_year']}",
-                f"--test-end-year={split_config['test_end_year']}",
+                f"--train-through={split_config['train_through']}",
+                f"--tune-start={split_config['tune_start']}",
+                f"--tune-through={split_config['tune_through']}",
+                f"--test-start={split_config['test_start']}",
+                f"--test-through={split_config['test_through']}",
                 f"--experiment={model_name}_{experiment_base}",
                 f"--output-dir={output_dir}",
             ]
@@ -276,7 +276,7 @@ def run_time_based_evaluation(
                     finalize_model(
                         model_type=model_name,
                         experiment_name=f"{model_name}_{experiment_base}",
-                        end_year=split_config["train_end_year"],
+                        end_year=split_config["train_through"],
                     )
                     logger.info(f"{model_name.capitalize()} Model Finalized")
                 except Exception as finalize_error:
@@ -303,8 +303,8 @@ def run_time_based_evaluation(
                 f"--users-rated=users_rated_{experiment_base}",
                 f"--experiment=geek_rating_{experiment_base}",
                 f"--output={os.path.join('geek_rating', f'geek_rating_{experiment_base}', 'v1', 'test_predictions.parquet')}",
-                f"--start-year={split_config['test_start_year']}",
-                f"--end-year={split_config['test_end_year']}",
+                f"--start-year={split_config['test_start']}",
+                f"--end-year={split_config['test_through']}",
                 f"--local-complexity-path={complexity_local_path}",
             ]
 

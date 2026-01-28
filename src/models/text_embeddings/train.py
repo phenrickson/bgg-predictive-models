@@ -77,7 +77,7 @@ def main():
     logger.info("Loading game data...")
     df = load_data(
         local_data_path=args.local_data,
-        end_train_year=config.years.train_end,
+        end_train_year=config.years.training.train_through,
     )
 
     # Get descriptions

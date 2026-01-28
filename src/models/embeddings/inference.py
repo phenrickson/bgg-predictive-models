@@ -131,7 +131,7 @@ class EmbeddingGenerator:
         # Load base features
         df = load_data(
             local_data_path=local_data_path,
-            end_train_year=years.score_end,
+            end_train_year=years.score.end,
         )
 
         # Load complexity predictions
