@@ -46,8 +46,8 @@ years:
 # Model Configuration
 models:
   hurdle:
-    type: ridge
-    experiment_name: ridge-hurdle
+    type: logistic
+    experiment_name: logistic-hurdle
     use_embeddings: true
   complexity:
     type: catboost
