@@ -162,9 +162,9 @@ Examples:
 
         # Determine year range
         start_year = (
-            args.start_year if args.start_year is not None else config.years.eval_start
+            args.start_year if args.start_year is not None else config.years.eval.start
         )
-        end_year = args.end_year if args.end_year is not None else config.years.eval_end
+        end_year = args.end_year if args.end_year is not None else config.years.eval.end
 
         # Determine output directory
         output_dir = args.output_dir if args.output_dir else "./models/experiments"

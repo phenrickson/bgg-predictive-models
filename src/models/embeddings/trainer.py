@@ -667,17 +667,17 @@ class EmbeddingTrainer:
         # Load ALL data from BigQuery (no min_ratings filter)
         # This allows us to embed any game, even those with few ratings
         logger.info("Loading embedding data from BigQuery...")
-        df = self.load_embedding_data(end_year=years.test_end, min_ratings=0)
+        df = self.load_embedding_data(end_year=years.training.test_through, min_ratings=0)
 
         # Create time-based splits
         logger.info("Creating data splits...")
         train_df, tune_df, test_df = create_data_splits(
             df,
-            train_end_year=years.train_end,
-            tune_start_year=years.train_end,
-            tune_end_year=years.tune_end,
-            test_start_year=years.test_start,
-            test_end_year=years.test_end,
+            train_through=years.training.train_through,
+            tune_start=years.training.train_through,
+            tune_through=years.training.tune_through,
+            test_start=years.training.test_start,
+            test_through=years.training.test_through,
         )
 
         # Filter training and tune data by min_ratings
@@ -778,10 +778,10 @@ class EmbeddingTrainer:
             metadata={
                 "algorithm": algorithm,
                 "embedding_dim": embedding_dim,
-                "train_end_year": years.train_end,
-                "tune_end_year": years.tune_end,
-                "test_start_year": years.test_start,
-                "test_end_year": years.test_end,
+                "train_through": years.training.train_through,
+                "tune_through": years.training.tune_through,
+                "test_start": years.training.test_start,
+                "test_through": years.training.test_through,
                 "model_type": "embeddings",
                 "target": "game_embedding",
                 "min_ratings": min_ratings,
@@ -794,11 +794,11 @@ class EmbeddingTrainer:
             config={
                 "algorithm_params": algorithm_params,
                 "data_splits": {
-                    "train_end_year": years.train_end,
-                    "tune_start_year": years.train_end,
-                    "tune_end_year": years.tune_end,
-                    "test_start_year": years.test_start,
-                    "test_end_year": years.test_end,
+                    "train_through": years.training.train_through,
+                    "tune_start": years.training.train_through,
+                    "tune_through": years.training.tune_through,
+                    "test_start": years.training.test_start,
+                    "test_through": years.training.test_through,
                 },
                 "feature_config": {
                     "transformer": "EmbeddingTransformer",

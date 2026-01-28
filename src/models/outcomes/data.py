@@ -331,21 +331,21 @@ def _expand_embedding_array(df: pd.DataFrame) -> pd.DataFrame:
 
 def create_data_splits(
     df: pl.DataFrame,
-    train_end_year: int,
-    tune_start_year: int,
-    tune_end_year: int,
-    test_start_year: int,
-    test_end_year: int,
+    train_through: int,
+    tune_start: int,
+    tune_through: int,
+    test_start: int,
+    test_through: int,
 ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """Create time-based data splits for model training.
 
     Args:
         df: Input dataframe.
-        train_end_year: Exclusive end year for training data.
-        tune_start_year: Inclusive start year for tuning data.
-        tune_end_year: Inclusive end year for tuning data.
-        test_start_year: Inclusive start year for test data.
-        test_end_year: Inclusive end year for test data.
+        train_through: Inclusive end year for training data.
+        tune_start: Inclusive start year for tuning data.
+        tune_through: Inclusive end year for tuning data.
+        test_start: Inclusive start year for test data.
+        test_through: Inclusive end year for test data.
 
     Returns:
         Tuple of (train_df, tune_df, test_df).
@@ -353,12 +353,12 @@ def create_data_splits(
     Raises:
         ValueError: If any split is empty.
     """
-    validation_window = tune_end_year - tune_start_year + 1
-    test_window = test_end_year - test_start_year + 1
+    validation_window = tune_through - tune_start + 1
+    test_window = test_through - test_start + 1
 
     train_df, tune_df, test_df = time_based_split(
         df=df,
-        train_end_year=train_end_year,
+        train_through=train_through,
         prediction_window=validation_window,
         test_window=test_window,
         time_col="year_published",
@@ -366,22 +366,22 @@ def create_data_splits(
     )
 
     if len(train_df) == 0:
-        raise ValueError(f"Training set is empty. Check train_end_year={train_end_year}")
+        raise ValueError(f"Training set is empty. Check train_through={train_through}")
     if len(tune_df) == 0:
         raise ValueError(
-            f"Tuning set is empty. Check tune years: {tune_start_year}-{tune_end_year}"
+            f"Tuning set is empty. Check tune years: {tune_start}-{tune_through}"
         )
     if len(test_df) == 0:
         raise ValueError(
-            f"Test set is empty. Check test years: {test_start_year}-{test_end_year}"
+            f"Test set is empty. Check test years: {test_start}-{test_through}"
         )
 
-    logger.info(f"Training data: {len(train_df)} rows (years < {train_end_year})")
+    logger.info(f"Training data: {len(train_df)} rows (years through {train_through})")
     logger.info(
-        f"Tuning data: {len(tune_df)} rows (years {tune_start_year}-{tune_end_year})"
+        f"Tuning data: {len(tune_df)} rows (years {tune_start}-{tune_through})"
     )
     logger.info(
-        f"Test data: {len(test_df)} rows (years {test_start_year}-{test_end_year})"
+        f"Test data: {len(test_df)} rows (years {test_start}-{test_through})"
     )
 
     return train_df, tune_df, test_df

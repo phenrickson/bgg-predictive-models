@@ -3,40 +3,6 @@
 # Default settings
 RAW_DIR := data/raw
 
-## set years for training, tuning, testing
-CURRENT_YEAR = 2026
-TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
-TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
-TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
-TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
-
-# years for evaluation over time
-EVAL_START_YEAR = $(shell expr $(CURRENT_YEAR) -5)
-EVAL_END_YEAR = $(shell expr $(EVAL_START_YEAR) +4)
-
-# set years for scoring (including current and previous year)
-SCORE_START_YEAR = $(shell expr $(CURRENT_YEAR) - 1)
-SCORE_END_YEAR = $(shell expr $(CURRENT_YEAR) + 4)
-
-# show years
-.PHONY: years
-years: 
-	@echo "=== Year Configuration for Model Training ==="
-	@echo "Current Year: $(CURRENT_YEAR)"
-	@echo ""
-	@echo "=== Dataset Year Ranges ==="
-	@echo "Training Data:   [earliest] to $(TRAIN_END_YEAR) (exclusive)"
-	@echo "Tuning Data:     $(TRAIN_END_YEAR) to $(TUNE_END_YEAR) (inclusive)"
-	@echo "Testing Data:    $(TEST_START_YEAR) to $(TEST_END_YEAR) (inclusive)"
-	@echo ""
-	@echo "=== Usage in Model Scripts ==="
-	@echo "• Training uses all data before $(TRAIN_END_YEAR)"
-	@echo "• Tuning/validation uses data from $(TRAIN_END_YEAR) to $(TUNE_END_YEAR)"
-	@echo "• Testing uses data from $(TEST_START_YEAR) to $(TEST_END_YEAR)"
-	@echo "• Time-based evaluation uses rolling windows with these ranges"
-
-
-
 .PHONY: help clean all
 
 help:  ## Show this help message
@@ -103,12 +69,6 @@ test:
 data: 
 	uv run -m src.data.get_raw_data
 
-.PHONY: create-view
-create-view:
-	uv run -m src.data.create_view
-
-
-
 # model types
 LINEAR ?= linear
 RIDGE ?= ridge
@@ -118,10 +78,6 @@ LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
 # set defaults
-HURDLE_MODEL = $(LIGHTGBM)
-COMPLEXITY_MODEL = $(CATBOOST)
-RATING_MODEL ?= $(CATBOOST)
-USERS_RATED_MODEL ?= $(RIDGE)
 
 ## train all model candidates and predict geek rating
 .PHONY: models
@@ -139,27 +95,21 @@ users_rated: train_users_rated finalize_users_rated score_users_rated
 
 ## train individual models
 # hurdle model
-HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
+
 train_hurdle:
 	uv run -m src.pipeline.train \
-	--model hurdle \
-	--algorithm $(HURDLE_MODEL) \
-	--experiment $(HURDLE_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+	--model hurdle
 
 finalize_hurdle:
 	uv run -m src.pipeline.finalize \
 	--model hurdle \
-	--experiment $(HURDLE_CANDIDATE)
+	--experiment
+
+hurdle: train_hurdle finalize_hurdle
 
 score_hurdle:
 	uv run -m src.pipeline.score \
-	--model-type hurdle \
-	--experiment $(HURDLE_CANDIDATE)
+	--model-type hurdle
 
 ## complexity model
 COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity

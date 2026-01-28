@@ -51,12 +51,12 @@ class TrainingConfig:
     sample_weight_column: Optional[str] = None
     param_grid: Dict[str, List[Any]] = field(default_factory=dict)
 
-    # Year-based splits
-    train_end_year: int = 2022
-    tune_start_year: int = 2022
-    tune_end_year: int = 2023
-    test_start_year: int = 2024
-    test_end_year: int = 2025
+    # Year-based splits (all years are inclusive)
+    train_through: int = 2021
+    tune_start: int = 2022
+    tune_through: int = 2023
+    test_start: int = 2024
+    test_through: int = 2024
 
 
 class Predictor(Protocol):

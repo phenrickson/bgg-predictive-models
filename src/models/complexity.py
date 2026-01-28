@@ -58,31 +58,31 @@ def parse_arguments() -> argparse.Namespace:
         description="Train/Tune/Test Complexity Regression Model"
     )
     parser.add_argument(
-        "--train-end-year",
+        "--train-through",
         type=int,
         default=2022,
-        help="End year for training (exclusive)",
+        help="End year for training (inclusive)",
     )
     parser.add_argument(
-        "--tune-start-year",
+        "--tune-start",
         type=int,
-        default=2022,
+        default=2023,
         help="Start year for tuning (inclusive)",
     )
     parser.add_argument(
-        "--tune-end-year",
+        "--tune-through",
         type=int,
         default=2023,
         help="End year for tuning (inclusive)",
     )
     parser.add_argument(
-        "--test-start-year",
+        "--test-start",
         type=int,
         default=2024,
         help="Start year for testing (inclusive)",
     )
     parser.add_argument(
-        "--test-end-year",
+        "--test-through",
         type=int,
         default=2025,
         help="End year for testing (inclusive)",
@@ -147,19 +147,19 @@ def parse_arguments() -> argparse.Namespace:
     args = parser.parse_args()
 
     # Validate year ranges
-    if args.tune_start_year != args.train_end_year:
+    if args.tune_start != args.train_through + 1:
         raise ValueError(
-            f"tune_start_year ({args.tune_start_year}) must equal train_end_year ({args.train_end_year})"
+            f"tune_start ({args.tune_start}) must equal train_through + 1 ({args.train_through + 1})"
         )
 
     if not (
-        args.tune_start_year
-        <= args.tune_end_year
-        < args.test_start_year
-        <= args.test_end_year
+        args.tune_start
+        <= args.tune_through
+        < args.test_start
+        <= args.test_through
     ):
         raise ValueError(
-            "Invalid year ranges. Must satisfy: tune_start <= tune_end < test_start <= test_end"
+            "Invalid year ranges. Must satisfy: tune_start <= tune_through < test_start <= test_through"
         )
 
     # Validate quantile argument
@@ -180,18 +180,18 @@ def main():
     df = load_data(
         local_data_path=args.local_data,
         min_weights=args.min_weights,
-        end_train_year=args.test_end_year,
+        end_train_year=args.test_through,
     )
 
     # filtered for training/evaluation
     logger.info(f"Training on games with at least {args.min_weights} weights")
     train_df, tune_df, test_df = create_data_splits(
         df,
-        train_end_year=args.train_end_year,
-        tune_start_year=args.tune_start_year,
-        tune_end_year=args.tune_end_year,
-        test_start_year=args.test_start_year,
-        test_end_year=args.test_end_year,
+        train_through=args.train_through,
+        tune_start=args.tune_start,
+        tune_through=args.tune_through,
+        test_start=args.test_start,
+        test_through=args.test_through,
     )
 
     # Get X, y splits
@@ -301,11 +301,11 @@ def main():
 
     # Create experiment metadata
     experiment_metadata = {
-        "train_end_year_exclusive": args.train_end_year,
-        "tune_start_year": args.tune_start_year,
-        "tune_end_year": args.tune_end_year,
-        "test_start_year": args.test_start_year,
-        "test_end_year": args.test_end_year,
+        "train_through": args.train_through,
+        "tune_start": args.tune_start,
+        "tune_through": args.tune_through,
+        "test_start": args.test_start,
+        "test_through": args.test_through,
         "model_type": "complexity_regression",
         "target": "complexity",
         "min_weights": args.min_weights,
@@ -350,11 +350,11 @@ def main():
                 "include_base_numeric": True,
             },
             "data_splits": {
-                "train_end_year": args.train_end_year,
-                "tune_start_year": args.tune_start_year,
-                "tune_end_year": args.tune_end_year,
-                "test_start_year": args.test_start_year,
-                "test_end_year": args.test_end_year,
+                "train_through": args.train_through,
+                "tune_start": args.tune_start,
+                "tune_through": args.tune_through,
+                "test_start": args.test_start,
+                "test_through": args.test_through,
             },
             "target": "complexity",
             "target_type": "regression",
@@ -395,7 +395,7 @@ def main():
 
         # retrieve full data for predeictions
         full_df = load_data(
-            local_data_path=args.local_data, end_train_year=args.test_end_year
+            local_data_path=args.local_data, end_train_year=args.test_through
         )
 
         # Predict complexity for the entire dataset

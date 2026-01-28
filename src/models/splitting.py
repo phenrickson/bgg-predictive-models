@@ -7,7 +7,7 @@ import polars as pl
 
 def time_based_split(
     df: pl.DataFrame,
-    train_end_year: int,
+    train_through: int,
     prediction_window: int = 2,
     test_window: Optional[int] = None,
     time_col: str = "year_published",
@@ -22,7 +22,7 @@ def time_based_split(
 
     Args:
         df: Full dataset as Polars DataFrame
-        train_end_year: Year to end training data (exclusive)
+        train_through: Last year to include in training data (inclusive)
         prediction_window: Number of years for validation window
         test_window: Optional number of years for test window after validation
         time_col: Column name containing the time information
@@ -36,18 +36,19 @@ def time_based_split(
         If return_dict is False and test_window is provided:
             (train_df, val_df, test_df)
     """
-    # Define training period (all data before train_end_year)
-    train_df = df.filter(pl.col(time_col) < train_end_year)
+    # Define training period (all data through train_through, inclusive)
+    train_df = df.filter(pl.col(time_col) <= train_through)
 
-    # Define validation period
+    # Define validation period (starts after train_through)
+    val_start = train_through + 1
     val_df = df.filter(
-        (pl.col(time_col) >= train_end_year)
-        & (pl.col(time_col) < train_end_year + prediction_window)
+        (pl.col(time_col) >= val_start)
+        & (pl.col(time_col) < val_start + prediction_window)
     )
 
     # Add test set if requested
     if test_window:
-        test_start_year = train_end_year + prediction_window
+        test_start_year = val_start + prediction_window
         test_df = df.filter(
             (pl.col(time_col) >= test_start_year)
             & (pl.col(time_col) < test_start_year + test_window)
@@ -79,7 +80,7 @@ def time_based_cross_validation_splits(
 
     Args:
         df: Full dataset as Polars DataFrame
-        start_year: First year to start training
+        start_year: First year to use as train_through
         end_year: Last year to predict
         prediction_window: Number of years for validation window
         time_col: Column name containing the time information
@@ -87,17 +88,17 @@ def time_based_cross_validation_splits(
 
     Returns:
         If return_dict is True:
-            Dictionary mapping each train_end_year to its corresponding data splits as dictionaries
+            Dictionary mapping each train_through year to its corresponding data splits as dictionaries
         If return_dict is False:
-            Dictionary mapping each train_end_year to (train_df, val_df) tuples
+            Dictionary mapping each train_through year to (train_df, val_df) tuples
     """
     splits = {}
 
     # Iterate through time periods
-    for train_end_year in range(start_year, end_year):
-        splits[train_end_year] = time_based_split(
+    for train_through in range(start_year, end_year):
+        splits[train_through] = time_based_split(
             df=df,
-            train_end_year=train_end_year,
+            train_through=train_through,
             prediction_window=prediction_window,
             time_col=time_col,
             return_dict=return_dict,

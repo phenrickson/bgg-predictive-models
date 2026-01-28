@@ -24,12 +24,14 @@ def load_training_config() -> Dict[str, Any]:
     config = load_config()
 
     # Convert config to format expected by training functions
+    # All years are inclusive (e.g., train_through=2021 means include 2021)
     return {
         "current_year": config.years.current,
-        "train_end_year": config.years.train_end,
-        "tune_end_year": config.years.tune_end,
-        "test_start_year": config.years.test_start,
-        "test_end_year": config.years.test_end,
+        "train_through": config.years.training.train_through,
+        "tune_start": config.years.training.tune_start,
+        "tune_through": config.years.training.tune_through,
+        "test_start": config.years.training.test_start,
+        "test_through": config.years.training.test_through,
         "models": {
             "hurdle": config.models["hurdle"].type,
             "complexity": config.models["complexity"].type,
@@ -83,16 +85,16 @@ def train_hurdle(config: Dict[str, Any]) -> None:
         config["experiments"]["hurdle"],
         "--model",
         config["models"]["hurdle"],
-        "--train-end-year",
-        str(config["train_end_year"]),
-        "--tune-start-year",
-        str(config["train_end_year"]),
-        "--tune-end-year",
-        str(config["tune_end_year"]),
-        "--test-start-year",
-        str(config["test_start_year"]),
-        "--test-end-year",
-        str(config["test_end_year"]),
+        "--train-through",
+        str(config["train_through"]),
+        "--tune-start",
+        str(config["tune_start"]),
+        "--tune-through",
+        str(config["tune_through"]),
+        "--test-start",
+        str(config["test_start"]),
+        "--test-through",
+        str(config["test_through"]),
     ]
     run_command(cmd, "Training hurdle model")
 
@@ -138,16 +140,16 @@ def train_complexity(config: Dict[str, Any]) -> None:
         config["models"]["complexity"],
         "--experiment",
         config["experiments"]["complexity"],
-        "--train-end-year",
-        str(config["train_end_year"]),
-        "--tune-start-year",
-        str(config["train_end_year"]),
-        "--tune-end-year",
-        str(config["tune_end_year"]),
-        "--test-start-year",
-        str(config["test_start_year"]),
-        "--test-end-year",
-        str(config["test_end_year"]),
+        "--train-through",
+        str(config["train_through"]),
+        "--tune-start",
+        str(config["tune_start"]),
+        "--tune-through",
+        str(config["tune_through"]),
+        "--test-start",
+        str(config["test_start"]),
+        "--test-through",
+        str(config["test_through"]),
     ]
 
     # Add use-sample-weights if specified
@@ -202,16 +204,16 @@ def train_rating(config: Dict[str, Any]) -> None:
         config["paths"]["complexity_predictions"],
         "--experiment",
         config["experiments"]["rating"],
-        "--train-end-year",
-        str(config["train_end_year"]),
-        "--tune-start-year",
-        str(config["train_end_year"]),
-        "--tune-end-year",
-        str(config["tune_end_year"]),
-        "--test-start-year",
-        str(config["test_start_year"]),
-        "--test-end-year",
-        str(config["test_end_year"]),
+        "--train-through",
+        str(config["train_through"]),
+        "--tune-start",
+        str(config["tune_start"]),
+        "--tune-through",
+        str(config["tune_through"]),
+        "--test-start",
+        str(config["test_start"]),
+        "--test-through",
+        str(config["test_through"]),
     ]
 
     # Add use-sample-weights if specified
@@ -275,16 +277,16 @@ def train_users_rated(config: Dict[str, Any]) -> None:
         config["experiments"]["users_rated"],
         "--min-ratings",
         str(config["model_settings"]["users_rated"]["min_ratings"]),
-        "--train-end-year",
-        str(config["train_end_year"]),
-        "--tune-start-year",
-        str(config["train_end_year"]),
-        "--tune-end-year",
-        str(config["tune_end_year"]),
-        "--test-start-year",
-        str(config["test_start_year"]),
-        "--test-end-year",
-        str(config["test_end_year"]),
+        "--train-through",
+        str(config["train_through"]),
+        "--tune-start",
+        str(config["tune_start"]),
+        "--tune-through",
+        str(config["tune_through"]),
+        "--test-start",
+        str(config["test_start"]),
+        "--test-through",
+        str(config["test_through"]),
     ]
     run_command(cmd, "Training users_rated model")
 
@@ -334,9 +336,9 @@ def train_geek_rating(config: Dict[str, Any]) -> None:
         "-m",
         "src.models.geek_rating",
         "--start-year",
-        str(config["test_start_year"]),
+        str(config["test_start"]),
         "--end-year",
-        str(config["test_end_year"]),
+        str(config["test_through"]),
         "--hurdle",
         config["experiments"]["hurdle"],
         "--complexity",
@@ -361,12 +363,12 @@ def main():
         config = load_training_config()
         logger.info("Loaded configuration from config.yaml")
         logger.info(f"Current year: {config['current_year']}")
-        logger.info(f"Training period: up to {config['train_end_year']}")
+        logger.info(f"Training period: through {config['train_through']}")
         logger.info(
-            f"Tuning period: {config['train_end_year']} to {config['tune_end_year']}"
+            f"Tuning period: {config['tune_start']} through {config['tune_through']}"
         )
         logger.info(
-            f"Testing period: {config['test_start_year']} to {config['test_end_year']}"
+            f"Testing period: {config['test_start']} through {config['test_through']}"
         )
 
         # Training models

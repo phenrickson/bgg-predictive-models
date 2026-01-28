@@ -20,10 +20,10 @@ def sample_config():
     """Sample configuration for testing"""
     return {
         "current_year": 2025,
-        "train_end_year": 2021,
-        "tune_end_year": 2022,
-        "test_start_year": 2023,
-        "test_end_year": 2023,
+        "train_through": 2021,
+        "tune_through": 2022,
+        "test_start": 2023,
+        "test_through": 2023,
         "models": {
             "hurdle": "lightgbm",
             "complexity": "catboost",
