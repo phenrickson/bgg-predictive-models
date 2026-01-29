@@ -215,7 +215,11 @@ def load_game_data(
 def load_games_for_main_scoring(
     start_year: int,
     end_year: int,
-    max_games: int = 50000
+    max_games: int = 50000,
+    hurdle_model_version: Optional[int] = None,
+    complexity_model_version: Optional[int] = None,
+    rating_model_version: Optional[int] = None,
+    users_rated_model_version: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Load games that need main predictions (hurdle, rating, users_rated).
@@ -223,11 +227,16 @@ def load_games_for_main_scoring(
     Returns games that are:
     - In the year range AND
     - Either never scored OR have changed features since last scoring
+      OR have been scored with a different model version
 
     Args:
         start_year: Start year for predictions (inclusive)
         end_year: End year for predictions (exclusive)
         max_games: Maximum number of games to load
+        hurdle_model_version: Target hurdle model version (rescore if different)
+        complexity_model_version: Target complexity model version (rescore if different)
+        rating_model_version: Target rating model version (rescore if different)
+        users_rated_model_version: Target users_rated model version (rescore if different)
 
     Returns:
         DataFrame with game features for scoring
@@ -239,6 +248,21 @@ def load_games_for_main_scoring(
     ml_project = config.ml_project_id
     dw_project = config.data_warehouse.project_id
 
+    # Build version mismatch conditions
+    version_checks = []
+    if hurdle_model_version is not None:
+        version_checks.append(f"lp.hurdle_model_version != {hurdle_model_version}")
+    if complexity_model_version is not None:
+        version_checks.append(f"lp.complexity_model_version != {complexity_model_version}")
+    if rating_model_version is not None:
+        version_checks.append(f"lp.rating_model_version != {rating_model_version}")
+    if users_rated_model_version is not None:
+        version_checks.append(f"lp.users_rated_model_version != {users_rated_model_version}")
+
+    version_condition = ""
+    if version_checks:
+        version_condition = "OR " + "\n          OR ".join(version_checks)
+
     where_clause = f"""
     game_id IN (
       SELECT gf.game_id
@@ -249,6 +273,10 @@ def load_games_for_main_scoring(
         SELECT
           game_id,
           score_ts,
+          hurdle_model_version,
+          complexity_model_version,
+          rating_model_version,
+          users_rated_model_version,
           ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
         FROM `{ml_project}.raw.ml_predictions_landing`
       ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
@@ -259,6 +287,7 @@ def load_games_for_main_scoring(
         AND (
           lp.game_id IS NULL
           OR fh.last_updated > lp.score_ts
+          {version_condition}
         )
       LIMIT {max_games}
     )
@@ -316,7 +345,8 @@ def predict_game_characteristics(
 
 def load_games_for_complexity_scoring(
     game_ids: Optional[List[int]] = None,
-    max_games: int = 25000
+    max_games: int = 25000,
+    complexity_model_version: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Load games that need complexity predictions.
@@ -325,10 +355,12 @@ def load_games_for_complexity_scoring(
     Otherwise, returns games that are:
     - New (never scored)
     - Have changed features (detected via game_features_hash.last_updated)
+    - Have been scored with a different model version
 
     Args:
         game_ids: Optional list of specific game IDs to load
         max_games: Maximum number of games to load (default: 25000)
+        complexity_model_version: Target model version (rescore if different)
     """
     if game_ids:
         # Load specific games by ID using existing helper
@@ -341,6 +373,11 @@ def load_games_for_complexity_scoring(
         data_warehouse_config = config.get_data_warehouse_config()
         loader = BGGDataLoader(data_warehouse_config)
 
+        # Build version mismatch condition
+        version_condition = ""
+        if complexity_model_version is not None:
+            version_condition = f"OR lp.complexity_model_version != {complexity_model_version}"
+
         where_clause = f"""
         game_id IN (
           SELECT gf.game_id
@@ -351,6 +388,7 @@ def load_games_for_complexity_scoring(
             SELECT
               game_id,
               score_ts,
+              complexity_model_version,
               ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
             FROM `bgg-predictive-models.raw.complexity_predictions`
           ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
@@ -359,6 +397,7 @@ def load_games_for_complexity_scoring(
             AND (
               lp.game_id IS NULL
               OR fh.last_updated > lp.score_ts
+              {version_condition}
             )
           LIMIT {max_games}
         )
@@ -488,7 +527,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             df_pandas = load_games_for_main_scoring(
                 request.start_year or 2024,
                 request.end_year or 2029,
-                max_games=request.max_games or 50000
+                max_games=request.max_games or 50000,
+                hurdle_model_version=hurdle_registration["version"],
+                complexity_model_version=complexity_registration["version"],
+                rating_model_version=rating_registration["version"],
+                users_rated_model_version=users_rated_registration["version"],
             )
             if len(df_pandas) == 0:
                 logger.info("No games need scoring - all features unchanged")
@@ -725,7 +768,8 @@ async def predict_complexity_endpoint(request: PredictComplexityRequest):
         # Load games needing predictions
         games_df = load_games_for_complexity_scoring(
             game_ids=request.game_ids,
-            max_games=request.max_games
+            max_games=request.max_games,
+            complexity_model_version=complexity_registration["version"],
         )
 
         if len(games_df) == 0:

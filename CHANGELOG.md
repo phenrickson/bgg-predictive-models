@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Scoring Service Model Version Detection**: Added model version checking to change detection logic
+  - Games are now rescored when deployed model versions differ from the versions used for their last predictions
+  - Applies to all 4 prediction models (hurdle, complexity, rating, users_rated)
+  - Matches the existing behavior in the embeddings service
+  - Combined with feature hash checking, ensures games are scored with latest models
+
 - **Pipeline event flow redesign**: Fixed data dependency bug where embeddings used stale complexity predictions
   - Complexity scoring now sends `complexity_complete` event to trigger Dataform
   - Scoring service triggered by `dataform_complexity_ready` (after complexity materialized)
