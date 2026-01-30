@@ -183,7 +183,6 @@ class ModelConfig:
     use_sample_weights: bool = False
     use_embeddings: bool = False
     min_ratings: int = 0
-    predictions_path: Optional[str] = None
 
 
 @dataclass
@@ -234,6 +233,7 @@ class Config:
     data_warehouse: DataWarehouseConfig
     predictions: PredictionsDestinationConfig
     ml_project_id: str
+    predictions_dir: str = "models/experiments/predictions"
     scoring: Optional[ScoringConfig] = None
     embeddings: Optional[EmbeddingConfig] = None
     text_embeddings: Optional[TextEmbeddingConfig] = None
@@ -368,16 +368,22 @@ def load_config(config_path: Optional[str] = None) -> Config:
         score=score_config,
     )
 
-    # Create model configs
+    # Get predictions_dir from models section (not a model itself)
+    models_section = config["models"]
+    predictions_dir = models_section.get("predictions_dir", "models/experiments/predictions")
+
+    # Create model configs (skip non-model entries like predictions_dir)
     model_configs = {}
-    for model_name, model_config in config["models"].items():
+    for model_name, model_config in models_section.items():
+        # Skip non-dict entries (like predictions_dir)
+        if not isinstance(model_config, dict):
+            continue
         model_configs[model_name] = ModelConfig(
             type=model_config["type"],
             experiment_name=model_config["experiment_name"],
             use_sample_weights=model_config.get("use_sample_weights", False),
             use_embeddings=model_config.get("use_embeddings", False),
             min_ratings=model_config.get("min_ratings", 0),
-            predictions_path=model_config.get("predictions_path"),
         )
 
     # Create scoring config if present
@@ -455,6 +461,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         data_warehouse=data_warehouse_config,
         predictions=predictions_config,
         ml_project_id=ml_project_id,
+        predictions_dir=predictions_dir,
         scoring=scoring_config,
         embeddings=embeddings_config,
         text_embeddings=text_embeddings_config,

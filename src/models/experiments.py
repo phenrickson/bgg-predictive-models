@@ -556,6 +556,261 @@ class Experiment:
         predictions_file = self.exp_dir / f"{dataset}_predictions.parquet"
         predictions_df.write_parquet(predictions_file)
 
+    def log_data_split(
+        self,
+        df: pl.DataFrame,
+        dataset: str,
+    ):
+        """Save a data split (train/tune/test) as a parquet artifact.
+
+        Args:
+            df: DataFrame containing the data split
+            dataset: Dataset name (e.g., 'train', 'tune', 'test')
+        """
+        data_dir = self.exp_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        data_file = data_dir / f"{dataset}.parquet"
+        df.write_parquet(data_file)
+
+    def log_threshold_analysis(
+        self,
+        y_true: np.ndarray,
+        y_proba: np.ndarray,
+        thresholds: Optional[np.ndarray] = None,
+    ):
+        """Compute and save metrics across different classification thresholds.
+
+        Args:
+            y_true: True binary labels
+            y_proba: Predicted probabilities for positive class
+            thresholds: Optional array of thresholds to evaluate (default: 0.01 to 0.99)
+        """
+        from sklearn.metrics import (
+            precision_score,
+            recall_score,
+            f1_score,
+            fbeta_score,
+            accuracy_score,
+        )
+
+        if thresholds is None:
+            thresholds = np.arange(0.01, 1.0, 0.01)
+
+        results = []
+        for threshold in thresholds:
+            y_pred = (y_proba >= threshold).astype(int)
+
+            # Skip if all predictions are same class
+            if len(np.unique(y_pred)) == 1:
+                continue
+
+            results.append({
+                "threshold": threshold,
+                "precision": precision_score(y_true, y_pred, zero_division=0),
+                "recall": recall_score(y_true, y_pred, zero_division=0),
+                "f1": f1_score(y_true, y_pred, zero_division=0),
+                "f2": fbeta_score(y_true, y_pred, beta=2.0, zero_division=0),
+                "accuracy": accuracy_score(y_true, y_pred),
+                "predicted_positive_rate": y_pred.mean(),
+                "n_predicted_positive": int(y_pred.sum()),
+                "n_predicted_negative": int((1 - y_pred).sum()),
+            })
+
+        # Save as CSV
+        results_df = pl.DataFrame(results)
+        results_file = self.exp_dir / "threshold_analysis.csv"
+        results_df.write_csv(results_file)
+
+        # Create and save plot
+        self._create_threshold_plot(results_df)
+
+        return results_df
+
+    def _create_threshold_plot(self, results_df: pl.DataFrame):
+        """Create and save threshold analysis plot.
+
+        Args:
+            results_df: DataFrame with threshold analysis results
+        """
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Convert to pandas for plotting
+        df = results_df.to_pandas()
+
+        # Plot 1: Precision, Recall, F1, F2 vs Threshold
+        ax1 = axes[0]
+        ax1.plot(df["threshold"], df["precision"], label="Precision", linewidth=2)
+        ax1.plot(df["threshold"], df["recall"], label="Recall", linewidth=2)
+        ax1.plot(df["threshold"], df["f1"], label="F1", linewidth=2)
+        ax1.plot(df["threshold"], df["f2"], label="F2", linewidth=2, linestyle="--")
+        ax1.set_xlabel("Threshold")
+        ax1.set_ylabel("Score")
+        ax1.set_title("Classification Metrics vs Threshold")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xlim(0, 1)
+        ax1.set_ylim(0, 1)
+
+        # Plot 2: Predicted Positive Rate vs Threshold
+        ax2 = axes[1]
+        ax2.plot(df["threshold"], df["predicted_positive_rate"],
+                 label="Predicted Positive Rate", linewidth=2, color="purple")
+        ax2.axhline(y=df["recall"].iloc[0] if len(df) > 0 else 0.5,
+                    color="gray", linestyle="--", alpha=0.5, label="Actual Positive Rate")
+        ax2.set_xlabel("Threshold")
+        ax2.set_ylabel("Rate")
+        ax2.set_title("Predicted Positive Rate vs Threshold")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xlim(0, 1)
+        ax2.set_ylim(0, 1)
+
+        plt.tight_layout()
+
+        # Save plot
+        plot_file = self.exp_dir / "threshold_analysis.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    def log_calibration_curve(
+        self,
+        y_true: np.ndarray,
+        y_proba: np.ndarray,
+        n_bins: int = 10,
+    ):
+        """Compute and save calibration curve data and plot.
+
+        Args:
+            y_true: True binary labels
+            y_proba: Predicted probabilities for positive class
+            n_bins: Number of bins for calibration curve
+        """
+        from sklearn.calibration import calibration_curve
+
+        # Compute calibration curve
+        prob_true, prob_pred = calibration_curve(y_true, y_proba, n_bins=n_bins)
+
+        # Save calibration data
+        calibration_df = pl.DataFrame({
+            "mean_predicted_probability": prob_pred,
+            "fraction_of_positives": prob_true,
+        })
+        calibration_file = self.exp_dir / "calibration_curve.csv"
+        calibration_df.write_csv(calibration_file)
+
+        # Create and save plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Perfect calibration line
+        ax.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated")
+
+        # Model calibration curve
+        ax.plot(prob_pred, prob_true, "s-", label="Model", linewidth=2, markersize=8)
+
+        ax.set_xlabel("Mean Predicted Probability")
+        ax.set_ylabel("Fraction of Positives")
+        ax.set_title("Calibration Curve")
+        ax.legend(loc="lower right")
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+
+        plt.tight_layout()
+
+        plot_file = self.exp_dir / "calibration_curve.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return calibration_df
+
+    def log_correlation_matrix(
+        self,
+        X_processed: pd.DataFrame,
+        feature_names: Optional[List[str]] = None,
+        max_features: int = 50,
+    ):
+        """Compute and save correlation matrix of processed features.
+
+        Args:
+            X_processed: DataFrame of processed/transformed features
+            feature_names: Optional list of feature names (uses column names if not provided)
+            max_features: Maximum number of features to include in plot (for readability)
+        """
+        import seaborn as sns
+
+        # Use provided feature names or column names
+        if feature_names is None:
+            feature_names = list(X_processed.columns)
+
+        # Compute correlation matrix
+        corr_matrix = X_processed.corr()
+
+        # Save full correlation matrix as CSV
+        corr_file = self.exp_dir / "correlation_matrix.csv"
+        corr_matrix.to_csv(corr_file)
+
+        # For the plot, limit to top features by variance if too many
+        if len(feature_names) > max_features:
+            # Select features with highest variance
+            variances = X_processed.var().sort_values(ascending=False)
+            top_features = variances.head(max_features).index.tolist()
+            plot_corr = corr_matrix.loc[top_features, top_features]
+            title_suffix = f" (top {max_features} by variance)"
+        else:
+            plot_corr = corr_matrix
+            title_suffix = ""
+
+        # Create correlation heatmap
+        n_features = len(plot_corr)
+        fig_size = max(10, min(20, n_features * 0.3))
+        fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+
+        # Use diverging colormap centered at 0
+        sns.heatmap(
+            plot_corr,
+            annot=n_features <= 20,  # Only show annotations for smaller matrices
+            fmt=".2f" if n_features <= 20 else "",
+            cmap="RdBu_r",
+            center=0,
+            vmin=-1,
+            vmax=1,
+            square=True,
+            ax=ax,
+            cbar_kws={"shrink": 0.8},
+        )
+
+        ax.set_title(f"Feature Correlation Matrix{title_suffix}")
+
+        # Rotate labels for readability
+        plt.xticks(rotation=45, ha="right")
+        plt.yticks(rotation=0)
+
+        plt.tight_layout()
+
+        plot_file = self.exp_dir / "correlation_matrix.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        # Also save summary statistics about correlations
+        # Find highly correlated feature pairs (excluding diagonal)
+        high_corr_pairs = []
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i + 1, len(corr_matrix.columns)):
+                corr_val = corr_matrix.iloc[i, j]
+                if abs(corr_val) >= 0.7:
+                    high_corr_pairs.append({
+                        "feature_1": corr_matrix.columns[i],
+                        "feature_2": corr_matrix.columns[j],
+                        "correlation": corr_val,
+                    })
+
+        if high_corr_pairs:
+            high_corr_df = pl.DataFrame(high_corr_pairs).sort("correlation", descending=True)
+            high_corr_file = self.exp_dir / "high_correlations.csv"
+            high_corr_df.write_csv(high_corr_file)
+
+        return corr_matrix
+
     def get_predictions(self, dataset: str) -> pl.DataFrame:
         """Get model predictions, actual values, and identifying information.
 
@@ -907,22 +1162,30 @@ def log_experiment(
         ]:
             if "confusion_matrix" in metrics:
                 cm = metrics["confusion_matrix"]
-                # Ensure the confusion matrix is a 2x2 matrix
-                if isinstance(cm, list):
-                    cm = np.array(cm)
 
-                # Validate confusion matrix shape
-                if cm.shape != (2, 2):
-                    logger.warning(
-                        f"Unexpected confusion matrix shape for {dataset} set: {cm.shape}"
-                    )
-                    continue
+                # Handle dict format from HurdleModel.compute_additional_metrics
+                if isinstance(cm, dict):
+                    true_negatives = cm.get("true_negatives", 0)
+                    false_positives = cm.get("false_positives", 0)
+                    false_negatives = cm.get("false_negatives", 0)
+                    true_positives = cm.get("true_positives", 0)
+                else:
+                    # Ensure the confusion matrix is a 2x2 matrix
+                    if isinstance(cm, list):
+                        cm = np.array(cm)
 
-                # Extract key metrics from confusion matrix
-                true_negatives = int(cm[0, 0])
-                false_positives = int(cm[0, 1])
-                false_negatives = int(cm[1, 0])
-                true_positives = int(cm[1, 1])
+                    # Validate confusion matrix shape
+                    if cm.shape != (2, 2):
+                        logger.warning(
+                            f"Unexpected confusion matrix shape for {dataset} set: {cm.shape}"
+                        )
+                        continue
+
+                    # Extract key metrics from confusion matrix
+                    true_negatives = int(cm[0, 0])
+                    false_positives = int(cm[0, 1])
+                    false_negatives = int(cm[1, 0])
+                    true_positives = int(cm[1, 1])
 
                 # Update metrics to store only key metrics
                 metrics.update(
@@ -961,6 +1224,37 @@ def log_experiment(
                 logger.info(
                     f"    Accuracy: {(true_negatives + true_positives) / total * 100:.2f}%"
                 )
+
+    # Save train/tune/test data splits as artifacts
+    try:
+        if train_df is not None:
+            experiment.log_data_split(train_df, "train")
+            logger.info(f"Saved training data: {len(train_df)} rows")
+        if tune_df is not None:
+            experiment.log_data_split(tune_df, "tune")
+            logger.info(f"Saved tuning data: {len(tune_df)} rows")
+        if test_df is not None:
+            experiment.log_data_split(test_df, "test")
+            logger.info(f"Saved test data: {len(test_df)} rows")
+    except Exception as e:
+        logger.warning(f"Could not save data splits: {e}")
+
+    # For classification models, compute threshold analysis and calibration
+    if is_classifier:
+        try:
+            # Use test set for threshold analysis, fallback to tune set
+            if test_X is not None and test_y is not None:
+                test_proba = pipeline.predict_proba(test_X)[:, 1]
+                experiment.log_threshold_analysis(test_y.values, test_proba)
+                experiment.log_calibration_curve(test_y.values, test_proba)
+                logger.info("Saved threshold analysis and calibration curve (test set)")
+            elif tune_X is not None and tune_y is not None:
+                tune_proba = pipeline.predict_proba(tune_X)[:, 1]
+                experiment.log_threshold_analysis(tune_y.values, tune_proba)
+                experiment.log_calibration_curve(tune_y.values, tune_proba)
+                logger.info("Saved threshold analysis and calibration curve (tune set)")
+        except Exception as e:
+            logger.warning(f"Could not compute threshold analysis: {e}")
 
     # Extract and save feature importance
     try:

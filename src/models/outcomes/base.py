@@ -276,8 +276,10 @@ class TrainableModel(ABC):
                     "complexity_experiment"
                 ) or experiment.metadata.get("config", {}).get("complexity_experiment")
                 if complexity_experiment and not complexity_predictions_path:
+                    from src.utils.config import load_config
+                    config = load_config()
                     complexity_predictions_path = (
-                        f"models/experiments/predictions/{complexity_experiment}.parquet"
+                        f"{config.predictions_dir}/{complexity_experiment}.parquet"
                     )
 
             if complexity_predictions_path is None:

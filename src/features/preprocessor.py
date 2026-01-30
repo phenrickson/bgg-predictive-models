@@ -3,7 +3,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 
-from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer
+from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer, CorrelationFilter
 
 
 def create_bgg_preprocessor(
@@ -17,6 +17,8 @@ def create_bgg_preprocessor(
         "time_per_player",
         "description_word_count",
     ],
+    remove_correlated: bool = False,
+    correlation_threshold: float = 0.95,
     **kwargs,
 ) -> Pipeline:
     """
@@ -39,6 +41,15 @@ def create_bgg_preprocessor(
     log_columns : list, optional
         Columns to apply log transformation to.
         Defaults to ['min_age', 'min_playtime', 'max_playtime'].
+
+    remove_correlated : bool, optional (default=False)
+        Whether to remove features with high correlation. When True, features
+        with absolute correlation above correlation_threshold are dropped.
+
+    correlation_threshold : float, optional (default=0.99)
+        Correlation threshold for removing features. Only used when
+        remove_correlated=True. Features with correlation above this
+        threshold will be dropped.
 
     Returns
     -------
@@ -69,6 +80,12 @@ def create_bgg_preprocessor(
             ),
         ),
     ]
+
+    # Optionally add correlation filter (after imputation, before other transforms)
+    if remove_correlated:
+        pipeline_steps.append(
+            ("correlation_filter", CorrelationFilter(threshold=correlation_threshold))
+        )
 
     # Add additional steps for linear models
     if model_type == "linear":

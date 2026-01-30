@@ -25,7 +25,7 @@ class ComplexityModel(TrainableModel):
     data_config = DataConfig(
         min_weights=5,
         requires_complexity_predictions=False,
-        supports_embeddings=False,  # Complexity doesn't use embeddings
+        supports_embeddings=True,
     )
 
     def __init__(self, training_config: TrainingConfig = None, **kwargs):

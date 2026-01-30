@@ -562,6 +562,16 @@ def save_and_display_results(
     results.write_parquet(str(output_path))
     logger.info(f"Predictions for {experiment_name} saved to {output_path}")
 
+    # For complexity model, also save to predictions_dir for downstream models
+    if model_type == "complexity":
+        from src.utils.config import load_config
+        config = load_config()
+        predictions_dir = Path(config.predictions_dir)
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        downstream_path = predictions_dir / f"{experiment_name}.parquet"
+        results.write_parquet(str(downstream_path))
+        logger.info(f"Complexity predictions also saved to {downstream_path}")
+
     # Also save to GCS if bucket name is configured
     bucket_name = os.getenv("GCS_BUCKET_NAME")
     if bucket_name:
@@ -722,12 +732,17 @@ def main():
         help="Name of experiment with finalized model. Can include model type (e.g., 'rating/full-features')",
     )
     parser.add_argument(
-        "--model-type",
+        "--model",
         default="hurdle",
-        help="Model type directory to search for experiments (default: hurdle)",
+        help="Model type (hurdle, complexity, rating, users_rated)",
     )
     parser.add_argument("--start-year", type=int, help="First year of data to include")
     parser.add_argument("--end-year", type=int, help="Last year of data to include")
+    parser.add_argument(
+        "--all-years",
+        action="store_true",
+        help="Score all data regardless of year (ignores start-year/end-year defaults)",
+    )
     parser.add_argument(
         "--min-ratings",
         type=int,
@@ -746,7 +761,7 @@ def main():
     if args.experiment and "/" in args.experiment:
         model_type, experiment_name = args.experiment.split("/")
     else:
-        model_type = args.model_type
+        model_type = args.model
         experiment_name = args.experiment
 
     # Load complexity predictions if provided
@@ -754,11 +769,19 @@ def main():
     if args.complexity_predictions:
         complexity_predictions = pl.read_parquet(args.complexity_predictions)
 
+    # Handle --all-years flag
+    start_year = args.start_year
+    end_year = args.end_year
+    if args.all_years:
+        # Use sentinel values that will be interpreted as "no filter"
+        start_year = -9999  # Before any game
+        end_year = 9999     # Far future
+
     score_data(
         data_path=args.data,
         experiment_name=experiment_name,
-        start_year=args.start_year,
-        end_year=args.end_year,
+        start_year=start_year,
+        end_year=end_year,
         min_ratings=args.min_ratings,
         output_path=args.output,
         model_type=model_type,

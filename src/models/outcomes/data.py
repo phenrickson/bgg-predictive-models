@@ -24,6 +24,7 @@ def load_data(
     use_embeddings: bool = False,
     complexity_predictions_path: Optional[Union[str, Path]] = None,
     local_data_path: Optional[Union[str, Path]] = None,
+    apply_filters: bool = True,
 ) -> pl.DataFrame:
     """Unified data loader for training and scoring.
 
@@ -42,6 +43,8 @@ def load_data(
         complexity_predictions_path: Path to complexity predictions parquet.
             Required if data_config.requires_complexity_predictions is True.
         local_data_path: Optional path to local parquet file instead of BigQuery.
+        apply_filters: Whether to apply min_ratings/min_weights filters from data_config.
+            Set to False for scoring to predict on all games.
 
     Returns:
         Polars DataFrame with all required features joined.
@@ -49,13 +52,22 @@ def load_data(
     Raises:
         ValueError: If complexity predictions required but not provided.
     """
-    # Load base features
+    # Determine if we should load embeddings
+    load_embeddings = use_embeddings and data_config.supports_embeddings
+    if use_embeddings and not data_config.supports_embeddings:
+        logger.warning(
+            "Embeddings requested but not supported by this model. Skipping."
+        )
+
+    # Load base features (with embeddings if requested)
+    # Only apply min_ratings/min_weights filters if apply_filters is True
     df = _load_base_features(
         local_data_path=local_data_path,
         start_year=start_year,
         end_year=end_year,
-        min_ratings=data_config.min_ratings,
-        min_weights=data_config.min_weights,
+        min_ratings=data_config.min_ratings if apply_filters else None,
+        min_weights=data_config.min_weights if apply_filters else None,
+        use_embeddings=load_embeddings,
     )
     logger.info(f"Loaded base features: {len(df)} rows")
 
@@ -67,15 +79,6 @@ def load_data(
             )
         df = _join_complexity_predictions(df, complexity_predictions_path)
         logger.info(f"After joining complexity predictions: {len(df)} rows")
-
-    # Join embeddings if enabled and supported
-    if use_embeddings and data_config.supports_embeddings:
-        df = _join_embeddings(df)
-        logger.info(f"After joining embeddings: {len(df)} rows")
-    elif use_embeddings and not data_config.supports_embeddings:
-        logger.warning(
-            f"Embeddings requested but not supported by this model. Skipping."
-        )
 
     return df
 
@@ -122,6 +125,7 @@ def load_scoring_data(
     """Load scoring data (convenience wrapper around load_data).
 
     Loads data from start_year onwards (typically after the model's training cutoff).
+    Does NOT apply min_ratings/min_weights filters - scoring should predict on all games.
 
     Args:
         data_config: Model's data requirements specification.
@@ -141,6 +145,7 @@ def load_scoring_data(
         use_embeddings=use_embeddings,
         complexity_predictions_path=complexity_predictions_path,
         local_data_path=local_data_path,
+        apply_filters=False,  # Don't filter during scoring - predict on all games
     )
 
 
@@ -150,6 +155,7 @@ def _load_base_features(
     end_year: Optional[int] = None,
     min_ratings: Optional[int] = None,
     min_weights: Optional[int] = None,
+    use_embeddings: bool = False,
 ) -> pl.DataFrame:
     """Load base game features from BigQuery or local file.
 
@@ -159,9 +165,10 @@ def _load_base_features(
         end_year: Maximum year to include (inclusive). None for no upper bound.
         min_ratings: Minimum user ratings filter.
         min_weights: Minimum complexity weights filter.
+        use_embeddings: Whether to join embeddings in the same query.
 
     Returns:
-        Polars DataFrame with base features.
+        Polars DataFrame with base features (and embeddings if requested).
     """
     if local_data_path is not None:
         logger.info(f"Loading data from local file: {local_data_path}")
@@ -182,31 +189,127 @@ def _load_base_features(
         if min_weights is not None:
             df = df.filter(pl.col("num_weights") >= min_weights)
 
+        # For local data, embeddings would need to be joined separately
+        if use_embeddings:
+            logger.warning(
+                "Embeddings not supported with local data. "
+                "Use BigQuery or pre-join embeddings in local file."
+            )
+
         return df
 
     # Load from BigQuery
     config = load_config()
-    loader = BGGDataLoader(config.get_bigquery_config())
 
     # Build where clause
     where_clauses = []
 
     if start_year is not None:
-        where_clauses.append(f"year_published >= {start_year}")
+        where_clauses.append(f"f.year_published >= {start_year}")
 
     if end_year is not None:
-        where_clauses.append(f"year_published <= {end_year}")
+        where_clauses.append(f"f.year_published <= {end_year}")
 
     if min_ratings is not None:
-        where_clauses.append(f"users_rated >= {min_ratings}")
+        where_clauses.append(f"f.users_rated >= {min_ratings}")
 
     if min_weights is not None:
-        where_clauses.append(f"num_weights >= {min_weights}")
+        where_clauses.append(f"f.num_weights >= {min_weights}")
 
-    where_clause = " AND ".join(where_clauses) if where_clauses else None
+    where_clause = " AND ".join(where_clauses) if where_clauses else "TRUE"
 
-    logger.info(f"Loading data from BigQuery with filter: {where_clause}")
-    return loader.load_data(where_clause=where_clause)
+    if use_embeddings:
+        return _load_features_with_embeddings(config, where_clause)
+    else:
+        # Use the standard loader for features only
+        loader = BGGDataLoader(config.get_bigquery_config())
+        # Remove table alias prefix for simple query
+        simple_where = where_clause.replace("f.", "")
+        logger.info(f"Loading data from BigQuery with filter: {simple_where}")
+        return loader.load_data(where_clause=simple_where if simple_where != "TRUE" else None)
+
+
+def _load_features_with_embeddings(config, where_clause: str) -> pl.DataFrame:
+    """Load features and embeddings in a single BigQuery query.
+
+    Args:
+        config: Application config.
+        where_clause: WHERE clause with 'f.' prefix for features table.
+
+    Returns:
+        Polars DataFrame with features and expanded embedding columns.
+    """
+    client = config.get_bigquery_config().get_client()
+    dw_config = config.get_bigquery_config()
+
+    # Build query that joins features with embeddings
+    query = f"""
+    SELECT
+        f.*,
+        e.embedding
+    FROM `{dw_config.project_id}.{dw_config.dataset}.{dw_config.table}` f
+    INNER JOIN `bgg-data-warehouse.predictions.bgg_description_embeddings` e
+        ON f.game_id = e.game_id
+    WHERE {where_clause}
+        AND f.year_published IS NOT NULL
+    """
+
+    logger.info("Loading features with embeddings from BigQuery (single query)")
+    logger.info(f"Filter: {where_clause}")
+
+    query_job = client.query(query)
+    query_job.result()
+    pandas_df = query_job.to_dataframe()
+
+    if len(pandas_df) == 0:
+        raise ValueError("No data returned from BigQuery query")
+
+    logger.info(f"Retrieved {len(pandas_df)} rows from BigQuery")
+
+    # Expand embedding array into individual columns
+    df_expanded = _expand_embedding_column(pandas_df)
+
+    return pl.from_pandas(df_expanded)
+
+
+def _expand_embedding_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Expand embedding array column into individual columns.
+
+    Args:
+        df: DataFrame with an 'embedding' column containing arrays.
+
+    Returns:
+        DataFrame with embedding expanded to emb_0, emb_1, ..., emb_N columns.
+    """
+    if "embedding" not in df.columns:
+        return df
+
+    # Get embedding dimension from first non-null embedding
+    sample_embedding = None
+    for emb in df["embedding"]:
+        if emb is not None and len(emb) > 0:
+            sample_embedding = emb
+            break
+
+    if sample_embedding is None:
+        raise ValueError("No valid embeddings found in data")
+
+    embedding_dim = len(sample_embedding)
+    logger.info(f"Embedding dimension: {embedding_dim}")
+
+    # Create column names
+    emb_columns = [f"emb_{i}" for i in range(embedding_dim)]
+
+    # Expand embeddings into columns
+    embeddings_matrix = np.vstack(df["embedding"].values)
+    embeddings_df = pd.DataFrame(embeddings_matrix, columns=emb_columns, index=df.index)
+
+    # Drop the original embedding column and concatenate expanded columns
+    df = pd.concat([df.drop(columns=["embedding"]), embeddings_df], axis=1)
+
+    logger.info(f"Loaded {len(df)} rows with {embedding_dim} embedding dimensions")
+
+    return df
 
 
 def _join_complexity_predictions(
@@ -238,95 +341,6 @@ def _join_complexity_predictions(
         raise ValueError("No games remain after joining complexity predictions")
 
     return df
-
-
-def _join_embeddings(df: pl.DataFrame) -> pl.DataFrame:
-    """Join text embeddings from BigQuery.
-
-    Loads embeddings from bgg-data-warehouse.predictions.bgg_description_embeddings
-    and expands the embedding array into individual columns.
-
-    Args:
-        df: Base dataframe with game features.
-
-    Returns:
-        DataFrame with embedding columns joined (emb_0, emb_1, ..., emb_N).
-
-    Raises:
-        ValueError: If no games remain after join.
-    """
-    config = load_config()
-    client = config.get_bigquery_config().get_client()
-
-    # Query embeddings from data warehouse
-    # The embedding column is an ARRAY<FLOAT64>
-    query = """
-    SELECT
-        game_id,
-        embedding
-    FROM `bgg-data-warehouse.predictions.bgg_description_embeddings`
-    """
-
-    logger.info("Loading embeddings from BigQuery")
-    query_job = client.query(query)
-    query_job.result()
-    embeddings_pandas = query_job.to_dataframe()
-
-    if len(embeddings_pandas) == 0:
-        logger.warning("No embeddings found in BigQuery. Skipping embedding join.")
-        return df
-
-    # Expand embedding array into columns
-    embeddings_expanded = _expand_embedding_array(embeddings_pandas)
-    embeddings_df = pl.from_pandas(embeddings_expanded)
-
-    logger.info(
-        f"Loaded {len(embeddings_df)} embeddings with "
-        f"{len(embeddings_df.columns) - 1} dimensions"
-    )
-
-    # Join on game_id
-    df = df.join(embeddings_df, on="game_id", how="inner")
-
-    if len(df) == 0:
-        raise ValueError("No games remain after joining embeddings")
-
-    return df
-
-
-def _expand_embedding_array(df: pd.DataFrame) -> pd.DataFrame:
-    """Expand embedding array column into individual columns.
-
-    Args:
-        df: DataFrame with 'game_id' and 'embedding' columns,
-            where embedding is a list/array of floats.
-
-    Returns:
-        DataFrame with game_id and emb_0, emb_1, ..., emb_N columns.
-    """
-    # Get embedding dimension from first non-null embedding
-    sample_embedding = None
-    for emb in df["embedding"]:
-        if emb is not None and len(emb) > 0:
-            sample_embedding = emb
-            break
-
-    if sample_embedding is None:
-        raise ValueError("No valid embeddings found in data")
-
-    embedding_dim = len(sample_embedding)
-    logger.info(f"Embedding dimension: {embedding_dim}")
-
-    # Create column names
-    emb_columns = [f"emb_{i}" for i in range(embedding_dim)]
-
-    # Expand embeddings into columns
-    embeddings_matrix = np.vstack(df["embedding"].values)
-    embeddings_df = pd.DataFrame(embeddings_matrix, columns=emb_columns)
-    embeddings_df["game_id"] = df["game_id"].values
-
-    # Reorder columns to have game_id first
-    return embeddings_df[["game_id"] + emb_columns]
 
 
 def create_data_splits(

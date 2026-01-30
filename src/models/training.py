@@ -279,6 +279,8 @@ def create_preprocessing_pipeline(
         "include_description_embeddings": False,
         "verbose": False,
         "preserve_columns": ["year_published"],
+        "remove_correlated": False,  # Backwards compatible default
+        "correlation_threshold": 0.95,
     }
 
     # Update default config with provided kwargs

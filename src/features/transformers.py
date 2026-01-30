@@ -259,17 +259,64 @@ class YearTransformer(BaseEstimator, TransformerMixin):
 
 
 class CorrelationFilter(BaseEstimator, TransformerMixin):
-    def __init__(self, threshold=0.9):
+    """Remove features with correlation above a threshold.
+
+    This transformer identifies and removes features that are highly correlated
+    with other features. When two features have correlation above the threshold,
+    the second one (in column order) is dropped.
+
+    Parameters
+    ----------
+    threshold : float, default=0.95
+        Correlation threshold. Features with absolute correlation above this
+        value will be dropped. Default is 0.95 to remove highly correlated features.
+
+    Attributes
+    ----------
+    to_drop_ : list
+        List of column names that will be dropped during transform.
+    feature_names_in_ : array
+        Names of features seen during fit.
+    feature_names_out_ : array
+        Names of features after dropping correlated ones.
+    """
+
+    def __init__(self, threshold: float = 0.95):
         self.threshold = threshold
         self.to_drop_ = None
+        self.feature_names_in_ = None
+        self.feature_names_out_ = None
 
     def fit(self, X, y=None):
+        """Fit the transformer by identifying correlated features to drop.
+
+        Parameters
+        ----------
+        X : array-like or DataFrame of shape (n_samples, n_features)
+            Training data.
+        y : None
+            Ignored.
+
+        Returns
+        -------
+        self
+        """
+        logger = logging.getLogger(__name__)
+
         # Convert to DataFrame if not already
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
 
+        self.feature_names_in_ = np.array(X.columns)
+
+        # Sample for faster correlation computation on large datasets
+        if len(X) > 10000:
+            X_sample = X.sample(n=10000, random_state=42)
+        else:
+            X_sample = X
+
         # Compute correlation matrix
-        corr_matrix = X.corr().abs()
+        corr_matrix = X_sample.corr().abs()
         upper = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
         upper_corr = corr_matrix.where(upper)
 
@@ -279,9 +326,32 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
             for column in upper_corr.columns
             if any(upper_corr[column] > self.threshold)
         ]
+
+        self.feature_names_out_ = np.array(
+            [col for col in X.columns if col not in self.to_drop_]
+        )
+
+        if len(self.to_drop_) > 0:
+            logger.info(
+                f"CorrelationFilter: dropping {len(self.to_drop_)} features "
+                f"with correlation > {self.threshold}"
+            )
+
         return self
 
     def transform(self, X):
+        """Remove correlated features.
+
+        Parameters
+        ----------
+        X : array-like or DataFrame of shape (n_samples, n_features)
+            Data to transform.
+
+        Returns
+        -------
+        X_transformed : DataFrame
+            Data with correlated features removed.
+        """
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         return X.drop(columns=self.to_drop_, errors="ignore")
@@ -291,7 +361,10 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
         return self
 
     def get_feature_names_out(self, input_features=None):
-        return np.array(self.columns)
+        """Get output feature names."""
+        if self.feature_names_out_ is None:
+            raise ValueError("Transformer has not been fitted yet.")
+        return self.feature_names_out_
 
 
 def bgg_numeric_transformer(numeric_columns=None):
@@ -442,7 +515,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         create_family_features: bool = True,
         # Feature selection parameters
         include_base_numeric: bool = True,
-        include_count_features: bool = True,
+        include_count_features: bool = False,
         include_average_weight: bool = False,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
@@ -1085,12 +1158,13 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         # Base numeric features
         if self.include_base_numeric:
-            if getattr(self, "include_count_features", True):
-                feature_names.extend(["mechanics_count", "categories_count"])
+            if getattr(self, "include_count_features", False):
+                feature_names.extend(
+                    ["mechanics_count", "categories_count", "description_word_count"]
+                )
             feature_names.extend(
                 [
                     "time_per_player",
-                    "description_word_count",
                     "min_age",
                     "min_playtime",
                     "max_playtime",
@@ -1168,7 +1242,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         feature_dfs = []
 
         # Create mechanics count if mechanics column exists
-        if getattr(self, "include_count_features", True) and "mechanics" in X_base.columns:
+        if getattr(self, "include_count_features", False) and "mechanics" in X_base.columns:
             mechanics_df = pd.DataFrame(index=X_base.index)
 
             # Use the more robust count_mechanics function
@@ -1201,7 +1275,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             feature_dfs.append(mechanics_df)
 
         # Create categories count if categories column exists
-        if getattr(self, "include_count_features", True) and "categories" in X_base.columns:
+        if getattr(self, "include_count_features", False) and "categories" in X_base.columns:
             categories_df = pd.DataFrame(index=X_base.index)
 
             def count_categories(categories):
@@ -1252,8 +1326,11 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             )
             feature_dfs.append(time_per_player_df)
 
-        # Create description word count feature
-        if "description" in X_base.columns:
+        # Create description word count feature (only if include_count_features is True)
+        if (
+            "description" in X_base.columns
+            and getattr(self, "include_count_features", False)
+        ):
             description_word_count_df = pd.DataFrame(index=X_base.index)
 
             def count_words(description):

@@ -45,24 +45,33 @@ years:
 
 # Model Configuration
 models:
+  predictions_dir: "./models/experiments/predictions"
   hurdle:
     type: logistic
     experiment_name: logistic-hurdle
     use_embeddings: true
   complexity:
-    type: catboost
-    experiment_name: catboost-complexity
+    type: ridge
+    experiment_name: ridge-complexity
     use_sample_weights: true
-    predictions_path: models/experiments/predictions/catboost-complexity.parquet
+    use_embeddings: true
   rating:
-    type: catboost
-    experiment_name: catboost-rating
+    type: ridge
+    experiment_name: ridge-rating
     use_sample_weights: true
     min_ratings: 5
+    use_embeddings: true
   users_rated:
     type: ridge
     experiment_name: ridge-users_rated
     min_ratings: 0
+    use_embeddings: true
+  geek_rating:
+    users_rated:
+    type: ridge
+    experiment_name: ridge-geek_rating
+    min_ratings: 25
+    use_embeddings: true
 
 # Evaluate models over time
 evaluate:

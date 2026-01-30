@@ -13,7 +13,7 @@ help:  ## Show this help message
 	@echo '  make lint                        Lint code using ruff'
 	@echo '  make fix                         Fix linting issues using ruff'
 	@echo '  make test                        Run tests using pytest'
-	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make data                        Fetch training data from BigQuery'
 	@echo '  make models                      Train all model candidates'
 	@echo '  make register                    Register all models to scoring service'
 	@echo '  make register_embeddings         Register embeddings model to embeddings service'
@@ -64,10 +64,11 @@ fix:
 test:
 	uv run -m pytest tests/
 
-## fetch raw data from BigQuery
+## fetch training data from BigQuery
 .PHONY: data
-data: 
-	uv run -m src.data.get_raw_data
+data:
+	uv run -m src.pipeline.data --model hurdle
+	uv run -m src.pipeline.data --model complexity
 
 # model types
 LINEAR ?= linear
@@ -88,107 +89,56 @@ models: hurdle complexity rating users_rated geek_rating
 register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
 
 # train individual models
-hurdle: train_hurdle finalize_hurdle score_hurdle
-complexity: train_complexity finalize_complexity score_complexity
-rating: train_rating finalize_rating score_rating
-users_rated: train_users_rated finalize_users_rated score_users_rated
+hurdle: train_hurdle score_hurdle
+complexity: train_complexity score_complexity
+rating: train_rating score_rating
+users_rated: train_users_rated score_users_rated
 
 ## train individual models
 # hurdle model
-
 train_hurdle:
 	uv run -m src.pipeline.train \
-	--model hurdle
-
-finalize_hurdle:
-	uv run -m src.pipeline.finalize \
 	--model hurdle \
-	--experiment
-
-hurdle: train_hurdle finalize_hurdle
+	--finalize
 
 score_hurdle:
 	uv run -m src.pipeline.score \
-	--model-type hurdle
+	--model hurdle
 
-## complexity model
-COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
-COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/$(COMPLEXITY_CANDIDATE).parquet
-train_complexity:
+# complexity
+train_complexity: 
 	uv run -m src.pipeline.train \
 	--model complexity \
-	--algorithm $(COMPLEXITY_MODEL) \
-	--use-sample-weights \
-	--experiment $(COMPLEXITY_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
-
-finalize_complexity:
-	uv run -m src.pipeline.finalize \
-	--model complexity \
-	--experiment $(COMPLEXITY_CANDIDATE)
+	--finalize
 
 score_complexity:
 	uv run -m src.pipeline.score \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_CANDIDATE)
+	--model complexity \
+	--all-years
 
-# rating model
-RATING_CANDIDATE ?= $(RATING_MODEL)-rating
-train_rating:
+# rating
+train_rating: 
 	uv run -m src.pipeline.train \
 	--model rating \
-	--algorithm $(RATING_MODEL) \
-	--use-sample-weights \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS) \
-	--experiment $(RATING_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+	--finalize
 
-finalize_rating:
-	uv run -m src.pipeline.finalize \
-	--model rating \
-	--experiment $(RATING_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
-
-score_rating:
+score_rating: 
 	uv run -m src.pipeline.score \
-	--model-type rating \
-	--experiment $(RATING_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
+	--model rating
 
-## users rated
-USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
-
-train_users_rated:
+# users rated
+# rating
+train_users_rated: 
 	uv run -m src.pipeline.train \
 	--model users_rated \
-	--algorithm $(USERS_RATED_MODEL) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS) \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+	--finalize
 
-finalize_users_rated:
-	uv run -m src.pipeline.finalize \
-	--model users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
-
-score_users_rated:
+score_users_rated: 
 	uv run -m src.pipeline.score \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
+	--model users_rated
+
+
+
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
@@ -246,28 +196,28 @@ evaluate-dry-run:  ## Show what evaluation would do without running
 # register models
 register_complexity:
 	uv run -m scoring_service.register_model \
-	--model-type complexity \
+	--model complexity \
 	--experiment $(COMPLEXITY_CANDIDATE) \
 	--name complexity-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting game complexity"
 
 register_rating:
 	uv run -m scoring_service.register_model \
-	--model-type rating \
+	--model rating \
 	--experiment $(RATING_CANDIDATE) \
 	--name rating-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting game rating"
 
 register_users_rated:
 	uv run -m scoring_service.register_model \
-	--model-type users_rated \
+	--model users_rated \
 	--experiment $(USERS_RATED_CANDIDATE) \
 	--name users_rated-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting users_rated"
 
 register_hurdle:
 	uv run -m scoring_service.register_model \
-	--model-type hurdle \
+	--model hurdle \
 	--experiment $(HURDLE_CANDIDATE) \
 	--name hurdle-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"

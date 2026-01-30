@@ -144,11 +144,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     # Year splits (all boundaries are inclusive)
-    parser.add_argument("--train-through", type=int, default=2022)
-    parser.add_argument("--tune-start", type=int, default=2022)
-    parser.add_argument("--tune-through", type=int, default=2023)
-    parser.add_argument("--test-start", type=int, default=2024)
-    parser.add_argument("--test-through", type=int, default=2025)
+    # Defaults are None - will be loaded from config.yaml
+    parser.add_argument("--train-through", type=int, default=None)
+    parser.add_argument("--tune-start", type=int, default=None)
+    parser.add_argument("--tune-through", type=int, default=None)
+    parser.add_argument("--test-start", type=int, default=None)
+    parser.add_argument("--test-through", type=int, default=None)
 
     # Training options
     parser.add_argument(
@@ -182,6 +183,12 @@ def parse_arguments() -> argparse.Namespace:
         choices=["auto", "linear", "tree"],
         help="Preprocessor type",
     )
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        default=False,
+        help="Finalize model for production after training",
+    )
 
     args = parser.parse_args()
 
@@ -207,10 +214,37 @@ def parse_arguments() -> argparse.Namespace:
     if not args.use_sample_weights and model_config is not None:
         args.use_sample_weights = model_config.use_sample_weights
 
+    # Load include_count_features from config (default False)
+    args.include_count_features = getattr(model_config, "include_count_features", False) if model_config else False
+
+    # Load complexity predictions path from config if not provided via CLI
+    # Models like rating/users_rated need this to get complexity predictions
+    # Path is: {predictions_dir}/{complexity.experiment_name}.parquet
+    if args.complexity_predictions is None:
+        complexity_config = config.models.get("complexity")
+        if complexity_config:
+            from pathlib import Path
+            args.complexity_predictions = str(
+                Path(config.predictions_dir) / f"{complexity_config.experiment_name}.parquet"
+            )
+
+    # Load year splits from config if not explicitly set via CLI
+    years_config = config.years.training
+    if args.train_through is None:
+        args.train_through = years_config.train_through
+    if args.tune_start is None:
+        args.tune_start = years_config.tune_start
+    if args.tune_through is None:
+        args.tune_through = years_config.tune_through
+    if args.test_start is None:
+        args.test_start = years_config.test_start
+    if args.test_through is None:
+        args.test_through = years_config.test_through
+
     # Validate year ranges
-    if args.tune_start != args.train_through:
+    if args.tune_start <= args.train_through:
         raise ValueError(
-            f"tune_start ({args.tune_start}) must equal "
+            f"tune_start ({args.tune_start}) must be greater than "
             f"train_through ({args.train_through})"
         )
 
@@ -296,6 +330,7 @@ def train_model(
         model_name=algorithm,
         preserve_columns=preserve_columns,
         include_description_embeddings=args.use_embeddings,
+        include_count_features=args.include_count_features,
     )
 
     pipeline = Pipeline([("preprocessor", preprocessor), ("model", estimator)])
@@ -544,6 +579,17 @@ def main():
     args = parse_arguments()
     model_class = get_model_class(args.model)
     train_model(model_class, args)
+
+    # Finalize if requested
+    if args.finalize:
+        logger.info("Finalizing model for production...")
+        finalize_model(
+            model_type=args.model,
+            experiment_name=args.experiment,
+            use_embeddings=args.use_embeddings,
+            local_data_path=args.local_data,
+            complexity_predictions_path=args.complexity_predictions,
+        )
 
 
 def main_finalize():

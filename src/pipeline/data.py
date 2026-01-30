@@ -35,7 +35,7 @@ def parse_arguments():
         "--output",
         type=str,
         default=None,
-        help="Output path for parquet file (if not provided, prints summary only)",
+        help="Output path for parquet file (default: data/training/{model}.parquet)",
     )
     parser.add_argument(
         "--use-embeddings",
@@ -74,6 +74,10 @@ def parse_arguments():
     if not args.use_embeddings and model_config is not None:
         args.use_embeddings = model_config.use_embeddings
 
+    # Default output path
+    if args.output is None:
+        args.output = f"data/training/{args.model}.parquet"
+
     return args
 
 
@@ -99,12 +103,12 @@ def main():
     logger.info(f"Columns: {df.columns}")
     logger.info(f"Year range: {df['year_published'].min()} - {df['year_published'].max()}")
 
-    if args.output:
-        df.write_parquet(args.output)
-        logger.info(f"Saved to {args.output}")
-    else:
-        logger.info("No output path provided, printing first 5 rows:")
-        print(df.head())
+    # Ensure output directory exists
+    from pathlib import Path
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+
+    df.write_parquet(args.output)
+    logger.info(f"Saved to {args.output}")
 
 
 if __name__ == "__main__":
