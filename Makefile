@@ -137,7 +137,11 @@ score_users_rated:
 	uv run -m src.pipeline.score \
 	--model users_rated
 
-
+# geek rating
+# predict geek rating given models (uses experiment names from config.yaml)
+geek_rating:
+	uv run -m src.pipeline.geek_rating \
+	--experiment estimated-geek-rating
 
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
@@ -169,17 +173,7 @@ register_text_embeddings:
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
 
-# predict geek rating given models
-geek_rating:
-	uv run -m src.pipeline.geek_rating \
-	--start-year $(TEST_START_YEAR) \
-	--end-year $(TEST_END_YEAR) \
-	--hurdle $(HURDLE_CANDIDATE) \
-	--complexity $(COMPLEXITY_CANDIDATE) \
-	--rating $(RATING_CANDIDATE) \
-	--users-rated $(USERS_RATED_CANDIDATE) \
-	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
-	--experiment estimated-geek-rating
+
 
 # evaluate over time using config.yaml settings
 .PHONY: evaluate evaluate-verbose evaluate-dry-run
