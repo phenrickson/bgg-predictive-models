@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Protocol, Union
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Protocol, Union
 import logging
 
 import pandas as pd
@@ -13,6 +13,34 @@ from sklearn.pipeline import Pipeline
 
 
 logger = logging.getLogger(__name__)
+
+
+class PredictionResult(NamedTuple):
+    """Container for predictions with optional uncertainty estimates."""
+
+    values: np.ndarray
+    std: Optional[np.ndarray] = None
+
+    def confidence_interval(
+        self, level: float = 0.95
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute confidence interval at the given level.
+
+        Args:
+            level: Confidence level (default 0.95 for 95% CI).
+
+        Returns:
+            Tuple of (lower_bound, upper_bound) arrays.
+
+        Raises:
+            ValueError: If no uncertainty estimates available.
+        """
+        if self.std is None:
+            raise ValueError("No uncertainty estimates available")
+        from scipy import stats
+
+        z = stats.norm.ppf((1 + level) / 2)
+        return self.values - z * self.std, self.values + z * self.std
 
 
 @dataclass
@@ -145,6 +173,470 @@ class TrainableModel(ABC):
         """
         return predictions
 
+    def post_process_uncertainty(
+        self, std: np.ndarray, predictions: np.ndarray
+    ) -> np.ndarray:
+        """Post-process uncertainty estimates.
+
+        Override in subclasses for model-specific adjustments (e.g.,
+        reducing std near prediction bounds, transforming from log scale).
+
+        Args:
+            std: Standard deviation from Bayesian model.
+            predictions: Raw predictions (before post-processing).
+
+        Returns:
+            Adjusted standard deviations.
+        """
+        return std
+
+    def predict_with_uncertainty(
+        self, features: pd.DataFrame
+    ) -> PredictionResult:
+        """Generate predictions with uncertainty estimates.
+
+        Only works with Bayesian models (e.g., BayesianRidge) that support
+        the return_std parameter.
+
+        Args:
+            features: DataFrame with input features.
+
+        Returns:
+            PredictionResult with values and optional std.
+
+        Raises:
+            ValueError: If model has not been trained/loaded.
+        """
+        if self.pipeline is None:
+            raise ValueError("Model has not been trained or loaded")
+
+        preprocessor = self.pipeline.named_steps.get("preprocessor")
+        model = self.pipeline.named_steps.get("model")
+
+        # Transform features through preprocessor
+        X_transformed = preprocessor.transform(features) if preprocessor else features
+
+        # Check if model supports return_std (BayesianRidge does)
+        if hasattr(model, "predict"):
+            import inspect
+
+            sig = inspect.signature(model.predict)
+            if "return_std" in sig.parameters:
+                predictions, std = model.predict(X_transformed, return_std=True)
+                processed_values = self.post_process_predictions(predictions)
+                processed_std = self.post_process_uncertainty(std, predictions)
+                return PredictionResult(values=processed_values, std=processed_std)
+
+        # Fall back to point predictions
+        predictions = self.pipeline.predict(features)
+        return PredictionResult(values=self.post_process_predictions(predictions))
+
+    def sample_posterior_predictive(
+        self,
+        features: pd.DataFrame,
+        n_samples: int = 1000,
+        include_noise: bool = True,
+        random_state: Optional[int] = None,
+    ) -> np.ndarray:
+        """Sample from the posterior predictive distribution.
+
+        Uses the weight posterior (coef_, sigma_) from BayesianRidge to draw
+        samples. Each sample represents a plausible prediction given the
+        uncertainty in the model parameters.
+
+        Args:
+            features: DataFrame with input features.
+            n_samples: Number of posterior samples to draw.
+            include_noise: If True, add observation noise (alpha_) to samples.
+                If False, only sample from the mean function posterior.
+            random_state: Random seed for reproducibility.
+
+        Returns:
+            Array of shape (n_observations, n_samples) with posterior samples.
+
+        Raises:
+            ValueError: If model doesn't support posterior sampling.
+        """
+        if self.pipeline is None:
+            raise ValueError("Model has not been trained or loaded")
+
+        preprocessor = self.pipeline.named_steps.get("preprocessor")
+        model = self.pipeline.named_steps.get("model")
+
+        # Check for required attributes (BayesianRidge stores these)
+        if not (hasattr(model, "coef_") and hasattr(model, "sigma_")):
+            raise ValueError(
+                f"Model {type(model).__name__} does not support posterior sampling. "
+                "Requires coef_ and sigma_ attributes (e.g., BayesianRidge)."
+            )
+
+        # Transform features
+        X_transformed = preprocessor.transform(features) if preprocessor else features
+        if hasattr(X_transformed, "values"):
+            X_transformed = X_transformed.values
+
+        rng = np.random.default_rng(random_state)
+
+        # Sample weight vectors from posterior: w ~ N(coef_, sigma_)
+        # Handle ARDRegression which prunes features - sigma_ may be smaller than coef_
+        coef = model.coef_
+        sigma = model.sigma_
+
+        if sigma.shape[0] != len(coef):
+            # ARDRegression: sigma_ only covers active (non-pruned) features
+            # Build full covariance matrix with zeros for pruned features
+            n_features = len(coef)
+            full_sigma = np.zeros((n_features, n_features))
+            if hasattr(model, "lambda_"):
+                active_mask = model.lambda_ < getattr(model, "threshold_lambda", np.inf)
+                active_indices = np.where(active_mask)[0]
+                for i, ai in enumerate(active_indices):
+                    for j, aj in enumerate(active_indices):
+                        full_sigma[ai, aj] = sigma[i, j]
+            else:
+                # Fallback: assume first features are active
+                n_active = sigma.shape[0]
+                full_sigma[:n_active, :n_active] = sigma
+            sigma = full_sigma
+
+        weight_samples = rng.multivariate_normal(
+            coef, sigma, size=n_samples
+        )  # shape: (n_samples, n_features)
+
+        # Compute predictions for each weight sample
+        # y = X @ w.T + intercept
+        predictions = X_transformed @ weight_samples.T  # shape: (n_obs, n_samples)
+        if hasattr(model, "intercept_"):
+            predictions += model.intercept_
+
+        # Optionally add observation noise
+        if include_noise and hasattr(model, "alpha_"):
+            noise_std = 1.0 / np.sqrt(model.alpha_)
+            predictions += rng.normal(0, noise_std, size=predictions.shape)
+
+        # Post-process each sample (e.g., clipping)
+        for i in range(n_samples):
+            predictions[:, i] = self.post_process_predictions(predictions[:, i])
+
+        return predictions
+
+    @property
+    def supports_uncertainty(self) -> bool:
+        """Check if the fitted model supports uncertainty estimation."""
+        if self.pipeline is None:
+            return False
+        model = self.pipeline.named_steps.get("model")
+        if model is None:
+            return False
+        # BayesianRidge has return_std in predict signature
+        import inspect
+
+        if hasattr(model, "predict"):
+            sig = inspect.signature(model.predict)
+            return "return_std" in sig.parameters
+        return False
+
+    @property
+    def supports_coefficient_uncertainty(self) -> bool:
+        """Check if the fitted model has coefficient uncertainty (coef_ and sigma_)."""
+        if self.pipeline is None:
+            return False
+        model = self.pipeline.named_steps.get("model")
+        return hasattr(model, "coef_") and hasattr(model, "sigma_")
+
+    def _get_feature_names_from_preprocessor(self) -> List[str]:
+        """Extract feature names from the preprocessor using the same approach as experiments.py."""
+        preprocessor = self.pipeline.named_steps.get("preprocessor")
+        model = self.pipeline.named_steps.get("model")
+        n_features = len(model.coef_)
+
+        if preprocessor is None:
+            return [f"feature_{i}" for i in range(n_features)]
+
+        # Iterate through steps in reverse order (same as extract_feature_importance)
+        feature_names = None
+        steps = list(preprocessor.named_steps.items())
+        for name, step in reversed(steps):
+            try:
+                feature_names = list(step.get_feature_names_out())
+                break
+            except (AttributeError, TypeError):
+                continue
+
+        # Fallback: try getting from entire preprocessor
+        if feature_names is None:
+            try:
+                feature_names = list(preprocessor.get_feature_names_out())
+            except (AttributeError, TypeError):
+                if hasattr(preprocessor, "feature_names_"):
+                    feature_names = list(preprocessor.feature_names_)
+
+        # Final fallback: use indices
+        if feature_names is None or len(feature_names) != n_features:
+            feature_names = [f"feature_{i}" for i in range(n_features)]
+
+        return feature_names
+
+    def get_coefficient_estimates(
+        self,
+        confidence_levels: Optional[List[float]] = None,
+    ) -> pd.DataFrame:
+        """Extract coefficient estimates with uncertainty from Bayesian models.
+
+        Args:
+            confidence_levels: List of confidence levels for intervals (default: [0.80, 0.90, 0.95]).
+
+        Returns:
+            DataFrame with columns: feature, coefficient, std, and confidence bounds.
+
+        Raises:
+            ValueError: If model doesn't support coefficient uncertainty.
+        """
+        if not self.supports_coefficient_uncertainty:
+            raise ValueError(
+                "Model does not support coefficient uncertainty. "
+                "Requires coef_ and sigma_ attributes (e.g., BayesianRidge)."
+            )
+
+        if confidence_levels is None:
+            confidence_levels = [0.80, 0.90, 0.95]
+
+        model = self.pipeline.named_steps.get("model")
+        coef = model.coef_
+        sigma_diag = np.diag(model.sigma_)
+        feature_names = self._get_feature_names_from_preprocessor()
+
+        # Handle ARDRegression which prunes features - sigma_ may be smaller than coef_
+        # ARD sets pruned feature coefficients to 0 but sigma_ only contains active features
+        if len(sigma_diag) != len(coef):
+            # ARDRegression: need to map sigma back to full feature space
+            # Pruned features have effectively zero variance (infinite precision)
+            coef_std = np.zeros_like(coef)
+            if hasattr(model, "lambda_"):
+                # Features with lambda < threshold_lambda are active
+                active_mask = model.lambda_ < getattr(model, "threshold_lambda", np.inf)
+                coef_std[active_mask] = np.sqrt(sigma_diag)
+            else:
+                # Fallback: assume first len(sigma_diag) features are active
+                coef_std[:len(sigma_diag)] = np.sqrt(sigma_diag)
+        else:
+            coef_std = np.sqrt(sigma_diag)
+
+        # Build DataFrame
+        data = {
+            "feature": feature_names,
+            "coefficient": coef,
+            "std": coef_std,
+            "abs_coefficient": np.abs(coef),
+        }
+
+        # Add confidence intervals
+        from scipy import stats
+
+        for level in confidence_levels:
+            z = stats.norm.ppf((1 + level) / 2)
+            level_pct = int(level * 100)
+            data[f"lower_{level_pct}"] = coef - z * coef_std
+            data[f"upper_{level_pct}"] = coef + z * coef_std
+
+        # Add significance indicator (95% CI doesn't include zero)
+        z_95 = stats.norm.ppf(0.975)
+        data["significant_95"] = np.abs(coef) > z_95 * coef_std
+
+        df = pd.DataFrame(data)
+        return df.sort_values("abs_coefficient", ascending=False)
+
+    def save_coefficient_estimates(
+        self,
+        output_path: Union[str, Path],
+        confidence_levels: Optional[List[float]] = None,
+    ) -> Path:
+        """Save coefficient estimates to a CSV file.
+
+        Args:
+            output_path: Path to save the estimates (should be .csv).
+            confidence_levels: List of confidence levels for intervals.
+
+        Returns:
+            Path to saved file.
+        """
+        df = self.get_coefficient_estimates(confidence_levels)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+        logger.info(f"Saved coefficient estimates to {output_path}")
+        return output_path
+
+    def plot_top_coefficients(
+        self,
+        output_path: Union[str, Path],
+        top_n: int = 100,
+        confidence_level: float = 0.95,
+        figsize: tuple = (10, 20),
+    ) -> Path:
+        """Plot top N coefficients by absolute value as dot plot with CI.
+
+        Args:
+            output_path: Path to save the plot.
+            top_n: Number of top features to plot (default: 100).
+            confidence_level: Confidence level for error bars (default: 0.95).
+            figsize: Figure size (default: (10, 20)).
+
+        Returns:
+            Path to saved plot.
+        """
+        import matplotlib.pyplot as plt
+
+        df = self.get_coefficient_estimates([confidence_level])
+        df_top = df.head(top_n)
+
+        level_pct = int(confidence_level * 100)
+        lower_col = f"lower_{level_pct}"
+        upper_col = f"upper_{level_pct}"
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        y_pos = np.arange(len(df_top))
+        colors = ["#2ecc71" if c > 0 else "#e74c3c" for c in df_top["coefficient"]]
+
+        # Plot horizontal error bars (CI) then point estimates
+        for i, (_, row) in enumerate(df_top.iterrows()):
+            color = "#2ecc71" if row["coefficient"] > 0 else "#e74c3c"
+            # CI line
+            ax.hlines(
+                y=i,
+                xmin=row[lower_col],
+                xmax=row[upper_col],
+                color=color,
+                alpha=0.6,
+                linewidth=2,
+            )
+            # Point estimate
+            marker = "o" if row["significant_95"] else "o"
+            ax.scatter(
+                row["coefficient"],
+                i,
+                color=color,
+                s=30,
+                zorder=5,
+                edgecolors="black" if row["significant_95"] else "none",
+                linewidths=1,
+            )
+
+        # Vertical line at zero
+        ax.axvline(x=0, color="black", linestyle="-", linewidth=0.5)
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(df_top["feature"], fontsize=7)
+        ax.invert_yaxis()
+        ax.set_xlabel("Coefficient Value")
+        ax.set_title(
+            f"Top {len(df_top)} Features by Absolute Effect\n"
+            f"({level_pct}% CI, black edge = significant at 95%)"
+        )
+
+        plt.tight_layout()
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        plt.close()
+
+        logger.info(f"Saved coefficient plot to {output_path}")
+        return output_path
+
+    def plot_residuals(
+        self,
+        output_path: Union[str, Path],
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        figsize: tuple = (12, 10),
+    ) -> Path:
+        """Plot residuals diagnostic: residuals vs predictions.
+
+        Creates a 2x2 panel with:
+        - Residuals vs predicted values (check for heteroscedasticity)
+        - Histogram of residuals (check for normality)
+        - Q-Q plot of residuals (check for normality)
+        - Residuals vs observation index (check for patterns)
+
+        Args:
+            output_path: Path to save the plot.
+            y_true: True target values.
+            y_pred: Predicted values.
+            figsize: Figure size (default: (12, 10)).
+
+        Returns:
+            Path to saved plot.
+        """
+        import matplotlib.pyplot as plt
+        from scipy import stats
+
+        residuals = y_true - y_pred
+
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+        # 1. Residuals vs Predicted
+        ax1 = axes[0, 0]
+        ax1.scatter(y_pred, residuals, alpha=0.3, s=10)
+        ax1.axhline(y=0, color="red", linestyle="--", linewidth=1)
+        ax1.set_xlabel("Predicted Values")
+        ax1.set_ylabel("Residuals")
+        ax1.set_title("Residuals vs Predicted")
+
+        # Add lowess smoother for trend
+        try:
+            from statsmodels.nonparametric.smoothers_lowess import lowess
+
+            smoothed = lowess(residuals, y_pred, frac=0.2)
+            ax1.plot(smoothed[:, 0], smoothed[:, 1], color="orange", linewidth=2)
+        except ImportError:
+            pass  # statsmodels not available
+
+        # 2. Histogram of residuals
+        ax2 = axes[0, 1]
+        ax2.hist(residuals, bins=50, edgecolor="black", alpha=0.7, density=True)
+        # Overlay normal distribution
+        mu, sigma = np.mean(residuals), np.std(residuals)
+        x = np.linspace(residuals.min(), residuals.max(), 100)
+        ax2.plot(x, stats.norm.pdf(x, mu, sigma), "r-", linewidth=2, label="Normal")
+        ax2.set_xlabel("Residuals")
+        ax2.set_ylabel("Density")
+        ax2.set_title(f"Residual Distribution (μ={mu:.3f}, σ={sigma:.3f})")
+        ax2.legend()
+
+        # 3. Q-Q plot
+        ax3 = axes[1, 0]
+        stats.probplot(residuals, dist="norm", plot=ax3)
+        ax3.set_title("Q-Q Plot (Normal)")
+
+        # 4. Residuals vs observation index
+        ax4 = axes[1, 1]
+        ax4.scatter(range(len(residuals)), residuals, alpha=0.3, s=10)
+        ax4.axhline(y=0, color="red", linestyle="--", linewidth=1)
+        ax4.set_xlabel("Observation Index")
+        ax4.set_ylabel("Residuals")
+        ax4.set_title("Residuals vs Index")
+
+        # Add summary statistics as text
+        rmse = np.sqrt(np.mean(residuals**2))
+        mae = np.mean(np.abs(residuals))
+        fig.suptitle(
+            f"Residual Diagnostics (RMSE={rmse:.4f}, MAE={mae:.4f})",
+            fontsize=12,
+            fontweight="bold",
+        )
+
+        plt.tight_layout()
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        plt.close()
+
+        logger.info(f"Saved residual plot to {output_path}")
+        return output_path
+
     def load(self, path: Union[str, Path]) -> None:
         """Load model from disk.
 
@@ -165,11 +657,15 @@ class TrainableModel(ABC):
         return self._metadata
 
     @abstractmethod
-    def configure_model(self, algorithm: str) -> tuple:
+    def configure_model(
+        self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None
+    ) -> tuple:
         """Configure the model and parameter grid for the given algorithm.
 
         Args:
             algorithm: Algorithm name (e.g., "ridge", "catboost", "lightgbm").
+            algorithm_params: Optional algorithm-specific parameters from config.
+                For bayesian_ridge, can include: alpha_1, alpha_2, lambda_1, lambda_2.
 
         Returns:
             Tuple of (model_instance, param_grid).

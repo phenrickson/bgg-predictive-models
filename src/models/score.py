@@ -7,7 +7,7 @@ import os
 import polars as pl
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker
@@ -346,10 +346,25 @@ def load_scoring_data(
     # Handle complexity predictions - can be passed as DataFrame or path
     complexity_predictions_path = None
     if complexity_predictions is not None:
-        # If passed as DataFrame, save to temp file for the loader
-        # Or we could modify the loader to accept DataFrame directly
-        # For now, skip the centralized loader for complexity if DataFrame provided
+        # If passed as DataFrame, we'll join manually after loading
         pass
+    elif data_config.requires_complexity_predictions:
+        # Auto-load complexity predictions from config
+        from src.utils.config import load_config
+        config = load_config()
+        complexity_config = config.models.get("complexity")
+        if complexity_config and hasattr(complexity_config, "experiment_name"):
+            # Look for predictions in the predictions directory
+            predictions_dir = Path(config.predictions_dir)
+            complexity_predictions_path = predictions_dir / f"{complexity_config.experiment_name}.parquet"
+            if complexity_predictions_path.exists():
+                logger.info(f"Auto-loading complexity predictions from {complexity_predictions_path}")
+            else:
+                logger.warning(
+                    f"Complexity predictions not found at {complexity_predictions_path}. "
+                    "Run score_complexity first or provide --complexity-predictions path."
+                )
+                complexity_predictions_path = None
 
     # Use centralized data loader
     df = _load_scoring_data(
@@ -357,7 +372,7 @@ def load_scoring_data(
         start_year=start_year,
         end_year=end_year,
         use_embeddings=use_embeddings,
-        complexity_predictions_path=complexity_predictions_path,
+        complexity_predictions_path=str(complexity_predictions_path) if complexity_predictions_path else None,
         local_data_path=None,
     )
 
@@ -384,7 +399,8 @@ def predict_data(
     experiment_name: str,
     model_type: str = "hurdle",
     complexity_predictions: Optional[pl.DataFrame] = None,
-) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[float]]:
+    return_uncertainty: bool = False,
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[float], Optional[np.ndarray]]:
     """
     Predict data using the given pipeline and model type.
 
@@ -397,9 +413,11 @@ def predict_data(
         experiment_name: Name of experiment for threshold retrieval
         model_type: Type of model being used
         complexity_predictions: Unused, kept for backward compatibility
+        return_uncertainty: If True, return uncertainty estimates for Bayesian models
 
     Returns:
-        Tuple of (predicted_values, predicted_class, threshold)
+        Tuple of (predicted_values, predicted_class, threshold, std_dev)
+        std_dev is None for non-Bayesian models or when return_uncertainty=False
     """
     # Get the model class for this type
     model_class = get_model_class(model_type)
@@ -410,6 +428,8 @@ def predict_data(
 
     logger.info(f"{model_type.capitalize()} Model Prediction:")
     logger.info(f"Input DataFrame shape: {df.shape}")
+
+    std_dev = None
 
     # Handle classification vs regression
     if model.model_task == "classification":
@@ -426,26 +446,75 @@ def predict_data(
         predicted_class = raw_predictions >= threshold
         predicted_values = raw_predictions
     else:
-        # For regression models, get predictions and post-process
-        raw_predictions = pipeline.predict(df_pandas)
+        # For regression models, check for uncertainty support
+        if return_uncertainty and model.supports_uncertainty:
+            result = model.predict_with_uncertainty(df_pandas)
+            predicted_values = result.values
+            std_dev = result.std
 
-        logger.info(
-            f"Raw prediction stats: min={raw_predictions.min():.4f}, "
-            f"max={raw_predictions.max():.4f}, mean={raw_predictions.mean():.4f}"
-        )
+            logger.info(
+                f"Prediction stats: min={predicted_values.min():.4f}, "
+                f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
+            )
+            if std_dev is not None:
+                logger.info(
+                    f"Uncertainty stats: min_std={std_dev.min():.4f}, "
+                    f"max_std={std_dev.max():.4f}, mean_std={std_dev.mean():.4f}"
+                )
+        else:
+            # Standard prediction path
+            raw_predictions = pipeline.predict(df_pandas)
 
-        # Use model's post-processing (clipping, inverse transforms, etc.)
-        predicted_values = model.post_process_predictions(raw_predictions)
+            logger.info(
+                f"Raw prediction stats: min={raw_predictions.min():.4f}, "
+                f"max={raw_predictions.max():.4f}, mean={raw_predictions.mean():.4f}"
+            )
 
-        logger.info(
-            f"Post-processed stats: min={predicted_values.min():.4f}, "
-            f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
-        )
+            # Use model's post-processing (clipping, inverse transforms, etc.)
+            predicted_values = model.post_process_predictions(raw_predictions)
+
+            logger.info(
+                f"Post-processed stats: min={predicted_values.min():.4f}, "
+                f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
+            )
 
         predicted_class = None
         threshold = None
 
-    return predicted_values, predicted_class, threshold
+    return predicted_values, predicted_class, threshold, std_dev
+
+
+def compute_confidence_bounds(
+    values: np.ndarray,
+    std: np.ndarray,
+    level: float,
+    lower_bound: Optional[float] = None,
+    upper_bound: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute confidence interval bounds.
+
+    Args:
+        values: Point estimates.
+        std: Standard deviations.
+        level: Confidence level (e.g., 0.95 for 95% CI).
+        lower_bound: Optional lower clipping bound.
+        upper_bound: Optional upper clipping bound.
+
+    Returns:
+        Tuple of (lower, upper) bounds.
+    """
+    from scipy import stats
+
+    z = stats.norm.ppf((1 + level) / 2)
+    lower = values - z * std
+    upper = values + z * std
+
+    if lower_bound is not None:
+        lower = np.maximum(lower, lower_bound)
+    if upper_bound is not None:
+        upper = np.minimum(upper, upper_bound)
+
+    return lower, upper
 
 
 def prepare_results(
@@ -454,6 +523,8 @@ def prepare_results(
     predicted_class: Optional[np.ndarray],
     model_type: str,
     threshold: Optional[float] = None,
+    std_dev: Optional[np.ndarray] = None,
+    confidence_levels: Optional[List[float]] = None,
 ) -> pl.DataFrame:
     """
     Prepare results DataFrame based on model type.
@@ -464,34 +535,73 @@ def prepare_results(
         predicted_class: Predicted classes (for classification models)
         model_type: Type of model being used
         threshold: Optional threshold used for classification
+        std_dev: Optional standard deviation for uncertainty quantification
+        confidence_levels: List of confidence levels for intervals (default: [0.80, 0.90, 0.95])
 
     Returns:
         Results DataFrame with predictions
     """
+    if confidence_levels is None:
+        confidence_levels = [0.80, 0.90, 0.95]
+
+    # Model-specific bounds for clipping
+    BOUNDS = {
+        "complexity": (1, 5),
+        "rating": (1, 10),
+        "users_rated": (0, None),
+    }
+
     # Select columns based on model type
     if model_type == "complexity":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_complexity", predicted_values),
-                pl.Series("complexity", df.select("complexity").to_pandas().squeeze()),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_complexity", predicted_values),
+            pl.Series("complexity", df.select("complexity").to_pandas().squeeze()),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_complexity_std", std_dev))
+            lb, ub = BOUNDS["complexity"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_complexity_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_complexity_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "rating":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_rating", predicted_values),
-                pl.Series("rating", df.select("rating").to_pandas().squeeze()),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_rating", predicted_values),
+            pl.Series("rating", df.select("rating").to_pandas().squeeze()),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_rating_std", std_dev))
+            lb, ub = BOUNDS["rating"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_rating_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_rating_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "users_rated":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_users_rated", predicted_values),
-                pl.Series(
-                    "users_rated", df.select("users_rated").to_pandas().squeeze()
-                ),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_users_rated", predicted_values),
+            pl.Series(
+                "users_rated", df.select("users_rated").to_pandas().squeeze()
+            ),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_users_rated_std", std_dev))
+            lb, ub = BOUNDS["users_rated"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_users_rated_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_users_rated_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "hurdle":
         # Existing logic for hurdle model
         results = df.select(["game_id", "name", "year_published"]).with_columns(
@@ -658,6 +768,7 @@ def score_data(
     output_path: str = None,
     model_type: str = "hurdle",
     complexity_predictions: Optional[pl.DataFrame] = None,
+    return_uncertainty: bool = False,
 ):
     """Score data using the finalized model.
 
@@ -669,22 +780,35 @@ def score_data(
         min_ratings: Minimum number of ratings to filter games (default 0)
         output_path: Path to save predictions (optional, will use experiment name if not provided)
         model_type: Type of model to use (default: hurdle)
+        complexity_predictions: Optional pre-computed complexity predictions DataFrame
+        return_uncertainty: If True, include uncertainty estimates for Bayesian models
     """
     # Handle case where model type is included in experiment name
     if experiment_name is not None and "/" in experiment_name:
         # If experiment name includes model type (e.g., 'rating/full-features')
         model_type, experiment_name = experiment_name.split("/")
 
-    # Determine experiment name if not provided
+    # Determine experiment name if not provided - read from config first
     if experiment_name is None:
-        from src.models.experiments import ExperimentTracker
+        from src.utils.config import load_config
 
-        tracker = ExperimentTracker(model_type)
-        experiments = tracker.list_experiments()
-        if not experiments:
-            raise ValueError(f"No {model_type} model experiments found.")
-        experiment = max(experiments, key=lambda x: x.get("version", 0))
-        experiment_name = experiment["name"]
+        config = load_config()
+        model_config = config.models.get(model_type)
+
+        if model_config and hasattr(model_config, "experiment_name") and model_config.experiment_name:
+            experiment_name = model_config.experiment_name
+            logger.info(f"Using experiment from config: {experiment_name}")
+        else:
+            # Fall back to latest experiment if not in config
+            from src.models.experiments import ExperimentTracker
+
+            tracker = ExperimentTracker(model_type)
+            experiments = tracker.list_experiments()
+            if not experiments:
+                raise ValueError(f"No {model_type} model experiments found.")
+            experiment = max(experiments, key=lambda x: x.get("version", 0))
+            experiment_name = experiment["name"]
+            logger.info(f"Using latest experiment (not found in config): {experiment_name}")
 
     # logger.info debug information about model type
     logger.info(f"Using model type: {model_type}")
@@ -703,17 +827,18 @@ def score_data(
     )
 
     # Predict data
-    predicted_prob, predicted_class, threshold = predict_data(
+    predicted_prob, predicted_class, threshold, std_dev = predict_data(
         pipeline,
         df,
         experiment_name,
         model_type=model_type,
         complexity_predictions=complexity_predictions,
+        return_uncertainty=return_uncertainty,
     )
 
     # Prepare results
     results = prepare_results(
-        df, predicted_prob, predicted_class, model_type, threshold
+        df, predicted_prob, predicted_class, model_type, threshold, std_dev
     )
 
     # Save and display results
@@ -754,6 +879,12 @@ def main():
         "--complexity-predictions",
         help="Path to parquet file with pre-computed complexity predictions",
     )
+    parser.add_argument(
+        "--with-uncertainty",
+        action="store_true",
+        default=False,
+        help="Include uncertainty estimates in output (for Bayesian models)",
+    )
 
     args = parser.parse_args()
 
@@ -786,6 +917,7 @@ def main():
         output_path=args.output,
         model_type=model_type,
         complexity_predictions=complexity_predictions,
+        return_uncertainty=args.with_uncertainty,
     )
 
 

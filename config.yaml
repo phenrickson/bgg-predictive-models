@@ -51,19 +51,20 @@ models:
     experiment_name: logistic-hurdle
     use_embeddings: true
   complexity:
-    type: ridge
-    experiment_name: ridge-complexity
-    use_sample_weights: true
+    type: ard
+    experiment_name: ard-ridge-complexity
+    use_sample_weights: false
     use_embeddings: true
   rating:
-    type: ridge
-    experiment_name: ridge-rating
-    use_sample_weights: true
+    type: ard
+    experiment_name: ard-ridge-rating
+    use_sample_weights: false
     min_ratings: 5
     use_embeddings: true
   users_rated:
-    type: ridge
-    experiment_name: ridge-users_rated
+    type: ard
+    experiment_name: ard-ridge-users_rated
+    use_sample_weights: false
     min_ratings: 0
     use_embeddings: true
   geek_rating:

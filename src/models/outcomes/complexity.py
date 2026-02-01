@@ -1,10 +1,10 @@
 """Complexity model for predicting game weight/complexity."""
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.linear_model import Ridge, Lasso, LinearRegression
+from sklearn.linear_model import Ridge, Lasso, LinearRegression, BayesianRidge, ARDRegression
 from catboost import CatBoostRegressor
 import lightgbm as lgb
 
@@ -37,11 +37,15 @@ class ComplexityModel(TrainableModel):
         """
         super().__init__(training_config=training_config, **kwargs)
 
-    def configure_model(self, algorithm: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+    def configure_model(
+        self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[BaseEstimator, Dict[str, Any]]:
         """Configure regressor and parameter grid.
 
         Args:
             algorithm: Algorithm name.
+            algorithm_params: Optional algorithm-specific parameters from config.
+                For bayesian_ridge, can include: alpha_1, alpha_2, lambda_1, lambda_2.
 
         Returns:
             Tuple of (regressor_instance, param_grid).
@@ -50,6 +54,8 @@ class ComplexityModel(TrainableModel):
             "linear": LinearRegression,
             "ridge": Ridge,
             "lasso": Lasso,
+            "bayesian_ridge": BayesianRidge,
+            "ard": ARDRegression,
             "catboost": CatBoostRegressor,
             "lightgbm": lgb.LGBMRegressor,
             "lightgbm_linear": lgb.LGBMRegressor,
@@ -65,6 +71,15 @@ class ComplexityModel(TrainableModel):
             "lasso": {
                 "model__alpha": [0.1, 1.0, 10.0],
                 "model__selection": ["cyclic", "random"],
+            },
+            "bayesian_ridge": {
+                # BayesianRidge learns alpha/lambda automatically via EM
+                "model__fit_intercept": [True],
+            },
+            "ard": {
+                # ARDRegression uses per-feature relevance determination
+                "model__fit_intercept": [True],
+                "model__threshold_lambda": [10000, 100000],
             },
             "catboost": {
                 "model__iterations": [500],
@@ -97,7 +112,13 @@ class ComplexityModel(TrainableModel):
                 f"Supported: {list(MODEL_MAPPING.keys())}"
             )
 
-        model = MODEL_MAPPING[algorithm]()
+        # Create model instance with optional config params
+        model_class = MODEL_MAPPING[algorithm]
+        if algorithm_params:
+            model = model_class(**algorithm_params)
+        else:
+            model = model_class()
+
         param_grid = PARAM_GRIDS[algorithm]
 
         return model, param_grid
@@ -112,6 +133,22 @@ class ComplexityModel(TrainableModel):
             Predictions clipped to [1, 5].
         """
         return np.clip(predictions, 1, 5)
+
+    def post_process_uncertainty(
+        self, std: np.ndarray, predictions: np.ndarray
+    ) -> np.ndarray:
+        """Reduce uncertainty near complexity bounds [1, 5].
+
+        Args:
+            std: Standard deviation from Bayesian model.
+            predictions: Raw predictions (before clipping).
+
+        Returns:
+            Adjusted standard deviations.
+        """
+        dist_to_bound = np.minimum(predictions - 1.0, 5.0 - predictions)
+        scale_factor = np.clip(dist_to_bound / (2 * std + 1e-8), 0.1, 1.0)
+        return std * scale_factor
 
 
 if __name__ == "__main__":

@@ -953,10 +953,16 @@ def extract_feature_importance(
                 )
 
     # Handle different model types for feature importance extraction
-    from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
+    from sklearn.linear_model import (
+        LogisticRegression,
+        LinearRegression,
+        Ridge,
+        Lasso,
+        BayesianRidge,
+    )
 
     # Determine feature importance extraction method based on model type
-    if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso)):
+    if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso, BayesianRidge)):
         # For linear models, use coef_ attribute
         if not hasattr(model, "coef_"):
             raise ValueError("Model does not have coefficients")

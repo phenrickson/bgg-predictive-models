@@ -1,10 +1,10 @@
 """Users rated model for predicting number of user ratings."""
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from sklearn.base import BaseEstimator
-from sklearn.linear_model import Ridge, Lasso, LinearRegression
+from sklearn.linear_model import Ridge, Lasso, LinearRegression, BayesianRidge, ARDRegression
 from catboost import CatBoostRegressor
 import lightgbm as lgb
 
@@ -37,11 +37,15 @@ class UsersRatedModel(TrainableModel):
         """
         super().__init__(training_config=training_config, **kwargs)
 
-    def configure_model(self, algorithm: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+    def configure_model(
+        self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[BaseEstimator, Dict[str, Any]]:
         """Configure regressor and parameter grid.
 
         Args:
             algorithm: Algorithm name.
+            algorithm_params: Optional algorithm-specific parameters from config.
+                For bayesian_ridge, can include: alpha_1, alpha_2, lambda_1, lambda_2.
 
         Returns:
             Tuple of (regressor_instance, param_grid).
@@ -50,6 +54,8 @@ class UsersRatedModel(TrainableModel):
             "linear": LinearRegression,
             "ridge": Ridge,
             "lasso": Lasso,
+            "bayesian_ridge": BayesianRidge,
+            "ard": ARDRegression,
             "catboost": CatBoostRegressor,
             "lightgbm": lgb.LGBMRegressor,
             "lightgbm_linear": lgb.LGBMRegressor,
@@ -58,13 +64,22 @@ class UsersRatedModel(TrainableModel):
         PARAM_GRIDS = {
             "linear": {},
             "ridge": {
-                "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],
+                "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 5],
                 "model__solver": ["auto"],
                 "model__fit_intercept": [True],
             },
             "lasso": {
                 "model__alpha": [0.1, 1.0, 10.0],
                 "model__selection": ["cyclic", "random"],
+            },
+            "bayesian_ridge": {
+                # BayesianRidge learns alpha/lambda automatically via EM
+                "model__fit_intercept": [True],
+            },
+            "ard": {
+                # ARDRegression uses per-feature relevance determination
+                "model__fit_intercept": [True],
+                "model__threshold_lambda": [10000, 100000],
             },
             "catboost": {
                 "model__iterations": [500],
@@ -97,7 +112,13 @@ class UsersRatedModel(TrainableModel):
                 f"Supported: {list(MODEL_MAPPING.keys())}"
             )
 
-        model = MODEL_MAPPING[algorithm]()
+        # Create model instance with optional config params
+        model_class = MODEL_MAPPING[algorithm]
+        if algorithm_params:
+            model = model_class(**algorithm_params)
+        else:
+            model = model_class()
+
         param_grid = PARAM_GRIDS[algorithm]
 
         return model, param_grid
@@ -133,6 +154,25 @@ class UsersRatedModel(TrainableModel):
         if self.pipeline is None:
             raise ValueError("Model has not been trained or loaded")
         return self.pipeline.predict(features)
+
+    def post_process_uncertainty(
+        self, std: np.ndarray, predictions: np.ndarray
+    ) -> np.ndarray:
+        """Transform uncertainty from log scale to count scale.
+
+        Uses delta method: since target is log1p(users_rated),
+        std in count space is approximately std_log * exp(prediction).
+
+        Args:
+            std: Standard deviation in log scale from Bayesian model.
+            predictions: Raw log-scale predictions.
+
+        Returns:
+            Standard deviation in count scale.
+        """
+        # Delta method: d/dx(expm1(x)) = exp(x)
+        count_std = std * np.exp(predictions)
+        return np.maximum(count_std, 25)
 
 
 if __name__ == "__main__":

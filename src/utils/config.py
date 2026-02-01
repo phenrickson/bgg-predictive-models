@@ -183,6 +183,15 @@ class ModelConfig:
     use_sample_weights: bool = False
     use_embeddings: bool = False
     min_ratings: int = 0
+    algorithm_params: Optional[Dict[str, Any]] = None
+
+    def get_algorithm_params(self) -> Dict[str, Any]:
+        """Get algorithm-specific parameters.
+
+        Returns:
+            Dictionary of algorithm parameters, or empty dict if none configured.
+        """
+        return self.algorithm_params if self.algorithm_params is not None else {}
 
 
 @dataclass
@@ -384,6 +393,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             use_sample_weights=model_config.get("use_sample_weights", False),
             use_embeddings=model_config.get("use_embeddings", False),
             min_ratings=model_config.get("min_ratings", 0),
+            algorithm_params=model_config.get("algorithm_params"),
         )
 
     # Create scoring config if present

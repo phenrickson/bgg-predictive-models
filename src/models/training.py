@@ -216,6 +216,8 @@ def create_preprocessing_pipeline(
         "lasso": "linear",
         "logistic": "linear",
         "svc": "linear",
+        "bayesian_ridge": "linear",
+        "ard": "linear",
         # Tree-based models - work better with minimal preprocessing
         "lightgbm": "tree",
         "catboost": "tree",

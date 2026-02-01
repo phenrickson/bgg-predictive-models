@@ -217,6 +217,9 @@ def parse_arguments() -> argparse.Namespace:
     # Load include_count_features from config (default False)
     args.include_count_features = getattr(model_config, "include_count_features", False) if model_config else False
 
+    # Load algorithm_params from config
+    args.algorithm_params = model_config.get_algorithm_params() if model_config else {}
+
     # Load complexity predictions path from config if not provided via CLI
     # Models like rating/users_rated need this to get complexity predictions
     # Path is: {predictions_dir}/{complexity.experiment_name}.parquet
@@ -318,7 +321,10 @@ def train_model(
     logger.info(f"Train: {train_X.shape}, Tune: {tune_X.shape}, Test: {test_X.shape}")
 
     # Configure model and preprocessing
-    estimator, param_grid = model.configure_model(algorithm)
+    algorithm_params = getattr(args, "algorithm_params", {})
+    if algorithm_params:
+        logger.info(f"Using algorithm params from config: {algorithm_params}")
+    estimator, param_grid = model.configure_model(algorithm, algorithm_params)
 
     # Determine columns to preserve through preprocessing
     preserve_columns = ["year_published"]
@@ -419,6 +425,7 @@ def train_model(
         "model_type": model.model_type,
         "model_task": model.model_task,
         "algorithm": algorithm,
+        "algorithm_params": algorithm_params if algorithm_params else None,
         "target_column": model.target_column,
         "train_through": args.train_through,
         "tune_through": args.tune_through,
@@ -457,6 +464,34 @@ def train_model(
         test_y=test_y,
         model_type=model.model_task,
     )
+
+    # Save coefficient estimates and plot for Bayesian models
+    if model.supports_coefficient_uncertainty:
+        logger.info("Saving coefficient estimates and plot for Bayesian model")
+        exp_dir = experiment.exp_dir
+
+        # Save coefficient estimates with uncertainty to CSV (replaces coefficients.csv)
+        coef_path = exp_dir / "coefficients.csv"
+        model.save_coefficient_estimates(coef_path)
+
+        # Generate and save coefficient plot in plots subdirectory
+        plots_dir = exp_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = plots_dir / "coefficient_plot.png"
+        model.plot_top_coefficients(plot_path, top_n=100)
+
+    # Generate residuals diagnostic plot for regression models
+    if model.model_task == "regression":
+        logger.info("Generating residuals diagnostic plot")
+        exp_dir = experiment.exp_dir
+        plots_dir = exp_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        residuals_path = plots_dir / "residuals_plot.png"
+        model.plot_residuals(
+            residuals_path,
+            y_true=test_y.values,
+            y_pred=test_pred,
+        )
 
     logger.info("Training complete!")
 
