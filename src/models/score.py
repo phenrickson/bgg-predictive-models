@@ -187,21 +187,12 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
         # Otherwise, search in all known model types from registry
         model_types = get_known_model_types()
 
-    # logger.info diagnostic information
-    logger.info(f"Attempting to load experiment: {experiment_name}")
-    logger.info(f"Searching in model types: {model_types}")
 
     # Try each model type until successful
     for current_model_type in model_types:
         try:
-            logger.info(f"Trying model type: {current_model_type}")
             tracker = ExperimentTracker(current_model_type)
-
-            # logger.info available experiments for this model type
             experiments = tracker.list_experiments()
-            logger.info(
-                f"Available experiments for {current_model_type}: {[exp['full_name'] for exp in experiments]}"
-            )
 
             # Handle cases with or without version
             if "/" in experiment_name:
@@ -216,9 +207,6 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                 ]
 
                 if not matching_experiments:
-                    logger.info(
-                        f"No experiments found matching base name: {experiment_name}"
-                    )
                     continue
 
                 # Sort and get the latest version
@@ -226,20 +214,12 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     matching_experiments, key=lambda x: x["version"]
                 )
 
-                logger.info(
-                    f"Auto-selecting latest version: {latest_experiment['full_name']}"
-                )
                 experiment = tracker.load_experiment(
                     latest_experiment["name"], latest_experiment["version"]
                 )
 
-            # logger.info experiment directory for debugging
-            logger.info(f"Experiment directory: {experiment.exp_dir}")
-
             # Explicitly look for finalized model
             finalized_path = experiment.exp_dir / "finalized" / "pipeline.pkl"
-            logger.info(f"Checking finalized model path: {finalized_path}")
-            logger.info(f"Path exists: {finalized_path.exists()}")
 
             if not finalized_path.exists():
                 # Look for latest version's finalized model
@@ -248,37 +228,22 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     for d in experiment.exp_dir.iterdir()
                     if d.is_dir() and d.name.startswith("v")
                 ]
-                logger.info(
-                    f"Version directories found: {[d.name for d in version_dirs]}"
-                )
 
                 if version_dirs:
                     latest_version_dir = max(
                         version_dirs, key=lambda x: int(x.name[1:])
                     )
                     finalized_path = latest_version_dir / "finalized" / "pipeline.pkl"
-                    logger.info(
-                        f"Checking alternative finalized model path: {finalized_path}"
-                    )
-                    logger.info(f"Alternative path exists: {finalized_path.exists()}")
 
             if finalized_path.exists():
-                logger.info(
-                    f"Successfully loaded finalized model from: {finalized_path}"
-                )
+                logger.info(f"Loaded {experiment_name} from {finalized_path}")
                 import joblib
 
                 return joblib.load(finalized_path)
 
             raise FileNotFoundError(f"No finalized model found for {experiment_name}")
 
-        except (ValueError, FileNotFoundError, Exception) as e:
-            logger.info(
-                f"Failed to load in {current_model_type} model type: {type(e).__name__}: {e}"
-            )
-            import traceback
-
-            traceback.print_exc()
+        except (ValueError, FileNotFoundError, Exception):
             continue
 
     # If no model type works, raise an error

@@ -110,35 +110,42 @@ class GeekRatingModel(CompositeModel):
         likely_mask = hurdle_proba >= threshold
 
         # Step 2: For likely games, predict complexity
-        complexity_model = self.sub_models["complexity"]
+        # Note: sub_models are raw sklearn pipelines, so we need to apply post-processing
+        complexity_pipeline = self.sub_models["complexity"]
         results["predicted_complexity"] = 1.0  # Default
 
         if likely_mask.any():
             likely_features = features[likely_mask]
-            results.loc[likely_mask, "predicted_complexity"] = complexity_model.predict(
-                likely_features
-            )
+            raw_complexity = complexity_pipeline.predict(likely_features)
+            # Clip to valid range [1, 5]
+            results.loc[likely_mask, "predicted_complexity"] = np.clip(raw_complexity, 1, 5)
 
         # Step 3: Add complexity to features for rating/users_rated
         features_with_complexity = features.copy()
         features_with_complexity["predicted_complexity"] = results["predicted_complexity"]
 
         # Step 4: Predict rating and users_rated for likely games
-        rating_model = self.sub_models["rating"]
-        users_rated_model = self.sub_models["users_rated"]
+        # Note: sub_models are raw sklearn pipelines, so we need to apply post-processing
+        rating_pipeline = self.sub_models["rating"]
+        users_rated_pipeline = self.sub_models["users_rated"]
 
-        # Defaults for unlikely games
+        # Defaults for unlikely games (use float for users_rated to avoid dtype warning)
         results["predicted_rating"] = 5.5
-        results["predicted_users_rated"] = 25
+        results["predicted_users_rated"] = 25.0
 
         if likely_mask.any():
             likely_features_with_complexity = features_with_complexity[likely_mask]
 
-            results.loc[likely_mask, "predicted_rating"] = rating_model.predict(
-                likely_features_with_complexity
-            )
-            results.loc[likely_mask, "predicted_users_rated"] = users_rated_model.predict(
-                likely_features_with_complexity
+            # Rating predictions - clip to valid range [1, 10]
+            raw_rating = rating_pipeline.predict(likely_features_with_complexity)
+            results.loc[likely_mask, "predicted_rating"] = np.clip(raw_rating, 1, 10)
+
+            # Users rated predictions - model predicts log1p(users_rated)
+            # Post-process: expm1 to inverse, round to nearest 50, minimum 25
+            raw_log_users_rated = users_rated_pipeline.predict(likely_features_with_complexity)
+            raw_counts = np.expm1(raw_log_users_rated)
+            results.loc[likely_mask, "predicted_users_rated"] = np.maximum(
+                np.round(raw_counts / 50) * 50, 25
             )
 
         # Step 5: Calculate geek rating
