@@ -48,6 +48,13 @@ class SimulationResult:
         """Users rated in count scale (inverse of log1p transform)."""
         return np.maximum(np.expm1(self.users_rated_samples), 25)
 
+    @property
+    def actual_users_rated_log(self) -> Optional[float]:
+        """Actual users_rated in log scale (for evaluation consistency)."""
+        if self.actual_users_rated is None:
+            return None
+        return float(np.log1p(self.actual_users_rated))
+
     def percentile(self, arr: np.ndarray, q: float) -> float:
         """Get percentile of samples."""
         return float(np.percentile(arr, q))
@@ -71,7 +78,8 @@ class SimulationResult:
             "game_id": self.game_id,
             "game_name": self.game_name,
             "complexity": {
-                "actual": self.actual_complexity,
+                # complexity=0 means missing, treat as None
+                "actual": self.actual_complexity if self.actual_complexity and self.actual_complexity > 0 else None,
                 "point": self.complexity_point,
                 "median": float(np.median(self.complexity_samples)),
                 "mean": float(self.complexity_samples.mean()),
@@ -82,14 +90,14 @@ class SimulationResult:
                     self.in_interval(
                         self.actual_complexity, self.complexity_samples, 0.90
                     )
-                    if self.actual_complexity is not None
+                    if self.actual_complexity is not None and self.actual_complexity > 0
                     else None
                 ),
                 "in_interval_50": (
                     self.in_interval(
                         self.actual_complexity, self.complexity_samples, 0.50
                     )
-                    if self.actual_complexity is not None
+                    if self.actual_complexity is not None and self.actual_complexity > 0
                     else None
                 ),
             },
@@ -113,27 +121,32 @@ class SimulationResult:
                 ),
             },
             "users_rated": {
-                "actual": self.actual_users_rated,
-                "point": self.users_rated_point,
-                "median": float(np.median(self.users_rated_count_samples)),
-                "mean": float(self.users_rated_count_samples.mean()),
-                "std": float(self.users_rated_count_samples.std()),
-                "interval_90": self.interval(self.users_rated_count_samples, 0.90),
-                "interval_50": self.interval(self.users_rated_count_samples, 0.50),
+                # All values in log scale for consistency with model training
+                "actual": self.actual_users_rated_log,
+                "point": self.users_rated_point,  # Already in log scale
+                "median": float(np.median(self.users_rated_samples)),
+                "mean": float(self.users_rated_samples.mean()),
+                "std": float(self.users_rated_samples.std()),
+                "interval_90": self.interval(self.users_rated_samples, 0.90),
+                "interval_50": self.interval(self.users_rated_samples, 0.50),
                 "in_interval_90": (
                     self.in_interval(
-                        self.actual_users_rated, self.users_rated_count_samples, 0.90
+                        self.actual_users_rated_log, self.users_rated_samples, 0.90
                     )
-                    if self.actual_users_rated is not None
+                    if self.actual_users_rated_log is not None
                     else None
                 ),
                 "in_interval_50": (
                     self.in_interval(
-                        self.actual_users_rated, self.users_rated_count_samples, 0.50
+                        self.actual_users_rated_log, self.users_rated_samples, 0.50
                     )
-                    if self.actual_users_rated is not None
+                    if self.actual_users_rated_log is not None
                     else None
                 ),
+                # Count scale for interpretability
+                "actual_count": self.actual_users_rated,
+                "point_count": float(max(np.expm1(self.users_rated_point), 25)),
+                "median_count": float(np.median(self.users_rated_count_samples)),
             },
             "geek_rating": {
                 "actual": self.actual_geek_rating,
@@ -580,14 +593,16 @@ def simulate_geek_rating(
     rating_point = float(
         np.clip(rating_pipeline.predict(game_with_complexity)[0], 1, 10)
     )
-    users_rated_point_log = float(
+    # users_rated_point stays in log scale (consistent with users_rated_samples)
+    users_rated_point = float(
         users_rated_pipeline.predict(game_with_complexity)[0]
     )
-    users_rated_point = max(np.expm1(users_rated_point_log), 25)
+    # Convert to count scale only for geek_rating calculation
+    users_rated_count = max(np.expm1(users_rated_point), 25)
 
     geek_rating_point = (
-        (rating_point * users_rated_point) + (prior_rating * prior_weight)
-    ) / (users_rated_point + prior_weight)
+        (rating_point * users_rated_count) + (prior_rating * prior_weight)
+    ) / (users_rated_count + prior_weight)
 
     return SimulationResult(
         game_id=game_id,
@@ -695,12 +710,14 @@ def simulate_batch(
     games_with_complexity["predicted_complexity"] = complexity_points
 
     rating_points = np.clip(rating_pipeline.predict(games_with_complexity), 1, 10)
-    users_rated_points_log = users_rated_pipeline.predict(games_with_complexity)
-    users_rated_points = np.maximum(np.expm1(users_rated_points_log), 25)
+    # users_rated_points stays in log scale (consistent with users_rated_samples)
+    users_rated_points = users_rated_pipeline.predict(games_with_complexity)
+    # Convert to count scale only for geek_rating calculation
+    users_rated_counts = np.maximum(np.expm1(users_rated_points), 25)
 
     geek_rating_points = (
-        (rating_points * users_rated_points) + (prior_rating * prior_weight)
-    ) / (users_rated_points + prior_weight)
+        (rating_points * users_rated_counts) + (prior_rating * prior_weight)
+    ) / (users_rated_counts + prior_weight)
 
     # Extract actuals
     actual_complexity = games["complexity"].values if "complexity" in games.columns else [None] * n_games
@@ -839,10 +856,15 @@ def compute_simulation_metrics(
 
         for r in results:
             s = r.summary()
-            if s[outcome]["actual"] is not None:
-                actuals.append(s[outcome]["actual"])
-                medians.append(s[outcome]["median"])
-                points.append(s[outcome]["point"])
+            actual_val = s[outcome]["actual"]
+            # Skip if actual is None or if complexity is 0 (means missing)
+            if actual_val is None:
+                continue
+            if outcome == "complexity" and actual_val == 0:
+                continue
+            actuals.append(actual_val)
+            medians.append(s[outcome]["median"])
+            points.append(s[outcome]["point"])
 
         if not actuals:
             metrics[outcome] = {"n": 0}

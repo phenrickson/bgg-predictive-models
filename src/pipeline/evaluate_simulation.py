@@ -57,18 +57,32 @@ def create_scatter_plots(
     # Row 1: Predicted vs Actual (using point predictions)
     for i, outcome in enumerate(outcomes):
         ax = axes[0, i]
-        actual = df[f"{outcome}_actual"]
-        point = df[f"{outcome}_point"]
+        actual = df[f"{outcome}_actual"].copy()
+        point = df[f"{outcome}_point"].copy()
 
-        ax.scatter(actual, point, alpha=0.3, s=10)
+        # Filter out invalid actuals (complexity=0 means missing)
+        if outcome == "complexity":
+            valid_mask = actual > 0
+            actual = actual[valid_mask]
+            point = point[valid_mask]
+
+        # Use log1p scale for users_rated (handles zeros)
+        if outcome == "users_rated":
+            actual = np.log1p(actual)
+            point = np.log1p(point)
+            ax.set_xlabel("Predicted (log1p)")
+            ax.set_ylabel("Actual (log1p)")
+        else:
+            ax.set_xlabel("Predicted (Point)")
+            ax.set_ylabel("Actual")
+
+        ax.scatter(point, actual, alpha=0.3, s=10)
 
         # Add diagonal line
         min_val = min(actual.min(), point.min())
         max_val = max(actual.max(), point.max())
         ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=1, label="y=x")
 
-        ax.set_xlabel("Actual")
-        ax.set_ylabel("Predicted (Point)")
         ax.set_title(f"{outcome.replace('_', ' ').title()}")
 
         # Add correlation
@@ -86,6 +100,11 @@ def create_scatter_plots(
         point = df[f"{outcome}_point"]
         sim_median = df[f"{outcome}_median"]
 
+        # Use log1p scale for users_rated (handles zeros)
+        if outcome == "users_rated":
+            point = np.log1p(point)
+            sim_median = np.log1p(sim_median)
+
         ax.scatter(point, sim_median, alpha=0.3, s=10)
 
         # Add diagonal line
@@ -93,8 +112,8 @@ def create_scatter_plots(
         max_val = max(point.max(), sim_median.max())
         ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=1, label="y=x")
 
-        ax.set_xlabel("Point Prediction")
-        ax.set_ylabel("Simulation Median")
+        ax.set_xlabel("Point Prediction" + (" (log1p)" if outcome == "users_rated" else ""))
+        ax.set_ylabel("Simulation Median" + (" (log1p)" if outcome == "users_rated" else ""))
         ax.set_title(f"{outcome.replace('_', ' ').title()}")
 
         # Add correlation
@@ -285,20 +304,20 @@ def evaluate_year(
             predictions_data.append({
                 "game_id": r.game_id,
                 "name": r.game_name,
-                # Actuals
+                # Actuals (count scale for users_rated)
                 "complexity_actual": r.actual_complexity,
                 "rating_actual": r.actual_rating,
-                "users_rated_actual": r.actual_users_rated,
+                "users_rated_actual": s["users_rated"]["actual_count"],
                 "geek_rating_actual": r.actual_geek_rating,
-                # Point predictions
+                # Point predictions (count scale for users_rated)
                 "complexity_point": r.complexity_point,
                 "rating_point": r.rating_point,
-                "users_rated_point": r.users_rated_point,
+                "users_rated_point": s["users_rated"]["point_count"],
                 "geek_rating_point": r.geek_rating_point,
-                # Simulation median
+                # Simulation median (count scale for users_rated)
                 "complexity_median": s["complexity"]["median"],
                 "rating_median": s["rating"]["median"],
-                "users_rated_median": s["users_rated"]["median"],
+                "users_rated_median": s["users_rated"]["median_count"],
                 "geek_rating_median": s["geek_rating"]["median"],
                 # 90% intervals
                 "complexity_lower_90": s["complexity"]["interval_90"][0],
@@ -507,8 +526,37 @@ Examples:
         df_results.to_csv(args.output, index=False)
         logger.info(f"\nResults saved to: {args.output}")
     else:
-        print("\n\nFull Results:")
-        print(df_results.to_string())
+        # Print formatted results by year
+        print("\n\nResults by Year:")
+        print("=" * 80)
+
+        for _, row in df_results.iterrows():
+            year = int(row["test_year"])
+            n_games = int(row["n_games"])
+            n_samples = int(row["n_samples"])
+
+            print(f"\n{year} ({n_games} games, {n_samples} samples)")
+            print("-" * 80)
+
+            # Header
+            print(f"{'Outcome':<12} {'RMSE_pt':>8} {'RMSE_sim':>9} {'MAE_pt':>8} {'MAE_sim':>8} {'R²_pt':>7} {'R²_sim':>7} {'Cov90':>6} {'Cov50':>6}")
+            print("-" * 80)
+
+            for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
+                rmse_pt = row.get(f"{outcome}_rmse_point", float("nan"))
+                rmse_sim = row.get(f"{outcome}_rmse_sim", float("nan"))
+                mae_pt = row.get(f"{outcome}_mae_point", float("nan"))
+                mae_sim = row.get(f"{outcome}_mae_sim", float("nan"))
+                r2_pt = row.get(f"{outcome}_r2_point", float("nan"))
+                r2_sim = row.get(f"{outcome}_r2_sim", float("nan"))
+                cov90 = row.get(f"{outcome}_coverage_90", float("nan"))
+                cov50 = row.get(f"{outcome}_coverage_50", float("nan"))
+
+                # Format coverage as percentage
+                cov90_str = f"{cov90:.1%}" if not pd.isna(cov90) else "N/A"
+                cov50_str = f"{cov50:.1%}" if not pd.isna(cov50) else "N/A"
+
+                print(f"{outcome:<12} {rmse_pt:>8.3f} {rmse_sim:>9.3f} {mae_pt:>8.3f} {mae_sim:>8.3f} {r2_pt:>7.3f} {r2_sim:>7.3f} {cov90_str:>6} {cov50_str:>6}")
 
 
 if __name__ == "__main__":

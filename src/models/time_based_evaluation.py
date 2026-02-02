@@ -255,9 +255,20 @@ class TimeBasedEvaluator:
         model = joblib.load(pipeline_path)
         logger.info(f"Loaded complexity model from {pipeline_path}")
 
-        # Load data for all years through test year
+        # Load games that rating/users_rated models will train on
+        # Use users_rated data_config (most permissive of the dependent models)
+        # so complexity predictions exist for all games they need
+        users_rated_data_config = get_model_class("users_rated").data_config
+        # But don't require complexity predictions (we're generating them now)
+        from src.models.outcomes.base import DataConfig
+        prediction_data_config = DataConfig(
+            min_ratings=users_rated_data_config.min_ratings,
+            min_weights=users_rated_data_config.min_weights,
+            requires_complexity_predictions=False,
+            supports_embeddings=True,
+        )
         df = load_data(
-            data_config=get_model_class("complexity").data_config,
+            data_config=prediction_data_config,
             end_year=split["test_through"],
             use_embeddings=model_config.get("use_embeddings", self.use_embeddings),
         )
