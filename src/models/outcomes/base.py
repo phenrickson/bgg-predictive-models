@@ -79,12 +79,12 @@ class TrainingConfig:
     sample_weight_column: Optional[str] = None
     param_grid: Dict[str, List[Any]] = field(default_factory=dict)
 
-    # Year-based splits (all years are inclusive)
-    train_through: int = 2021
-    tune_start: int = 2022
-    tune_through: int = 2023
-    test_start: int = 2024
-    test_through: int = 2024
+    # Year-based splits (all years are inclusive) - loaded from config
+    train_through: Optional[int] = None
+    tune_start: Optional[int] = None
+    tune_through: Optional[int] = None
+    test_start: Optional[int] = None
+    test_through: Optional[int] = None
 
 
 class Predictor(Protocol):
@@ -701,7 +701,7 @@ class TrainableModel(ABC):
         complexity_predictions_path: Optional[Union[str, Path]] = None,
         use_embeddings: Optional[bool] = None,
         local_data_path: Optional[Union[str, Path]] = None,
-        recent_year_threshold: int = 2,
+        recent_year_threshold: Optional[int] = None,
         version: Optional[int] = None,
     ) -> Path:
         """Finalize a model by refitting on full dataset for production.
@@ -721,7 +721,7 @@ class TrainableModel(ABC):
                 If None, reads from experiment metadata.
             local_data_path: Optional path to local data file.
             recent_year_threshold: Years to exclude from current year
-                when end_year is None. Default 2.
+                when end_year is None. If None, reads from config.
             version: Optional specific experiment version to finalize.
 
         Returns:
@@ -733,6 +733,7 @@ class TrainableModel(ABC):
         from src.models.experiments import ExperimentTracker
         from src.models.outcomes.data import load_training_data, select_X_y
         from src.models.training import calculate_sample_weights
+        from src.utils.config import load_config
 
         # Load experiment
         tracker = ExperimentTracker(self.model_type)
@@ -745,8 +746,11 @@ class TrainableModel(ABC):
         experiment = tracker.load_experiment(base_experiment_name, version)
         logger.info(f"Loaded experiment: {experiment.name}")
 
-        # Determine end year
-        current_year = datetime.now().year
+        # Determine end year from config
+        config = load_config()
+        current_year = config.years.current
+        if recent_year_threshold is None:
+            recent_year_threshold = getattr(config.years, "recent_year_threshold", 2)
         if end_year is None:
             end_year = current_year - recent_year_threshold
         elif current_year - end_year <= recent_year_threshold:

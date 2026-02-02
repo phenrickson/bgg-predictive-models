@@ -66,12 +66,10 @@ def create_scatter_plots(
             actual = actual[valid_mask]
             point = point[valid_mask]
 
-        # Use log1p scale for users_rated (handles zeros)
+        # users_rated is already in log scale from simulation.py
         if outcome == "users_rated":
-            actual = np.log1p(actual)
-            point = np.log1p(point)
-            ax.set_xlabel("Predicted (log1p)")
-            ax.set_ylabel("Actual (log1p)")
+            ax.set_xlabel("Predicted (log scale)")
+            ax.set_ylabel("Actual (log scale)")
         else:
             ax.set_xlabel("Predicted (Point)")
             ax.set_ylabel("Actual")
@@ -100,11 +98,7 @@ def create_scatter_plots(
         point = df[f"{outcome}_point"]
         sim_median = df[f"{outcome}_median"]
 
-        # Use log1p scale for users_rated (handles zeros)
-        if outcome == "users_rated":
-            point = np.log1p(point)
-            sim_median = np.log1p(sim_median)
-
+        # users_rated is already in log scale from simulation.py
         ax.scatter(point, sim_median, alpha=0.3, s=10)
 
         # Add diagonal line
@@ -112,8 +106,8 @@ def create_scatter_plots(
         max_val = max(point.max(), sim_median.max())
         ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=1, label="y=x")
 
-        ax.set_xlabel("Point Prediction" + (" (log1p)" if outcome == "users_rated" else ""))
-        ax.set_ylabel("Simulation Median" + (" (log1p)" if outcome == "users_rated" else ""))
+        ax.set_xlabel("Point Prediction" + (" (log scale)" if outcome == "users_rated" else ""))
+        ax.set_ylabel("Simulation Median" + (" (log scale)" if outcome == "users_rated" else ""))
         ax.set_title(f"{outcome.replace('_', ' ').title()}")
 
         # Add correlation
@@ -250,7 +244,7 @@ def evaluate_year(
     valid_mask = (
         ~df_pandas["rating"].isna()
         & ~df_pandas["users_rated"].isna()
-        & (df_pandas["users_rated"] > 0)
+        & (df_pandas["users_rated"] >= 0)
     )
     df_valid = df_pandas[valid_mask].reset_index(drop=True)
     n_games = len(df_valid)
@@ -304,20 +298,20 @@ def evaluate_year(
             predictions_data.append({
                 "game_id": r.game_id,
                 "name": r.game_name,
-                # Actuals (count scale for users_rated)
+                # Actuals - users_rated in LOG SCALE (matches model training)
                 "complexity_actual": r.actual_complexity,
                 "rating_actual": r.actual_rating,
-                "users_rated_actual": s["users_rated"]["actual_count"],
+                "users_rated_actual": s["users_rated"]["actual"],  # log scale
                 "geek_rating_actual": r.actual_geek_rating,
-                # Point predictions (count scale for users_rated)
+                # Point predictions - users_rated in LOG SCALE
                 "complexity_point": r.complexity_point,
                 "rating_point": r.rating_point,
-                "users_rated_point": s["users_rated"]["point_count"],
+                "users_rated_point": s["users_rated"]["point"],  # log scale
                 "geek_rating_point": r.geek_rating_point,
-                # Simulation median (count scale for users_rated)
+                # Simulation median - users_rated in LOG SCALE
                 "complexity_median": s["complexity"]["median"],
                 "rating_median": s["rating"]["median"],
-                "users_rated_median": s["users_rated"]["median_count"],
+                "users_rated_median": s["users_rated"]["median"],  # log scale
                 "geek_rating_median": s["geek_rating"]["median"],
                 # 90% intervals
                 "complexity_lower_90": s["complexity"]["interval_90"][0],

@@ -77,11 +77,13 @@ def _populate_registry():
     from src.models.outcomes.complexity import ComplexityModel
     from src.models.outcomes.rating import RatingModel
     from src.models.outcomes.users_rated import UsersRatedModel
+    from src.models.outcomes.geek_rating import GeekRatingModel
 
     register_model(HurdleModel)
     register_model(ComplexityModel)
     register_model(RatingModel)
     register_model(UsersRatedModel)
+    register_model(GeekRatingModel)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -93,7 +95,7 @@ def parse_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         required=True,
-        choices=["hurdle", "complexity", "rating", "users_rated"],
+        choices=["hurdle", "complexity", "rating", "users_rated", "geek_rating"],
         help="Model type to train",
     )
     parser.add_argument(
@@ -506,7 +508,7 @@ def parse_finalize_arguments() -> argparse.Namespace:
         "--model",
         type=str,
         required=True,
-        choices=["hurdle", "complexity", "rating", "users_rated"],
+        choices=["hurdle", "complexity", "rating", "users_rated", "geek_rating"],
         help="Model type to finalize",
     )
     parser.add_argument(

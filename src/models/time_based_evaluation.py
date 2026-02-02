@@ -352,6 +352,7 @@ class TimeBasedEvaluator:
             sub_models=sub_models,
             prior_rating=scoring_params.get("prior_rating", 5.5),
             prior_weight=scoring_params.get("prior_weight", 2000),
+            hurdle_threshold=0,  # Predict for all games, don't use hurdle
         )
 
         # Load test data

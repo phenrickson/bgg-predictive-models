@@ -84,10 +84,6 @@ LIGHTGBM_LINEAR ?= lightgbm_linear
 .PHONY: models
 models: hurdle complexity rating users_rated geek_rating
 
-## register models
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings register
-register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
-
 # train individual models
 hurdle: train_hurdle score_hurdle
 complexity: train_complexity score_complexity
@@ -143,6 +139,11 @@ geek_rating:
 	uv run -m src.pipeline.geek_rating \
 	--experiment estimated-geek-rating
 
+# evaluate models over time periods
+.PHONY: evaluate
+evalute: 
+	uv run -m src.pipeline.evaluate
+
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
@@ -190,6 +191,9 @@ evaluate-simulation:  ## Run simulation-based evaluation
 	uv run -m src.pipeline.evaluate_simulation --save-predictions
 
 ### register model candidates
+.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings register
+register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
+
 # register models
 register_complexity:
 	uv run -m scoring_service.register_model \
