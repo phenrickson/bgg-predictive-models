@@ -1,6 +1,6 @@
 """Hurdle model for predicting if games receive enough ratings."""
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -50,11 +50,14 @@ class HurdleModel(TrainableModel):
         super().__init__(training_config=training_config, **kwargs)
         self.optimal_threshold: float = 0.5
 
-    def configure_model(self, algorithm: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+    def configure_model(
+        self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[BaseEstimator, Dict[str, Any]]:
         """Configure classifier and parameter grid.
 
         Args:
             algorithm: Algorithm name.
+            algorithm_params: Optional algorithm-specific parameters from config.
 
         Returns:
             Tuple of (classifier_instance, param_grid).
@@ -107,7 +110,12 @@ class HurdleModel(TrainableModel):
                 f"Supported: {list(CLASSIFIER_MAPPING.keys())}"
             )
 
-        classifier = CLASSIFIER_MAPPING[algorithm]()
+        # Create model instance with optional config params
+        model_class = CLASSIFIER_MAPPING[algorithm]
+        if algorithm_params:
+            classifier = model_class(**algorithm_params)
+        else:
+            classifier = model_class()
         param_grid = PARAM_GRIDS[algorithm]
 
         return classifier, param_grid

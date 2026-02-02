@@ -229,7 +229,7 @@ streamlit dashboard:
 	uv run streamlit run src/streamlit/Home.py
 
 ## view experiments
-experiment_dashboard:
+experiments:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
 # dashboard to look at predicted geek rating

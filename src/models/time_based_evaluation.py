@@ -1,134 +1,446 @@
-"""Time-based Model Evaluation and Prediction Pipeline"""
+"""Time-based Model Evaluation Pipeline.
+
+Evaluates models using time-based splits, training on historical data
+and testing on future years to simulate real-world deployment.
+"""
 
 import logging
 import argparse
 from typing import Dict, Optional, List, Any
+from pathlib import Path
 
 import polars as pl
 import numpy as np
 import pandas as pd
-import sklearn.metrics as metrics
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-from src.models.training import load_data, create_data_splits
-from src.models.finalize_model import finalize_model
+from src.utils.config import load_config
+from src.utils.logging import setup_logging
+from src.models.outcomes.train import get_model_class, train_model
+from src.models.outcomes.data import load_training_data, create_data_splits
+from src.models.outcomes.geek_rating import GeekRatingModel
+from src.models.experiments import ExperimentTracker
 
-import subprocess
-import sys
-import os
-import json
+
+logger = logging.getLogger(__name__)
 
 
 def generate_time_splits(
-    start_year: int = 2015,
-    end_year: int = 2025,
-    prediction_window: int = 2,
-    train_window: Optional[int] = None,
+    start_year: int = 2018,
+    end_year: int = 2024,
 ) -> List[Dict[str, int]]:
-    """
-    Generate time-based splits for model evaluation.
+    """Generate time-based splits for model evaluation.
+
+    Creates splits where each test year uses all prior data for training.
+    Uses a 2-year validation window before the test year.
 
     Args:
-        start_year: First year to start generating splits
-        end_year: Last year to generate splits
-        prediction_window: Number of years to predict
-        train_window: Optional fixed training window. If None, uses all previous data.
+        start_year: First test year to evaluate on.
+        end_year: Last test year to evaluate on.
 
     Returns:
-        List of dictionaries with split configurations
+        List of split configurations.
     """
-    logger = logging.getLogger(__name__)
-    logger.info(f"Generating time splits from {start_year} to {end_year}")
-
     splits = []
-    for train_through in range(start_year, end_year):
+
+    for test_year in range(start_year, end_year + 1):
+        # Train on all data through test_year - 3
+        # Tune on test_year - 2 to test_year - 1
+        # Test on test_year
         split_config = {
-            "train_through": train_through,
-            "tune_start": train_through,
-            "tune_through": train_through + 1,
-            "test_start": train_through + prediction_window,
-            "test_through": train_through + prediction_window + 1,
+            "train_through": test_year - 3,
+            "tune_start": test_year - 2,
+            "tune_through": test_year - 1,
+            "test_start": test_year,
+            "test_through": test_year,
         }
         splits.append(split_config)
 
-    logger.info(f"Generated {len(splits)} time splits")
+    logger.info(f"Generated {len(splits)} time splits for years {start_year}-{end_year}")
     return splits
 
 
-def evaluate_geek_rating_performance(
-    output_dir: str,
-    experiment_base: str,
-    predicted_ratings_path: str,
-    test_df: pd.DataFrame,
-    df: pd.DataFrame,
-):
-    """
-    Evaluate geek rating performance by comparing predicted and actual ratings.
+class TimeBasedEvaluator:
+    """Runs time-based evaluation for all models."""
 
-    Args:
-        output_dir: Base directory for storing experiments
-        experiment_base: Base name for the experiment
-        predicted_ratings_path: Path to the predicted ratings file
-        test_df: Test dataset
-        df: Full original dataset
-    """
-    logger = logging.getLogger(__name__)
+    def __init__(
+        self,
+        output_dir: str = "./models/experiments",
+        use_embeddings: bool = True,
+    ):
+        """Initialize evaluator.
 
-    # Load predicted geek ratings
-    predicted_ratings = pl.read_parquet(predicted_ratings_path).to_pandas()
+        Args:
+            output_dir: Base directory for experiments (same as regular training).
+            use_embeddings: Whether to include embeddings in features.
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.use_embeddings = use_embeddings
+        self.config = load_config()
 
-    # Calculate actual geek ratings by joining with the original dataset
-    test_df_with_geek_rating = test_df.merge(
-        df[["game_id", "geek_rating"]], on="game_id", how="left"
-    )
-    test_df_with_geek_rating.rename(
-        columns={"geek_rating": "actual_geek_rating"}, inplace=True
-    )
+    def run_evaluation(
+        self,
+        splits: List[Dict[str, int]],
+        model_configs: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Run time-based evaluation for all model types.
 
-    # Merge predicted and actual ratings
-    merged_ratings = predicted_ratings.merge(
-        test_df_with_geek_rating[["game_id", "actual_geek_rating"]],
-        on="game_id",
-        how="inner",
-    )
+        Args:
+            splits: List of time split configurations.
+            model_configs: Optional model configurations override.
+                Format: {"hurdle": {"algorithm": "logistic"}, ...}
 
-    # Calculate performance metrics
-    mae = metrics.mean_absolute_error(
-        merged_ratings["actual_geek_rating"],
-        merged_ratings["predicted_geek_rating"],
-    )
-    rmse = np.sqrt(
-        metrics.mean_squared_error(
-            merged_ratings["actual_geek_rating"],
-            merged_ratings["predicted_geek_rating"],
+        Returns:
+            Dictionary of results DataFrames by model type.
+        """
+        if model_configs is None:
+            model_configs = self._load_model_configs_from_yaml()
+
+        results = {}
+        all_geek_rating_results = []
+
+        for split in splits:
+            test_year = split["test_through"]
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Processing split: test_year={test_year}")
+            logger.info(f"  Train through: {split['train_through']}")
+            logger.info(f"  Tune: {split['tune_start']}-{split['tune_through']}")
+            logger.info(f"  Test: {split['test_start']}-{split['test_through']}")
+            logger.info(f"{'='*60}")
+
+            # Train complexity first (needed for rating/users_rated)
+            complexity_predictions_path = self._train_and_predict_complexity(
+                split, model_configs.get("complexity", {})
+            )
+
+            # Train other models
+            experiment_refs = {"complexity": f"eval-complexity-{test_year}"}
+
+            for model_type in ["hurdle", "rating", "users_rated"]:
+                exp_name = f"eval-{model_type}-{test_year}"
+                self._train_model(
+                    model_type=model_type,
+                    split=split,
+                    experiment_name=exp_name,
+                    model_config=model_configs.get(model_type, {}),
+                    complexity_predictions_path=complexity_predictions_path,
+                )
+                experiment_refs[model_type] = exp_name
+
+            # Calculate geek rating and evaluate
+            geek_results = self._evaluate_geek_rating(
+                split=split,
+                experiment_refs=experiment_refs,
+            )
+            all_geek_rating_results.append(geek_results)
+
+        # Return aggregated results
+        results["geek_rating"] = pd.DataFrame(all_geek_rating_results)
+
+        return results
+
+    def _load_model_configs_from_yaml(self) -> Dict[str, Dict[str, Any]]:
+        """Load model configurations from config.yaml."""
+        configs = {}
+
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            model_config = self.config.models.get(model_type)
+            if model_config:
+                configs[model_type] = {
+                    "algorithm": model_config.type,
+                    "use_embeddings": getattr(model_config, "use_embeddings", self.use_embeddings),
+                    "use_sample_weights": getattr(model_config, "use_sample_weights", False),
+                    "min_ratings": getattr(model_config, "min_ratings", 0),
+                }
+
+        return configs
+
+    def _train_model(
+        self,
+        model_type: str,
+        split: Dict[str, int],
+        experiment_name: str,
+        model_config: Dict[str, Any],
+        complexity_predictions_path: Optional[str] = None,
+    ) -> None:
+        """Train a single model for a split.
+
+        Args:
+            model_type: Type of model to train.
+            split: Time split configuration.
+            experiment_name: Name for the experiment.
+            model_config: Model configuration.
+            complexity_predictions_path: Path to complexity predictions.
+        """
+        logger.info(f"Training {model_type} model: {experiment_name}")
+
+        model_class = get_model_class(model_type)
+
+        # Create args namespace
+        class Args:
+            pass
+
+        args = Args()
+        args.model = model_type
+        args.algorithm = model_config.get("algorithm")
+        args.experiment = experiment_name
+        args.description = f"Time-based evaluation for test year {split['test_through']}"
+        args.output_dir = str(self.output_dir)
+        args.local_data = None
+        args.complexity_predictions = complexity_predictions_path
+        args.use_embeddings = model_config.get("use_embeddings", self.use_embeddings)
+        args.train_through = split["train_through"]
+        args.tune_start = split["tune_start"]
+        args.tune_through = split["tune_through"]
+        args.test_start = split["test_start"]
+        args.test_through = split["test_through"]
+        args.metric = None
+        args.patience = 15
+        args.use_sample_weights = model_config.get("use_sample_weights", False)
+        args.sample_weight_column = None
+        args.preprocessor_type = "auto"
+        args.finalize = False
+        args.include_count_features = False
+        args.algorithm_params = {}
+
+        train_model(model_class, args)
+
+    def _train_and_predict_complexity(
+        self,
+        split: Dict[str, int],
+        model_config: Dict[str, Any],
+    ) -> str:
+        """Train complexity model and save predictions.
+
+        Args:
+            split: Time split configuration.
+            model_config: Complexity model configuration.
+
+        Returns:
+            Path to complexity predictions file.
+        """
+        test_year = split["test_through"]
+        experiment_name = f"eval-complexity-{test_year}"
+
+        # Train the model
+        self._train_model(
+            model_type="complexity",
+            split=split,
+            experiment_name=experiment_name,
+            model_config=model_config,
+            complexity_predictions_path=None,
         )
-    )
-    r2 = metrics.r2_score(
-        merged_ratings["actual_geek_rating"],
-        merged_ratings["predicted_geek_rating"],
-    )
 
-    # Log performance metrics
-    logger.info(f"Geek Rating Performance Metrics for Split {experiment_base}:")
-    logger.info(f"  Mean Absolute Error (MAE): {mae:.4f}")
-    logger.info(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
-    logger.info(f"  R-squared (R²): {r2:.4f}")
+        # Load the trained model directly from the experiment directory
+        import joblib
+        from src.models.outcomes.data import load_data
 
-    # Optional: Save performance metrics to a file
-    performance_metrics = {
-        "split": experiment_base,
-        "mae": mae,
-        "rmse": rmse,
-        "r2": r2,
-    }
-    performance_path = os.path.join(
-        output_dir,
-        "metrics",
-        f"geek_rating_metrics_{experiment_base}.json",
-    )
-    os.makedirs(os.path.dirname(performance_path), exist_ok=True)
+        # Find the pipeline in the evaluation output directory
+        exp_dir = self.output_dir / "complexity" / experiment_name
+        pipeline_path = None
 
-    with open(performance_path, "w") as f:
-        json.dump(performance_metrics, f, indent=2)
+        # Look for the latest version's pipeline
+        version_dirs = [
+            d for d in exp_dir.iterdir()
+            if d.is_dir() and d.name.startswith("v")
+        ]
+        if version_dirs:
+            latest_version = max(version_dirs, key=lambda x: int(x.name[1:]))
+            pipeline_path = latest_version / "pipeline.pkl"
+
+        if pipeline_path is None or not pipeline_path.exists():
+            raise FileNotFoundError(f"Could not find pipeline for {experiment_name}")
+
+        model = joblib.load(pipeline_path)
+        logger.info(f"Loaded complexity model from {pipeline_path}")
+
+        # Load data for all years through test year
+        df = load_data(
+            data_config=get_model_class("complexity").data_config,
+            end_year=split["test_through"],
+            use_embeddings=model_config.get("use_embeddings", self.use_embeddings),
+        )
+
+        # Generate predictions
+        df_pandas = df.to_pandas()
+        predictions = model.predict(df_pandas)
+
+        # Save predictions
+        predictions_dir = self.output_dir / "predictions"
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        predictions_path = predictions_dir / f"{experiment_name}.parquet"
+
+        results_df = pl.DataFrame({
+            "game_id": df["game_id"],
+            "predicted_complexity": predictions,
+        })
+        results_df.write_parquet(str(predictions_path))
+
+        logger.info(f"Saved complexity predictions to {predictions_path}")
+        return str(predictions_path)
+
+    def _load_model_from_eval_dir(self, model_type: str, experiment_name: str):
+        """Load a model from the evaluation output directory.
+
+        Args:
+            model_type: Type of model (hurdle, complexity, rating, users_rated).
+            experiment_name: Name of the experiment.
+
+        Returns:
+            Loaded sklearn pipeline.
+        """
+        import joblib
+
+        exp_dir = self.output_dir / model_type / experiment_name
+        pipeline_path = None
+
+        # Look for the latest version's pipeline
+        version_dirs = [
+            d for d in exp_dir.iterdir()
+            if d.is_dir() and d.name.startswith("v")
+        ]
+        if version_dirs:
+            latest_version = max(version_dirs, key=lambda x: int(x.name[1:]))
+            pipeline_path = latest_version / "pipeline.pkl"
+
+        if pipeline_path is None or not pipeline_path.exists():
+            raise FileNotFoundError(f"Could not find pipeline for {experiment_name}")
+
+        return joblib.load(pipeline_path)
+
+    def _evaluate_geek_rating(
+        self,
+        split: Dict[str, int],
+        experiment_refs: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Evaluate geek rating predictions for a split and save as experiment.
+
+        Args:
+            split: Time split configuration.
+            experiment_refs: Dictionary mapping model types to experiment names.
+
+        Returns:
+            Dictionary of evaluation metrics.
+        """
+        test_year = split["test_through"]
+        experiment_name = f"eval-geek_rating-{test_year}"
+        logger.info(f"Evaluating geek rating for test year {test_year}")
+
+        # Load sub-models from evaluation directory
+        sub_models = {}
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            sub_models[model_type] = self._load_model_from_eval_dir(
+                model_type, experiment_refs[model_type]
+            )
+            logger.info(f"  Loaded {model_type}: {experiment_refs[model_type]}")
+
+        # Create composite model with loaded sub-models
+        scoring_params = self.config.scoring.parameters
+        model = GeekRatingModel(
+            sub_models=sub_models,
+            prior_rating=scoring_params.get("prior_rating", 5.5),
+            prior_weight=scoring_params.get("prior_weight", 2000),
+        )
+
+        # Load test data
+        from src.models.outcomes.data import load_data
+        from src.models.outcomes.base import DataConfig
+
+        # Load ALL games for the test year - no filters
+        # GeekRatingModel will predict complexity directly using the sub-model
+        data_config = DataConfig(
+            min_ratings=0,
+            requires_complexity_predictions=False,
+            supports_embeddings=True,
+        )
+
+        df = load_data(
+            data_config=data_config,
+            start_year=split["test_start"],
+            end_year=split["test_through"],
+            use_embeddings=self.use_embeddings,
+            apply_filters=False,
+        )
+
+        # Generate predictions
+        df_pandas = df.to_pandas()
+        predictions = model.predict(df_pandas)
+
+        # Calculate metrics for games with valid geek ratings
+        actuals = df["geek_rating"].to_numpy()
+        pred_values = predictions["predicted_geek_rating"].values
+
+        valid_mask = (actuals > 0) & ~np.isnan(actuals)
+        n_valid = valid_mask.sum()
+
+        results = {
+            "test_year": test_year,
+            "train_through": split["train_through"],
+            "n_games": len(df),
+            "n_games_with_ratings": int(n_valid),
+        }
+
+        # Create experiment tracker and save as experiment
+        tracker = ExperimentTracker(
+            model_type="geek_rating",
+            base_dir=str(self.output_dir),
+        )
+
+        # Build metadata for experiment
+        experiment_metadata = {
+            "split": split,
+            "sub_model_experiments": experiment_refs,
+            "prior_rating": scoring_params.get("prior_rating", 5.5),
+            "prior_weight": scoring_params.get("prior_weight", 2000),
+        }
+
+        experiment = tracker.create_experiment(
+            name=experiment_name,
+            description=f"Time-based evaluation for test year {test_year}",
+            metadata=experiment_metadata,
+        )
+
+        if n_valid > 0:
+            y_true = actuals[valid_mask]
+            y_pred = pred_values[valid_mask]
+
+            metrics = {
+                "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+                "mae": float(mean_absolute_error(y_true, y_pred)),
+                "r2": float(r2_score(y_true, y_pred)),
+                "n_samples": int(n_valid),
+                "n_total": len(df),
+            }
+
+            results.update(metrics)
+
+            # Log metrics to experiment (log_metrics expects dict-of-dicts)
+            experiment.log_metrics(metrics, "test")
+
+            # Log predictions (convert pandas to polars)
+            valid_predictions = predictions[valid_mask].copy()
+            valid_predictions["actual"] = y_true
+            valid_predictions_pl = pl.from_pandas(valid_predictions)
+
+            experiment.log_predictions(
+                predictions=y_pred,
+                actuals=y_true,
+                df=valid_predictions_pl,
+                dataset="test",
+            )
+
+            logger.info(f"  RMSE: {metrics['rmse']:.4f}")
+            logger.info(f"  MAE:  {metrics['mae']:.4f}")
+            logger.info(f"  R²:   {metrics['r2']:.4f}")
+            logger.info(f"  n_games evaluated: {n_valid}")
+        else:
+            logger.warning(f"  No games with valid geek ratings in test year {test_year}")
+
+        logger.info(f"  Saved experiment: {experiment_name}")
+
+        return results
+
 
 
 def run_time_based_evaluation(
@@ -139,287 +451,106 @@ def run_time_based_evaluation(
     model_args: Optional[Dict[str, Dict[str, Any]]] = None,
     additional_args: Optional[List[str]] = None,
 ):
-    """
-    Run comprehensive time-based model evaluation pipeline.
+    """Run comprehensive time-based model evaluation pipeline.
+
+    This is the main entry point for backward compatibility with evaluate.py.
 
     Args:
         splits: Optional list of time splits. If None, generates default splits.
-        min_ratings: Minimum number of ratings threshold
-        output_dir: Base directory for storing experiments
-        local_data_path: Optional path to local data file
-        model_args: Optional dictionary of additional arguments for each model
-        additional_args: Optional list of additional CLI arguments to pass to all model scripts
+        min_ratings: Minimum number of ratings threshold.
+        output_dir: Base directory for experiments (same as regular training).
+        local_data_path: Optional path to local data file.
+        model_args: Optional dictionary of additional arguments for each model.
+        additional_args: Optional list of additional CLI arguments.
     """
-    # Ensure output directory exists
-    os.makedirs(output_dir, exist_ok=True)
+    setup_logging()
 
-    # Setup logging
-    log_file_path = os.path.join(output_dir, "time_based_evaluation.log")
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(
-                log_file_path, mode="w"
-            ),  # 'w' mode to overwrite previous log
-        ],
-    )
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-
-    # Generate splits if not provided
     if splits is None:
-        splits = generate_time_splits()
-
-    # Prepare additional arguments
-    global_additional_args = additional_args or []
-
-    # Load full dataset
-    df = load_data(
-        local_data_path=local_data_path,
-        min_ratings=min_ratings,
-        end_train_year=max(split["test_through"] for split in splits),
-    )
-
-    # Iterate through splits
-    for split_config in splits:
-        logger.info(f"Processing split: {split_config}")
-
-        # Create data splits
-        train_df, tune_df, test_df = create_data_splits(
-            df,
-            train_through=split_config["train_through"],
-            tune_start=split_config["tune_start"],
-            tune_through=split_config["tune_through"],
-            test_start=split_config["test_start"],
-            test_through=split_config["test_through"],
+        config = load_config()
+        splits = generate_time_splits(
+            start_year=config.years.eval.start,
+            end_year=config.years.eval.end,
         )
 
-        # Experiment naming
-        experiment_base = (
-            f"{split_config['train_through']}_{split_config['test_start']}"
-        )
+    # Convert old model_args format to new format
+    model_configs = None
+    if model_args:
+        model_configs = {}
+        for model_type, args in model_args.items():
+            config = {"algorithm": args.get("model")}
+            if args.get("use-sample-weights"):
+                config["use_sample_weights"] = True
+            if args.get("min-ratings"):
+                config["min_ratings"] = args["min-ratings"]
+            model_configs[model_type] = config
 
-        # Run individual model training scripts
-        model_scripts = [
-            ("hurdle", "src/models/hurdle.py"),
-            ("complexity", "src/models/complexity.py"),
-            ("rating", "src/models/rating.py"),
-            ("users_rated", "src/models/users_rated.py"),
-        ]
+    evaluator = TimeBasedEvaluator(output_dir=output_dir)
+    results = evaluator.run_evaluation(splits=splits, model_configs=model_configs)
 
-        complexity_local_path = None
-        for model_name, script_path in model_scripts:
-            # Convert script path to module path
-            module_path = script_path.replace("/", ".").replace(".py", "")
+    # Print summary
+    if "geek_rating" in results:
+        summary = results["geek_rating"]
+        logger.info("\n" + "="*60)
+        logger.info("EVALUATION SUMMARY")
+        logger.info("="*60)
+        print(summary.to_string(index=False))
 
-            cmd = [
-                sys.executable,
-                "-m",
-                module_path,
-                f"--train-through={split_config['train_through']}",
-                f"--tune-start={split_config['tune_start']}",
-                f"--tune-through={split_config['tune_through']}",
-                f"--test-start={split_config['test_start']}",
-                f"--test-through={split_config['test_through']}",
-                f"--experiment={model_name}_{experiment_base}",
-                f"--output-dir={output_dir}",
-            ]
-
-            # Add model-specific arguments if provided
-            if model_args and model_name in model_args:
-                for key, value in model_args[model_name].items():
-                    # Special handling for boolean flags
-                    if isinstance(value, bool):
-                        if value:
-                            cmd.append(f"--{key}")
-                    else:
-                        cmd.append(f"--{key}={value}")
-
-            # Add complexity experiment reference for rating/users_rated
-            if model_name in ["rating", "users_rated"]:
-                # Ensure complexity local path exists
-                if complexity_local_path is None:
-                    logger.warning("No complexity predictions found for this split")
-                    continue
-
-                cmd.extend(
-                    [
-                        f"--complexity-experiment=complexity_{experiment_base}",
-                        f"--local-complexity-path={complexity_local_path}",
-                    ]
-                )
-
-            # Add any global additional arguments
-            cmd.extend(global_additional_args)
-
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                logger.info(f"{model_name.capitalize()} Model Training Completed")
-                logger.debug(result.stdout)
-
-                # If this is the complexity model, save its predictions
-                if model_name == "complexity":
-                    complexity_local_path = os.path.join(
-                        output_dir,
-                        "predictions",
-                        f"complexity_{experiment_base}.parquet",
-                    )
-                    logger.info(
-                        f"Complexity predictions saved to {complexity_local_path}"
-                    )
-
-                # Finalize the trained model
-                try:
-                    finalize_model(
-                        model_type=model_name,
-                        experiment_name=f"{model_name}_{experiment_base}",
-                        end_year=split_config["train_through"],
-                    )
-                    logger.info(f"{model_name.capitalize()} Model Finalized")
-                except Exception as finalize_error:
-                    logger.error(
-                        f"Error finalizing {model_name} model: {finalize_error}"
-                    )
-                    raise
-
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Error training {model_name} model: {e}")
-                logger.error(f"STDOUT: {e.stdout}")
-                logger.error(f"STDERR: {e.stderr}")
-                raise
-
-        # Geek Rating Calculation
-        try:
-            geek_rating_cmd = [
-                sys.executable,
-                "-m",
-                "src.models.geek_rating",
-                f"--hurdle=hurdle_{experiment_base}",
-                f"--complexity=complexity_{experiment_base}",
-                f"--rating=rating_{experiment_base}",
-                f"--users-rated=users_rated_{experiment_base}",
-                f"--experiment=geek_rating_{experiment_base}",
-                f"--output={os.path.join('geek_rating', f'geek_rating_{experiment_base}', 'v1', 'test_predictions.parquet')}",
-                f"--start-year={split_config['test_start']}",
-                f"--end-year={split_config['test_through']}",
-                f"--local-complexity-path={complexity_local_path}",
-            ]
-
-            # Add any global additional arguments
-            geek_rating_cmd.extend(global_additional_args)
-
-            result = subprocess.run(
-                geek_rating_cmd, capture_output=True, text=True, check=True
-            )
-            logger.info("Geek Rating Calculation Completed")
-            logger.debug(result.stdout)
-
-            # # Performance Evaluation
-            # evaluate_geek_rating_performance(
-            #     output_dir=output_dir,
-            #     experiment_base=experiment_base,
-            #     predicted_ratings_path=os.path.join(
-            #         output_dir,
-            #         "geek_rating",
-            #         f"geek_rating_{experiment_base}",
-            #         "v1",
-            #         "test_predictions.parquet",
-            #     ),
-            #     test_df=test_df,
-            #     df=df,
-            # )
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Error calculating geek ratings: {e}")
-            logger.error(f"STDOUT: {e.stdout}")
-            logger.error(f"STDERR: {e.stderr}")
-            raise
+        if "rmse" in summary.columns:
+            logger.info(f"\nMean RMSE: {summary['rmse'].mean():.4f}")
+            logger.info(f"Mean MAE:  {summary['mae'].mean():.4f}")
+            logger.info(f"Mean R²:   {summary['r2'].mean():.4f}")
 
 
 def main():
     """CLI entry point for time-based evaluation."""
     parser = argparse.ArgumentParser(description="Run Time-Based Model Evaluation")
     parser.add_argument(
-        "--start-year", type=int, default=2015, help="First year for evaluation"
+        "--start-year", type=int, default=None, help="First test year for evaluation"
     )
     parser.add_argument(
-        "--end-year", type=int, default=2025, help="Last year for evaluation"
-    )
-    parser.add_argument(
-        "--min-ratings", type=int, default=0, help="Minimum ratings threshold"
+        "--end-year", type=int, default=None, help="Last test year for evaluation"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default="./models/experiments",
-        help="Output directory for experiments",
+        help="Base directory for experiments",
     )
     parser.add_argument(
-        "--local-data",
-        type=str,
-        default=None,
-        help="Optional path to local data file",
-    )
-    parser.add_argument(
-        "--model-args",
-        nargs="+",
-        help="Model-specific arguments in format 'model.key=value'",
-    )
-    parser.add_argument(
-        "--additional-args",
-        nargs="+",
-        help="Additional arguments to pass to all model scripts",
+        "--dry-run",
+        action="store_true",
+        help="Show what would be run without executing",
     )
 
     args = parser.parse_args()
 
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    setup_logging()
 
-    # Parse model-specific arguments
-    model_args = {}
-    if args.model_args:
-        for arg in args.model_args:
-            try:
-                # Split into model.key and value
-                full_key, value = arg.split("=")
-                model, key = full_key.split(".")
+    config = load_config()
+    start_year = args.start_year or config.years.eval.start
+    end_year = args.end_year or config.years.eval.end
 
-                # Initialize model dict if not exists
-                if model not in model_args:
-                    model_args[model] = {}
+    splits = generate_time_splits(start_year=start_year, end_year=end_year)
 
-                # Convert value to appropriate type
-                if value.lower() == "true":
-                    value = True
-                elif value.lower() == "false":
-                    value = False
-                elif value.isdigit():
-                    value = int(value)
-                elif value.replace(".", "", 1).isdigit():
-                    value = float(value)
+    logger.info(f"Evaluation configuration:")
+    logger.info(f"  Test years: {start_year} to {end_year}")
+    logger.info(f"  Output directory: {args.output_dir}")
+    logger.info(f"  Number of splits: {len(splits)}")
 
-                # Add key-value pair
-                model_args[model][key] = value
-            except ValueError:
-                print(f"Warning: Skipping invalid model argument: {arg}")
+    for i, split in enumerate(splits):
+        logger.info(
+            f"  Split {i+1}: train<={split['train_through']}, "
+            f"tune={split['tune_start']}-{split['tune_through']}, "
+            f"test={split['test_start']}-{split['test_through']}"
+        )
 
-    # Generate splits
-    splits = generate_time_splits(start_year=args.start_year, end_year=args.end_year)
+    if args.dry_run:
+        logger.info("\nDry run - not executing")
+        return
 
-    # Run evaluation
     run_time_based_evaluation(
         splits=splits,
-        min_ratings=args.min_ratings,
         output_dir=args.output_dir,
-        local_data_path=args.local_data,
-        model_args=model_args,
-        additional_args=args.additional_args,
     )
 
 

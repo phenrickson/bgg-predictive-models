@@ -4,86 +4,24 @@ Evaluate models over time using configuration from config.yaml.
 
 This script runs time-based evaluation of all models using settings from the config file,
 making it easier to maintain and modify evaluation parameters.
+
+Usage:
+    uv run python evaluate.py                    # Use default config settings
+    uv run python evaluate.py --dry-run          # Show what would be run without executing
+    uv run python evaluate.py --start-year 2020  # Start evaluation from 2020
+    uv run python evaluate.py --end-year 2022    # End evaluation at 2022
 """
 
 import argparse
 import logging
 import sys
-from pathlib import Path
-from typing import Dict, Any, Optional
 
 from src.utils.config import load_config
+from src.utils.logging import setup_logging
 from src.models.time_based_evaluation import (
     run_time_based_evaluation,
     generate_time_splits,
 )
-
-
-def setup_logging(verbose: bool = False) -> None:
-    """Set up logging configuration."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
-
-
-def build_model_args_from_config(config) -> Dict[str, Dict[str, Any]]:
-    """
-    Build model arguments dictionary from config for time_based_evaluation.
-
-    Args:
-        config: Loaded configuration object
-
-    Returns:
-        Dictionary of model arguments in the format expected by time_based_evaluation
-    """
-    model_args = {}
-
-    # Load raw config to access evaluate section
-    import yaml
-    from pathlib import Path
-
-    config_path = Path(__file__).parent / "config.yaml"
-    with open(config_path) as f:
-        raw_config = yaml.safe_load(f)
-
-    evaluate_config = raw_config.get("evaluate", {})
-    if not evaluate_config:
-        raise ValueError("No 'evaluate' section found in config")
-
-    # Get model defaults and settings
-    defaults = evaluate_config.get("defaults", {})
-    settings = evaluate_config.get("settings", {})
-
-    # Build args for each model type
-    model_types = ["hurdle", "complexity", "rating", "users_rated"]
-
-    for model_name in model_types:
-        # Get model type from defaults (e.g., hurdle_model: lightgbm)
-        model_key = f"{model_name}_model"
-        model_type = defaults.get(model_key)
-
-        if not model_type:
-            raise ValueError(f"No default model type found for {model_name}")
-
-        args = {"model": model_type}
-
-        # Add model-specific settings
-        model_settings = settings.get(model_name, {})
-        if model_settings is None:
-            model_settings = {}
-
-        if model_settings.get("use_sample_weights", False):
-            args["use-sample-weights"] = True
-
-        if model_settings.get("min_ratings", 0) > 0:
-            args["min-ratings"] = model_settings["min_ratings"]
-
-        model_args[model_name] = args
-
-    return model_args
 
 
 def main():
@@ -93,54 +31,34 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python evaluate.py                    # Use default config settings
-  python evaluate.py --verbose         # Enable debug logging
-  python evaluate.py --config custom.yaml  # Use custom config file
-  python evaluate.py --output-dir ./custom_experiments  # Custom output directory
-  python evaluate.py --start-year 2018 --end-year 2023  # Override year range
+  uv run python evaluate.py                    # Use default config settings (2018-2024)
+  uv run python evaluate.py --dry-run          # Show configuration without running
+  uv run python evaluate.py --start-year 2020  # Start evaluation from 2020
+  uv run python evaluate.py --end-year 2022    # End evaluation at 2022
+  uv run python evaluate.py --output-dir ./custom_eval  # Custom output directory
         """,
-    )
-
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to config YAML file (default: config.yaml in project root)",
     )
 
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=None,
-        help="Output directory for experiments (default: from config or ./models/experiments)",
+        default="./models/experiments",
+        help="Base directory for experiments",
     )
 
     parser.add_argument(
         "--start-year",
         type=int,
         default=None,
-        help="Override evaluation start year (default: from config)",
+        help="First test year for evaluation (default: from config.years.eval.start)",
     )
 
     parser.add_argument(
         "--end-year",
         type=int,
         default=None,
-        help="Override evaluation end year (default: from config)",
+        help="Last test year for evaluation (default: from config.years.eval.end)",
     )
-
-    parser.add_argument(
-        "--min-ratings",
-        type=int,
-        default=0,
-        help="Minimum ratings threshold (default: 0)",
-    )
-
-    parser.add_argument(
-        "--local-data", type=str, default=None, help="Optional path to local data file"
-    )
-
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     parser.add_argument(
         "--dry-run",
@@ -148,83 +66,80 @@ Examples:
         help="Show what would be run without executing",
     )
 
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging",
+    )
+
     args = parser.parse_args()
 
     # Set up logging
-    setup_logging(args.verbose)
+    setup_logging()
     logger = logging.getLogger(__name__)
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     try:
         # Load configuration
-        logger.info("Loading configuration...")
-        config = load_config(args.config)
-        logger.info(f"Using environment: {config.get_current_environment()}")
+        config = load_config()
 
         # Determine year range
-        start_year = (
-            args.start_year if args.start_year is not None else config.years.eval.start
-        )
-        end_year = args.end_year if args.end_year is not None else config.years.eval.end
-
-        # Determine output directory
-        output_dir = args.output_dir if args.output_dir else "./models/experiments"
-
-        # Build model arguments from config
-        model_args = build_model_args_from_config(config)
+        start_year = args.start_year or config.years.eval.start
+        end_year = args.end_year or config.years.eval.end
 
         # Generate time splits
         splits = generate_time_splits(start_year=start_year, end_year=end_year)
 
         # Log configuration
-        logger.info("=== Evaluation Configuration ===")
-        logger.info(f"Year range: {start_year} to {end_year}")
-        logger.info(f"Output directory: {output_dir}")
-        logger.info(f"Number of time splits: {len(splits)}")
-        logger.info(f"Min ratings threshold: {args.min_ratings}")
-        if args.local_data:
-            logger.info(f"Local data path: {args.local_data}")
+        logger.info("=" * 60)
+        logger.info("EVALUATION CONFIGURATION")
+        logger.info("=" * 60)
+        logger.info(f"Test years: {start_year} to {end_year}")
+        logger.info(f"Output directory: {args.output_dir}")
+        logger.info(f"Number of splits: {len(splits)}")
 
-        logger.info("\n=== Model Configuration ===")
-        for model_name, model_config in config.models.items():
-            logger.info(f"{model_name}:")
-            logger.info(f"  Type: {model_config.type}")
-            logger.info(f"  Experiment: {model_config.experiment_name}")
-            if (
-                hasattr(model_config, "use_sample_weights")
-                and model_config.use_sample_weights
-            ):
-                logger.info(f"  Sample weights: enabled")
-            if hasattr(model_config, "min_ratings") and model_config.min_ratings > 0:
-                logger.info(f"  Min ratings: {model_config.min_ratings}")
+        logger.info("\nModel Configuration (from config.yaml):")
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            model_config = config.models.get(model_type)
+            if model_config:
+                extras = []
+                if getattr(model_config, "use_embeddings", False):
+                    extras.append("embeddings")
+                if getattr(model_config, "use_sample_weights", False):
+                    extras.append("sample_weights")
+                extras_str = f" ({', '.join(extras)})" if extras else ""
+                logger.info(f"  {model_type}: {model_config.type}{extras_str}")
 
-        logger.info("\n=== Time Splits ===")
+        logger.info("\nTime Splits:")
         for i, split in enumerate(splits):
             logger.info(
-                f"Split {i+1}: Train <{split['train_end_year']}, "
-                f"Validate {split['tune_start_year']}-{split['tune_end_year']}, "
-                f"Test {split['test_start_year']}-{split['test_end_year']}"
+                f"  {i+1}. Train ≤{split['train_through']}, "
+                f"Tune {split['tune_start']}-{split['tune_through']}, "
+                f"Test {split['test_start']}-{split['test_through']}"
             )
 
         if args.dry_run:
-            logger.info("\n=== DRY RUN MODE ===")
-            logger.info("Would execute time-based evaluation with above configuration")
-            logger.info("Use --verbose to see detailed model arguments")
-            if args.verbose:
-                logger.debug(f"Model arguments: {model_args}")
+            logger.info("\n" + "=" * 60)
+            logger.info("DRY RUN - Not executing")
+            logger.info("=" * 60)
             return
 
         # Run the evaluation
-        logger.info("\n=== Starting Evaluation ===")
+        logger.info("\n" + "=" * 60)
+        logger.info("STARTING EVALUATION")
+        logger.info("=" * 60)
+
         run_time_based_evaluation(
             splits=splits,
-            min_ratings=args.min_ratings,
-            output_dir=output_dir,
-            local_data_path=args.local_data,
-            model_args=model_args,
+            output_dir=args.output_dir,
         )
 
-        logger.info("=== Evaluation Complete ===")
-        logger.info(f"Results saved to: {output_dir}")
+        logger.info("\n" + "=" * 60)
+        logger.info("EVALUATION COMPLETE")
+        logger.info("=" * 60)
+        logger.info(f"Results saved to: {args.output_dir}")
 
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")

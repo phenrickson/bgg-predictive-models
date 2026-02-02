@@ -860,7 +860,7 @@ def display_predictions(
     Display predictions for a specific dataset with comprehensive analysis.
 
     Args:
-        experiment: Experiment dictionary containing experiment details
+        experiment: Experiment object (from tracker.load_experiment())
         dataset: Dataset to display predictions for ('tune' or 'test')
         model_type: Type of model ('regression' or 'classification')
         selected_model_type: Model type selected in the sidebar
@@ -868,13 +868,9 @@ def display_predictions(
     Returns:
         Polars DataFrame with predictions
     """
-    # Load actual experiment instance
+    # experiment is already an Experiment object, use it directly
     try:
-        tracker = ExperimentTracker(selected_model_type)
-        exp_instance = tracker.load_experiment(
-            experiment["name"], experiment["version"]
-        )
-        predictions_df = exp_instance.get_predictions(dataset)
+        predictions_df = experiment.get_predictions(dataset)
     except Exception as e:
         st.warning(f"Could not retrieve predictions: {e}")
         st.info("Possible reasons:")
@@ -1306,19 +1302,18 @@ def main():
             experiment = tracker.load_experiment(exp_name, exp_version)
 
             # Determine model type from experiment metadata
-            try:
-                # Retrieve full metadata
-                full_metadata = experiment.metadata
+            # Default to regression for most models (geek_rating, rating, complexity, users_rated)
+            # Only hurdle is classification
+            model_type = "regression"
+            if selected_model_type == "hurdle":
+                model_type = "classification"
 
-                # Try to get model type from metadata
-                model_type = full_metadata.get(
-                    "model_type",
-                    experiment.get_model_info().get("model_type", "regression"),
-                )
-            except Exception as e:
-                st.warning(f"Error determining model type: {e}")
-                st.warning("Defaulting to regression model type")
-                model_type = "regression"
+            # Try to get from metadata if explicitly set
+            try:
+                full_metadata = experiment.metadata
+                model_type = full_metadata.get("model_type", model_type)
+            except Exception:
+                pass  # Use default based on selected_model_type
 
             # Dataset selector
             selected_dataset = st.selectbox(
