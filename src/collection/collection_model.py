@@ -29,7 +29,7 @@ from src.models.training import (
     tune_model,
     select_X_y,
 )
-from src.models.hurdle import find_optimal_threshold
+from src.models.outcomes.hurdle import find_optimal_threshold
 
 logger = logging.getLogger(__name__)
 

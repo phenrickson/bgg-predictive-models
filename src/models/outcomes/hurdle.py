@@ -22,6 +22,56 @@ from sklearn.metrics import (
 from src.models.outcomes.base import DataConfig, TrainableModel, TrainingConfig
 
 
+def find_optimal_threshold(
+    y_true: pd.Series,
+    y_pred_proba: np.ndarray,
+    metric: str = "f1",
+) -> Dict[str, float]:
+    """Find optimal probability threshold for classification.
+
+    This is a standalone function for use outside of HurdleModel.
+
+    Args:
+        y_true: True binary labels.
+        y_pred_proba: Predicted probabilities for positive class.
+        metric: Metric to optimize ('f1', 'f2', 'precision', 'recall', 'accuracy').
+
+    Returns:
+        Dictionary with optimal threshold and scores.
+    """
+    scoring_functions = {
+        "f1": f1_score,
+        "f2": lambda y_true, y_pred: fbeta_score(y_true, y_pred, beta=2.0),
+        "precision": precision_score,
+        "recall": recall_score,
+        "accuracy": accuracy_score,
+    }
+
+    if metric not in scoring_functions:
+        raise ValueError(f"Metric must be one of {list(scoring_functions.keys())}")
+
+    thresholds = np.linspace(0, 1, 101)
+    best_threshold = 0.5
+    best_score = 0
+    best_f1 = 0
+
+    for threshold in thresholds:
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        score = scoring_functions[metric](y_true, y_pred)
+        f1 = f1_score(y_true, y_pred)
+
+        if score > best_score:
+            best_score = score
+            best_threshold = threshold
+            best_f1 = f1
+
+    return {
+        "threshold": best_threshold,
+        f"{metric}_score": best_score,
+        "f1_score": best_f1,
+    }
+
+
 class HurdleModel(TrainableModel):
     """Binary classification model predicting if games receive minimum ratings.
 

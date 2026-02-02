@@ -176,15 +176,18 @@ register_text_embeddings:
 
 
 # evaluate over time using config.yaml settings
-.PHONY: evaluate evaluate-verbose evaluate-dry-run
+.PHONY: evaluate evaluate-verbose evaluate-dry-run evaluate-simulation
 evaluate:
-	uv run python evaluate.py
+	uv run -m src.pipeline.evaluate
 
 evaluate-verbose:  ## Run evaluation with verbose logging
-	uv run python evaluate.py --verbose
+	uv run -m src.pipeline.evaluate --verbose
 
 evaluate-dry-run:  ## Show what evaluation would do without running
-	uv run python evaluate.py --dry-run --verbose
+	uv run -m src.pipeline.evaluate --dry-run --verbose
+
+evaluate-simulation:  ## Run simulation-based evaluation
+	uv run -m src.pipeline.evaluate_simulation --save-predictions
 
 ### register model candidates
 # register models
