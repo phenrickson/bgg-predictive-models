@@ -44,12 +44,13 @@ def generate_time_splits(
     splits = []
 
     for test_year in range(start_year, end_year + 1):
-        # Train on all data through test_year - 3
-        # Tune on test_year - 2 to test_year - 1
+        # Train on all data through test_year - 2
+        # Tune on test_year - 1
         # Test on test_year
+        # This matches config.yaml pattern: train_through=2021, tune=2022, test=2023
         split_config = {
-            "train_through": test_year - 3,
-            "tune_start": test_year - 2,
+            "train_through": test_year - 2,
+            "tune_start": test_year - 1,
             "tune_through": test_year - 1,
             "test_start": test_year,
             "test_through": test_year,
@@ -67,16 +68,19 @@ class TimeBasedEvaluator:
         self,
         output_dir: str = "./models/experiments",
         use_embeddings: bool = True,
+        run_simulation: bool = False,
     ):
         """Initialize evaluator.
 
         Args:
             output_dir: Base directory for experiments (same as regular training).
             use_embeddings: Whether to include embeddings in features.
+            run_simulation: Whether to run simulation-based evaluation after training.
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.use_embeddings = use_embeddings
+        self.run_simulation = run_simulation
         self.config = load_config()
 
     def run_evaluation(
@@ -128,12 +132,33 @@ class TimeBasedEvaluator:
                 )
                 experiment_refs[model_type] = exp_name
 
+            # Train geek_rating model if simulation is requested and mode requires it
+            if self.run_simulation:
+                sim_config = self.config.simulation
+                geek_rating_mode = sim_config.geek_rating_mode if sim_config else "bayesian"
+                if geek_rating_mode in ["stacking", "direct"]:
+                    geek_rating_exp = f"eval-geek_rating-{test_year}"
+                    self._train_geek_rating_model(
+                        split=split,
+                        experiment_name=geek_rating_exp,
+                        experiment_refs=experiment_refs,
+                        mode=geek_rating_mode,
+                    )
+                    experiment_refs["geek_rating"] = geek_rating_exp
+
             # Calculate geek rating and evaluate
             geek_results = self._evaluate_geek_rating(
                 split=split,
                 experiment_refs=experiment_refs,
             )
             all_geek_rating_results.append(geek_results)
+
+            # Run simulation evaluation if requested
+            if self.run_simulation:
+                self._evaluate_simulation(
+                    split=split,
+                    experiment_refs=experiment_refs,
+                )
 
         # Return aggregated results
         results["geek_rating"] = pd.DataFrame(all_geek_rating_results)
@@ -240,16 +265,19 @@ class TimeBasedEvaluator:
         exp_dir = self.output_dir / "complexity" / experiment_name
         pipeline_path = None
 
-        # Look for the latest version's pipeline
-        version_dirs = [
-            d for d in exp_dir.iterdir()
-            if d.is_dir() and d.name.startswith("v")
-        ]
-        if version_dirs:
-            latest_version = max(version_dirs, key=lambda x: int(x.name[1:]))
-            pipeline_path = latest_version / "pipeline.pkl"
+        # Look for a version that has a pipeline, starting from latest
+        version_dirs = sorted(
+            [d for d in exp_dir.iterdir() if d.is_dir() and d.name.startswith("v")],
+            key=lambda x: int(x.name[1:]),
+            reverse=True,
+        )
+        for version_dir in version_dirs:
+            candidate_path = version_dir / "pipeline.pkl"
+            if candidate_path.exists():
+                pipeline_path = candidate_path
+                break
 
-        if pipeline_path is None or not pipeline_path.exists():
+        if pipeline_path is None:
             raise FileNotFoundError(f"Could not find pipeline for {experiment_name}")
 
         model = joblib.load(pipeline_path)
@@ -291,6 +319,71 @@ class TimeBasedEvaluator:
         logger.info(f"Saved complexity predictions to {predictions_path}")
         return str(predictions_path)
 
+    def _train_geek_rating_model(
+        self,
+        split: Dict[str, int],
+        experiment_name: str,
+        experiment_refs: Dict[str, str],
+        mode: str = "stacking",
+    ) -> None:
+        """Train a geek_rating model for simulation.
+
+        Args:
+            split: Time split configuration.
+            experiment_name: Name for the experiment.
+            experiment_refs: Dictionary mapping model types to experiment names.
+            mode: Training mode - "stacking" or "direct".
+        """
+        import joblib
+
+        test_year = split["test_through"]
+        logger.info(f"Training geek_rating model ({mode} mode): {experiment_name}")
+
+        # Get algorithm from config
+        geek_rating_config = self.config.models.get("geek_rating")
+        algorithm = "ard" if geek_rating_config is None else geek_rating_config.type
+        min_ratings = 25 if geek_rating_config is None else getattr(geek_rating_config, "min_ratings", 25)
+
+        # Build sub_model_experiments dict pointing to eval experiments
+        sub_model_experiments = {
+            "hurdle": experiment_refs["hurdle"],
+            "complexity": experiment_refs["complexity"],
+            "rating": experiment_refs["rating"],
+            "users_rated": experiment_refs["users_rated"],
+        }
+
+        # Create and train the model
+        model = GeekRatingModel(mode=mode, min_ratings=min_ratings)
+
+        # Use split years instead of config years
+        tune_start = split["tune_start"]
+        tune_through = split["tune_through"]
+
+        # Train the model using the sub-model experiments with split-specific years
+        if mode == "stacking":
+            model.train_stacking_model(
+                sub_model_experiments=sub_model_experiments,
+                algorithm=algorithm,
+                base_dir=str(self.output_dir),
+                tune_start=tune_start,
+                tune_through=tune_through,
+            )
+        elif mode == "direct":
+            model.train_direct_model(
+                sub_model_experiments=sub_model_experiments,
+                algorithm=algorithm,
+                base_dir=str(self.output_dir),
+                tune_through=tune_through,
+            )
+
+        # Save the pipeline
+        exp_dir = self.output_dir / "geek_rating" / experiment_name / "v1"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+
+        pipeline_path = exp_dir / "pipeline.pkl"
+        joblib.dump(model.pipeline, pipeline_path)
+        logger.info(f"Saved geek_rating pipeline to {pipeline_path}")
+
     def _load_model_from_eval_dir(self, model_type: str, experiment_name: str):
         """Load a model from the evaluation output directory.
 
@@ -304,18 +397,33 @@ class TimeBasedEvaluator:
         import joblib
 
         exp_dir = self.output_dir / model_type / experiment_name
+        logger.info(f"Loading model from: {exp_dir}")
+        logger.info(f"Directory exists: {exp_dir.exists()}")
+
+        if not exp_dir.exists():
+            raise FileNotFoundError(f"Directory does not exist: {exp_dir}")
+
         pipeline_path = None
 
-        # Look for the latest version's pipeline
-        version_dirs = [
-            d for d in exp_dir.iterdir()
-            if d.is_dir() and d.name.startswith("v")
-        ]
-        if version_dirs:
-            latest_version = max(version_dirs, key=lambda x: int(x.name[1:]))
-            pipeline_path = latest_version / "pipeline.pkl"
+        # Look for a version that has a pipeline, starting from latest
+        all_contents = list(exp_dir.iterdir())
+        logger.info(f"Directory contents: {[x.name for x in all_contents]}")
 
-        if pipeline_path is None or not pipeline_path.exists():
+        version_dirs = sorted(
+            [d for d in all_contents if d.is_dir() and d.name.startswith("v")],
+            key=lambda x: int(x.name[1:]),
+            reverse=True,
+        )
+        logger.info(f"Version dirs found: {[x.name for x in version_dirs]}")
+
+        for version_dir in version_dirs:
+            candidate_path = version_dir / "pipeline.pkl"
+            logger.info(f"Checking: {candidate_path}, exists: {candidate_path.exists()}")
+            if candidate_path.exists():
+                pipeline_path = candidate_path
+                break
+
+        if pipeline_path is None:
             raise FileNotFoundError(f"Could not find pipeline for {experiment_name}")
 
         return joblib.load(pipeline_path)
@@ -338,6 +446,10 @@ class TimeBasedEvaluator:
         experiment_name = f"eval-geek_rating-{test_year}"
         logger.info(f"Evaluating geek rating for test year {test_year}")
 
+        # Get geek_rating mode from config
+        sim_config = self.config.simulation
+        geek_rating_mode = sim_config.geek_rating_mode if sim_config else "bayesian"
+
         # Load sub-models from evaluation directory
         sub_models = {}
         for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
@@ -346,14 +458,22 @@ class TimeBasedEvaluator:
             )
             logger.info(f"  Loaded {model_type}: {experiment_refs[model_type]}")
 
-        # Create composite model with loaded sub-models
+        # Create composite model
         scoring_params = self.config.scoring.parameters
         model = GeekRatingModel(
+            mode=geek_rating_mode,
             sub_models=sub_models,
             prior_rating=scoring_params.get("prior_rating", 5.5),
             prior_weight=scoring_params.get("prior_weight", 2000),
             hurdle_threshold=0,  # Predict for all games, don't use hurdle
         )
+
+        # Load trained geek_rating pipeline if using stacking/direct mode
+        if geek_rating_mode in ["stacking", "direct"]:
+            geek_rating_exp = experiment_refs.get("geek_rating")
+            if geek_rating_exp:
+                model.pipeline = self._load_model_from_eval_dir("geek_rating", geek_rating_exp)
+                logger.info(f"  Loaded geek_rating pipeline: {geek_rating_exp}")
 
         # Load test data
         from src.models.outcomes.data import load_data
@@ -403,6 +523,7 @@ class TimeBasedEvaluator:
         experiment_metadata = {
             "split": split,
             "sub_model_experiments": experiment_refs,
+            "geek_rating_mode": geek_rating_mode,
             "prior_rating": scoring_params.get("prior_rating", 5.5),
             "prior_weight": scoring_params.get("prior_weight", 2000),
         }
@@ -453,6 +574,243 @@ class TimeBasedEvaluator:
 
         return results
 
+    def _check_bayesian_model(self, pipeline) -> bool:
+        """Check if a pipeline contains a Bayesian model that supports simulation.
+
+        Args:
+            pipeline: sklearn pipeline to check.
+
+        Returns:
+            True if the model has coef_ and sigma_ attributes for posterior sampling.
+        """
+        model = pipeline.named_steps.get("model")
+        if model is None:
+            return False
+        return hasattr(model, "coef_") and hasattr(model, "sigma_")
+
+    def _evaluate_simulation(
+        self,
+        split: Dict[str, int],
+        experiment_refs: Dict[str, str],
+    ) -> None:
+        """Run simulation-based evaluation for a split.
+
+        Loads trained models and runs uncertainty propagation simulation.
+        Gracefully skips if models don't support Bayesian simulation.
+
+        Args:
+            split: Time split configuration.
+            experiment_refs: Dictionary mapping model types to experiment names.
+        """
+        from src.models.outcomes.simulation import (
+            simulate_batch,
+            precompute_cholesky,
+            compute_simulation_metrics,
+        )
+        from src.models.outcomes.data import load_data
+        from src.models.outcomes.base import DataConfig
+        from src.pipeline.evaluate_simulation import (
+            create_scatter_plots,
+            create_top_games_plot,
+        )
+        import json
+
+        test_year = split["test_through"]
+        logger.info(f"\n{'-'*60}")
+        logger.info(f"Running simulation evaluation for test year {test_year}")
+        logger.info(f"{'-'*60}")
+
+        # Load sub-models from evaluation directory
+        pipelines = {}
+        for model_type in ["complexity", "rating", "users_rated"]:
+            pipelines[model_type] = self._load_model_from_eval_dir(
+                model_type, experiment_refs[model_type]
+            )
+
+        # Check if models support Bayesian simulation
+        unsupported = []
+        for model_type, pipeline in pipelines.items():
+            if not self._check_bayesian_model(pipeline):
+                unsupported.append(model_type)
+
+        if unsupported:
+            logger.warning(
+                f"  Skipping simulation: {', '.join(unsupported)} model(s) do not support "
+                "Bayesian simulation (missing coef_/sigma_ attributes). "
+                "Use ARD or similar Bayesian regressors."
+            )
+            return
+
+        # Get simulation config
+        sim_config = self.config.simulation
+        n_samples = sim_config.n_samples if sim_config else 500
+        geek_rating_mode = sim_config.geek_rating_mode if sim_config else "bayesian"
+        random_state = sim_config.random_state if sim_config else 42
+
+        # Load geek_rating pipeline if needed for stacking/direct mode
+        geek_rating_pipeline = None
+        if geek_rating_mode in ["stacking", "direct"]:
+            geek_rating_exp = f"eval-geek_rating-{test_year}"
+            try:
+                geek_rating_pipeline = self._load_model_from_eval_dir(
+                    "geek_rating", geek_rating_exp
+                )
+                if not self._check_bayesian_model(geek_rating_pipeline):
+                    logger.warning(
+                        f"  geek_rating model does not support Bayesian simulation. "
+                        f"Falling back to bayesian mode."
+                    )
+                    geek_rating_mode = "bayesian"
+                    geek_rating_pipeline = None
+            except FileNotFoundError:
+                logger.warning(
+                    f"  No geek_rating model found for {geek_rating_mode} mode. "
+                    f"Falling back to bayesian mode."
+                )
+                geek_rating_mode = "bayesian"
+
+        logger.info(f"  n_samples: {n_samples}")
+        logger.info(f"  geek_rating_mode: {geek_rating_mode}")
+
+        # Load test data
+        data_config = DataConfig(
+            min_ratings=0,
+            requires_complexity_predictions=False,
+            supports_embeddings=True,
+        )
+
+        df = load_data(
+            data_config=data_config,
+            start_year=split["test_start"],
+            end_year=split["test_through"],
+            use_embeddings=self.use_embeddings,
+            apply_filters=False,
+        )
+
+        df_pandas = df.to_pandas()
+
+        # Filter to games with valid outcomes
+        valid_mask = (
+            ~df_pandas["rating"].isna()
+            & ~df_pandas["users_rated"].isna()
+            & (df_pandas["users_rated"] >= 0)
+        )
+        df_valid = df_pandas[valid_mask].reset_index(drop=True)
+        n_games = len(df_valid)
+
+        logger.info(f"  Total games: {len(df_pandas)}")
+        logger.info(f"  Valid games: {n_games}")
+
+        if n_games == 0:
+            logger.warning(f"  No valid games for simulation")
+            return
+
+        # Get scoring params
+        scoring_params = self.config.scoring.parameters
+        prior_rating = scoring_params.get("prior_rating", 5.5)
+        prior_weight = scoring_params.get("prior_weight", 2000)
+
+        # Pre-compute Cholesky decompositions
+        logger.info(f"  Pre-computing Cholesky decompositions...")
+        cholesky_cache = precompute_cholesky(
+            pipelines["complexity"],
+            pipelines["rating"],
+            pipelines["users_rated"],
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Run simulation
+        logger.info(f"  Running simulation ({n_samples} samples, {n_games} games)...")
+        results = simulate_batch(
+            df_valid,
+            pipelines["complexity"],
+            pipelines["rating"],
+            pipelines["users_rated"],
+            n_samples=n_samples,
+            prior_rating=prior_rating,
+            prior_weight=prior_weight,
+            random_state=random_state,
+            cholesky_cache=cholesky_cache,
+            geek_rating_mode=geek_rating_mode,
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Compute metrics
+        metrics = compute_simulation_metrics(results)
+
+        # Create output directory
+        simulation_dir = self.output_dir / "simulation" / f"eval-{test_year}"
+        simulation_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build predictions dataframe for saving and visualization
+        predictions_data = []
+        for r in results:
+            s = r.summary()
+            predictions_data.append({
+                "game_id": r.game_id,
+                "name": r.game_name,
+                # Actuals
+                "complexity_actual": r.actual_complexity,
+                "rating_actual": r.actual_rating,
+                "users_rated_actual": s["users_rated"]["actual"],
+                "geek_rating_actual": r.actual_geek_rating,
+                # Point predictions
+                "complexity_point": r.complexity_point,
+                "rating_point": r.rating_point,
+                "users_rated_point": s["users_rated"]["point"],
+                "geek_rating_point": r.geek_rating_point,
+                # Simulation median
+                "complexity_median": s["complexity"]["median"],
+                "rating_median": s["rating"]["median"],
+                "users_rated_median": s["users_rated"]["median"],
+                "geek_rating_median": s["geek_rating"]["median"],
+                # 90% intervals
+                "complexity_lower_90": s["complexity"]["interval_90"][0],
+                "complexity_upper_90": s["complexity"]["interval_90"][1],
+                "rating_lower_90": s["rating"]["interval_90"][0],
+                "rating_upper_90": s["rating"]["interval_90"][1],
+                "users_rated_lower_90": s["users_rated"]["interval_90"][0],
+                "users_rated_upper_90": s["users_rated"]["interval_90"][1],
+                "geek_rating_lower_90": s["geek_rating"]["interval_90"][0],
+                "geek_rating_upper_90": s["geek_rating"]["interval_90"][1],
+                # 50% intervals
+                "complexity_lower_50": s["complexity"]["interval_50"][0],
+                "complexity_upper_50": s["complexity"]["interval_50"][1],
+                "rating_lower_50": s["rating"]["interval_50"][0],
+                "rating_upper_50": s["rating"]["interval_50"][1],
+                "users_rated_lower_50": s["users_rated"]["interval_50"][0],
+                "users_rated_upper_50": s["users_rated"]["interval_50"][1],
+                "geek_rating_lower_50": s["geek_rating"]["interval_50"][0],
+                "geek_rating_upper_50": s["geek_rating"]["interval_50"][1],
+            })
+
+        predictions_df = pl.DataFrame(predictions_data)
+
+        # Save predictions
+        predictions_path = simulation_dir / "predictions.parquet"
+        predictions_df.write_parquet(predictions_path)
+        logger.info(f"  Saved predictions to {predictions_path}")
+
+        # Save metrics
+        metrics_path = simulation_dir / "metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(metrics, f, indent=2)
+        logger.info(f"  Saved metrics to {metrics_path}")
+
+        # Create visualizations
+        create_scatter_plots(predictions_df, test_year, simulation_dir)
+        create_top_games_plot(predictions_df, test_year, simulation_dir)
+
+        # Log summary metrics
+        logger.info(f"\n  Simulation Results:")
+        for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
+            if outcome in metrics and metrics[outcome].get("n", 0) > 0:
+                m = metrics[outcome]
+                logger.info(f"\n  {outcome.upper()}:")
+                logger.info(f"    RMSE (point): {m.get('rmse_point', 'N/A'):.4f}")
+                logger.info(f"    RMSE (sim):   {m.get('rmse_sim', 'N/A'):.4f}")
+                logger.info(f"    Coverage 90%: {m.get('coverage_90', 0):.1%}")
+                logger.info(f"    Coverage 50%: {m.get('coverage_50', 0):.1%}")
 
 
 def run_time_based_evaluation(
@@ -462,6 +820,7 @@ def run_time_based_evaluation(
     local_data_path: Optional[str] = None,
     model_args: Optional[Dict[str, Dict[str, Any]]] = None,
     additional_args: Optional[List[str]] = None,
+    run_simulation: bool = False,
 ):
     """Run comprehensive time-based model evaluation pipeline.
 
@@ -474,6 +833,7 @@ def run_time_based_evaluation(
         local_data_path: Optional path to local data file.
         model_args: Optional dictionary of additional arguments for each model.
         additional_args: Optional list of additional CLI arguments.
+        run_simulation: Whether to run simulation-based evaluation after training.
     """
     setup_logging()
 
@@ -496,7 +856,7 @@ def run_time_based_evaluation(
                 config["min_ratings"] = args["min-ratings"]
             model_configs[model_type] = config
 
-    evaluator = TimeBasedEvaluator(output_dir=output_dir)
+    evaluator = TimeBasedEvaluator(output_dir=output_dir, run_simulation=run_simulation)
     results = evaluator.run_evaluation(splits=splits, model_configs=model_configs)
 
     # Print summary

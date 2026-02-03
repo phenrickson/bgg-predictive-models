@@ -32,14 +32,16 @@ years:
   current: 2025
   recent_year_threshold: 2  # years to exclude from current when finalizing
   training:
-    train_through: 2021  # train on data through this year (inclusive)
-    tune_start: 2022
-    tune_through: 2022
-    test_start: 2023
-    test_through: 2023
+    train_through: 2020  # train on data through this year (inclusive)
+    tune_start: 2021
+    tune_through: 2021
+    test_start: 2022
+    test_through: 2022
+  # years to run over for year over year evaluation
   eval:
-    start: 2023
-    end: 2023
+    start: 2021
+    end: 2022
+  # data to score with trained model
   score:
     start: 2024    # current - 1
     end: 2024      # current + 4
@@ -70,11 +72,22 @@ models:
     use_embeddings: true
   geek_rating:
     type: ard
-    experiment_name: ard-geek_rating
+    experiment_name: ard-geek_rating-direct
+    mode: direct  # or "stacking"
+    min_ratings: 25  # only used for direct mode
 
 # Evaluate models over time
 evaluate:
   output_dir: "./models/experiments"
+
+# Simulation Configuration
+# Settings for simulation-based uncertainty estimation
+simulation:
+  n_samples: 500  # Number of posterior samples per game
+  geek_rating_mode: direct # bayesian, stacking, or direct
+  output_dir: "./models/simulation"
+  save_predictions: true
+  random_state: 42
 
 # Embeddings Configuration
 embeddings:

@@ -959,10 +959,11 @@ def extract_feature_importance(
         Ridge,
         Lasso,
         BayesianRidge,
+        ARDRegression,
     )
 
     # Determine feature importance extraction method based on model type
-    if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso, BayesianRidge)):
+    if isinstance(model, (LogisticRegression, LinearRegression, Ridge, Lasso, BayesianRidge, ARDRegression)):
         # For linear models, use coef_ attribute
         if not hasattr(model, "coef_"):
             raise ValueError("Model does not have coefficients")

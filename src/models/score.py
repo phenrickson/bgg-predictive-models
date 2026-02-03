@@ -166,7 +166,11 @@ def get_known_model_types() -> list:
     return list(MODEL_REGISTRY.keys())
 
 
-def load_model(experiment_name: str, model_type: Optional[str] = None):
+def load_model(
+    experiment_name: str,
+    model_type: Optional[str] = None,
+    base_dir: Optional[str] = None,
+):
     """Load the finalized model and preprocessing pipeline.
 
     Attempts to load the experiment by extracting the model type from the experiment name.
@@ -175,6 +179,7 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
     Args:
         experiment_name: Name of the experiment to load
         model_type: Optional model type to restrict the search
+        base_dir: Optional base directory for experiments (defaults to "models/experiments")
 
     Returns:
         Finalized pipeline
@@ -191,7 +196,10 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
     # Try each model type until successful
     for current_model_type in model_types:
         try:
-            tracker = ExperimentTracker(current_model_type)
+            if base_dir:
+                tracker = ExperimentTracker(current_model_type, base_dir=base_dir)
+            else:
+                tracker = ExperimentTracker(current_model_type)
             experiments = tracker.list_experiments()
 
             # Handle cases with or without version
@@ -218,37 +226,48 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     latest_experiment["name"], latest_experiment["version"]
                 )
 
-            # Explicitly look for finalized model
-            finalized_path = experiment.exp_dir / "finalized" / "pipeline.pkl"
+            # Look for pipeline in multiple locations (in order of preference)
+            import joblib
 
-            if not finalized_path.exists():
-                # Look for latest version's finalized model
-                version_dirs = [
-                    d
-                    for d in experiment.exp_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("v")
-                ]
+            potential_paths = [
+                # Finalized model in experiment dir
+                experiment.exp_dir / "finalized" / "pipeline.pkl",
+                # Direct pipeline in experiment dir (e.g., from time-based eval)
+                experiment.exp_dir / "pipeline.pkl",
+            ]
 
-                if version_dirs:
-                    latest_version_dir = max(
-                        version_dirs, key=lambda x: int(x.name[1:])
-                    )
-                    finalized_path = latest_version_dir / "finalized" / "pipeline.pkl"
+            # Also check version subdirectories
+            version_dirs = [
+                d
+                for d in experiment.exp_dir.iterdir()
+                if d.is_dir() and d.name.startswith("v")
+            ]
 
-            if finalized_path.exists():
-                logger.info(f"Loaded {experiment_name} from {finalized_path}")
-                import joblib
+            if version_dirs:
+                latest_version_dir = max(
+                    version_dirs, key=lambda x: int(x.name[1:])
+                )
+                potential_paths.extend([
+                    latest_version_dir / "finalized" / "pipeline.pkl",
+                    latest_version_dir / "pipeline.pkl",
+                ])
 
-                return joblib.load(finalized_path)
+            # Try each path
+            for pipeline_path in potential_paths:
+                if pipeline_path.exists():
+                    logger.info(f"Loaded {experiment_name} from {pipeline_path}")
+                    return joblib.load(pipeline_path)
 
-            raise FileNotFoundError(f"No finalized model found for {experiment_name}")
+            raise FileNotFoundError(f"No model found for {experiment_name}")
 
         except (ValueError, FileNotFoundError, Exception):
             continue
 
     # If no model type works, raise an error
+    search_dir = base_dir or "models/experiments"
     raise ValueError(
-        f"Could not load experiment '{experiment_name}' in any known model type"
+        f"Could not load experiment '{experiment_name}' in any known model type "
+        f"(searched in {search_dir})"
     )
 
 

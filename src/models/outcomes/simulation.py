@@ -457,10 +457,222 @@ def compute_geek_rating(
     return geek_rating
 
 
+def sample_geek_rating_stacking(
+    geek_rating_pipeline: Pipeline,
+    complexity_samples: np.ndarray,
+    rating_samples: np.ndarray,
+    users_rated_log_samples: np.ndarray,
+    n_samples: int = 1000,
+    include_noise: bool = True,
+    random_state: int = 42,
+    cholesky_L: np.ndarray = None,
+) -> np.ndarray:
+    """Sample geek rating from stacking model posterior given sub-model samples.
+
+    The stacking model takes [complexity, rating, users_rated_log] as features
+    and adds polynomial interaction terms. This function samples from the
+    stacking model's posterior for each set of sub-model samples.
+
+    Args:
+        geek_rating_pipeline: Fitted stacking pipeline with PolynomialFeatures.
+        complexity_samples: Shape (n_games, n_samples) complexity samples.
+        rating_samples: Shape (n_games, n_samples) rating samples.
+        users_rated_log_samples: Shape (n_games, n_samples) log users_rated samples.
+        n_samples: Number of posterior samples.
+        include_noise: Whether to add observation noise.
+        random_state: Random seed.
+        cholesky_L: Pre-computed Cholesky decomposition.
+
+    Returns:
+        Geek rating samples of shape (n_games, n_samples).
+    """
+    n_games = complexity_samples.shape[0]
+    rng = np.random.default_rng(random_state)
+
+    # Get pipeline components - check for interactions step (stacking model)
+    if "interactions" not in geek_rating_pipeline.named_steps:
+        raise ValueError("Stacking pipeline must have 'interactions' step")
+
+    poly = geek_rating_pipeline.named_steps["interactions"]
+    scaler = geek_rating_pipeline.named_steps["scaler"]
+    model = geek_rating_pipeline.named_steps["model"]
+
+    if not hasattr(model, "coef_") or not hasattr(model, "sigma_"):
+        raise ValueError("Stacking model does not support posterior sampling")
+
+    # Use pre-computed Cholesky if provided
+    if cholesky_L is None:
+        cholesky_L = compute_cholesky(model)
+
+    # Sample weight vectors from posterior
+    weight_samples = sample_weights_fast(model.coef_, cholesky_L, n_samples, rng)
+
+    # Extract scaler parameters for manual scaling in loop
+    scaler_mean = scaler.mean_
+    scaler_std = scaler.scale_
+
+    # Pre-allocate predictions
+    predictions = np.zeros((n_games, n_samples))
+
+    # Loop over samples - use poly.transform() to respect pipeline config
+    for i in range(n_samples):
+        c = complexity_samples[:, i]
+        r = rating_samples[:, i]
+        u = users_rated_log_samples[:, i]
+
+        # Use pipeline's PolynomialFeatures to compute interaction terms
+        X_base = np.column_stack([c, r, u])
+        X_poly = poly.transform(X_base)
+
+        # Manual scaling (avoids sklearn overhead)
+        X_scaled = (X_poly - scaler_mean) / scaler_std
+
+        # Compute prediction with sampled weights
+        pred = X_scaled @ weight_samples[i]
+        if hasattr(model, "intercept_"):
+            pred += model.intercept_
+        predictions[:, i] = pred
+
+    # Add observation noise if requested
+    if include_noise and hasattr(model, "alpha_"):
+        noise_std = 1.0 / np.sqrt(model.alpha_)
+        predictions += rng.normal(0, noise_std, size=predictions.shape)
+
+    # Clip to valid geek rating range
+    return np.clip(predictions, 1.0, 10.0)
+
+
+def sample_geek_rating_direct(
+    geek_rating_pipeline: Pipeline,
+    games: pd.DataFrame,
+    complexity_samples: np.ndarray,
+    rating_samples: np.ndarray,
+    users_rated_log_samples: np.ndarray,
+    n_samples: int = 1000,
+    include_noise: bool = True,
+    random_state: int = 42,
+    cholesky_L: np.ndarray = None,
+) -> np.ndarray:
+    """Sample geek rating from direct model posterior given sub-model samples.
+
+    The direct model uses all game features plus sub-model predictions.
+    This function samples from the direct model's posterior for each set
+    of sub-model samples, properly updating the sub-model prediction features.
+
+    Args:
+        geek_rating_pipeline: Fitted direct pipeline with BGGPreprocessor.
+        games: DataFrame with all game features (same as used for other models).
+        complexity_samples: Shape (n_games, n_samples) complexity samples.
+        rating_samples: Shape (n_games, n_samples) rating samples.
+        users_rated_log_samples: Shape (n_games, n_samples) log users_rated samples.
+        n_samples: Number of posterior samples.
+        include_noise: Whether to add observation noise.
+        random_state: Random seed.
+        cholesky_L: Pre-computed Cholesky decomposition.
+
+    Returns:
+        Geek rating samples of shape (n_games, n_samples).
+    """
+    n_games = len(games)
+    rng = np.random.default_rng(random_state)
+
+    # Get pipeline components
+    preprocessor = geek_rating_pipeline.named_steps["preprocessor"]
+    model = geek_rating_pipeline.named_steps["model"]
+
+    if not hasattr(model, "coef_") or not hasattr(model, "sigma_"):
+        raise ValueError("Direct model does not support posterior sampling")
+
+    # Use pre-computed Cholesky if provided
+    if cholesky_L is None:
+        cholesky_L = compute_cholesky(model)
+
+    # Sample weight vectors from posterior
+    weight_samples = sample_weights_fast(model.coef_, cholesky_L, n_samples, rng)
+
+    # Try to get scaler params for efficient feature updating
+    # If the preprocessor structure doesn't match, fall back to per-sample transform
+    use_fast_path = False
+    try:
+        # Check if preprocessor has the expected nested structure (BGGPreprocessor)
+        if hasattr(preprocessor, "named_steps") and "scaler" in preprocessor.named_steps:
+            complexity_mean, complexity_std, complexity_idx = get_scaler_params_for_column(
+                geek_rating_pipeline, "predicted_complexity"
+            )
+            rating_mean, rating_std, rating_idx = get_scaler_params_for_column(
+                geek_rating_pipeline, "predicted_rating"
+            )
+            users_rated_mean, users_rated_std, users_rated_idx = get_scaler_params_for_column(
+                geek_rating_pipeline, "predicted_users_rated_log"
+            )
+            use_fast_path = True
+    except (ValueError, AttributeError, KeyError):
+        # Fall back to slow path
+        pass
+
+    if not use_fast_path:
+        # Slow path: transform each sample separately
+        predictions = np.zeros((n_games, n_samples))
+
+        for i in range(n_samples):
+            games_sample = games.copy()
+            games_sample["predicted_complexity"] = complexity_samples[:, i]
+            games_sample["predicted_rating"] = rating_samples[:, i]
+            games_sample["predicted_users_rated_log"] = users_rated_log_samples[:, i]
+
+            X_transformed = preprocessor.transform(games_sample)
+            if hasattr(X_transformed, "values"):
+                X_transformed = X_transformed.values
+
+            pred = X_transformed @ weight_samples[i]
+            if hasattr(model, "intercept_"):
+                pred += model.intercept_
+            predictions[:, i] = pred
+
+        if include_noise and hasattr(model, "alpha_"):
+            noise_std = 1.0 / np.sqrt(model.alpha_)
+            predictions += rng.normal(0, noise_std, size=predictions.shape)
+
+        return np.clip(predictions, 1.0, 10.0)
+
+    # Fast path: transform base features once and update sub-model predictions in-place
+    games_with_predictions = games.copy()
+    games_with_predictions["predicted_complexity"] = complexity_samples[:, 0]
+    games_with_predictions["predicted_rating"] = rating_samples[:, 0]
+    games_with_predictions["predicted_users_rated_log"] = users_rated_log_samples[:, 0]
+
+    X_base = preprocessor.transform(games_with_predictions)
+    if hasattr(X_base, "values"):
+        X_base = X_base.values
+
+    predictions = np.zeros((n_games, n_samples))
+
+    for i in range(n_samples):
+        # Update sub-model prediction features with this sample's values
+        X_sample = X_base.copy()
+        X_sample[:, complexity_idx] = (complexity_samples[:, i] - complexity_mean) / complexity_std
+        X_sample[:, rating_idx] = (rating_samples[:, i] - rating_mean) / rating_std
+        X_sample[:, users_rated_idx] = (users_rated_log_samples[:, i] - users_rated_mean) / users_rated_std
+
+        # Compute prediction with sampled weights
+        pred = X_sample @ weight_samples[i]
+        if hasattr(model, "intercept_"):
+            pred += model.intercept_
+        predictions[:, i] = pred
+
+    # Add observation noise if requested
+    if include_noise and hasattr(model, "alpha_"):
+        noise_std = 1.0 / np.sqrt(model.alpha_)
+        predictions += rng.normal(0, noise_std, size=predictions.shape)
+
+    return np.clip(predictions, 1.0, 10.0)
+
+
 def precompute_cholesky(
     complexity_pipeline: Pipeline,
     rating_pipeline: Pipeline,
     users_rated_pipeline: Pipeline,
+    geek_rating_pipeline: Optional[Pipeline] = None,
 ) -> dict:
     """Pre-compute Cholesky decompositions for all models.
 
@@ -471,15 +683,24 @@ def precompute_cholesky(
         complexity_pipeline: Fitted complexity model pipeline.
         rating_pipeline: Fitted rating model pipeline.
         users_rated_pipeline: Fitted users_rated model pipeline.
+        geek_rating_pipeline: Optional fitted geek_rating pipeline (stacking or direct).
+            Required if using geek_rating_mode="stacking" or "direct" in simulate_batch.
 
     Returns:
         Dictionary with Cholesky factors keyed by model name.
     """
-    return {
+    cache = {
         "complexity": compute_cholesky(complexity_pipeline.named_steps["model"]),
         "rating": compute_cholesky(rating_pipeline.named_steps["model"]),
         "users_rated": compute_cholesky(users_rated_pipeline.named_steps["model"]),
     }
+
+    if geek_rating_pipeline is not None:
+        model = geek_rating_pipeline.named_steps["model"]
+        if hasattr(model, "sigma_"):
+            cache["geek_rating"] = compute_cholesky(model)
+
+    return cache
 
 
 def simulate_geek_rating(
@@ -493,6 +714,8 @@ def simulate_geek_rating(
     include_noise: bool = True,
     random_state: int = 42,
     cholesky_cache: dict = None,
+    geek_rating_mode: str = "bayesian",
+    geek_rating_pipeline: Optional[Pipeline] = None,
 ) -> SimulationResult:
     """Run full simulation for a single game.
 
@@ -500,7 +723,7 @@ def simulate_geek_rating(
     1. Sample complexity from posterior
     2. Sample rating conditional on complexity
     3. Sample users_rated conditional on complexity
-    4. Compute geek rating from rating and users_rated samples
+    4. Compute geek rating using selected mode
 
     Args:
         game: Single-row DataFrame with game features.
@@ -513,6 +736,8 @@ def simulate_geek_rating(
         include_noise: Whether to include observation noise.
         random_state: Random seed for reproducibility.
         cholesky_cache: Pre-computed Cholesky decompositions.
+        geek_rating_mode: How to compute geek rating: "bayesian", "stacking", or "direct".
+        geek_rating_pipeline: Required for stacking/direct modes.
 
     Returns:
         SimulationResult with all samples and summaries.
@@ -541,6 +766,7 @@ def simulate_geek_rating(
     complexity_L = cholesky_cache.get("complexity") if cholesky_cache else None
     rating_L = cholesky_cache.get("rating") if cholesky_cache else None
     users_rated_L = cholesky_cache.get("users_rated") if cholesky_cache else None
+    geek_rating_L = cholesky_cache.get("geek_rating") if cholesky_cache else None
 
     # Step 1: Sample complexity
     complexity_samples = sample_posterior(
@@ -576,13 +802,43 @@ def simulate_geek_rating(
         cholesky_L=users_rated_L,
     )
 
-    # Step 4: Compute geek rating
-    geek_rating_samples = compute_geek_rating(
-        rating_samples,
-        users_rated_samples,
-        prior_rating=prior_rating,
-        prior_weight=prior_weight,
-    )
+    # Step 4: Compute geek rating using selected mode
+    if geek_rating_mode == "bayesian":
+        geek_rating_samples = compute_geek_rating(
+            rating_samples,
+            users_rated_samples,
+            prior_rating=prior_rating,
+            prior_weight=prior_weight,
+        )
+    elif geek_rating_mode == "stacking":
+        if geek_rating_pipeline is None:
+            raise ValueError("geek_rating_pipeline required for stacking mode")
+        geek_rating_samples = sample_geek_rating_stacking(
+            geek_rating_pipeline,
+            complexity_samples,
+            rating_samples,
+            users_rated_samples,
+            n_samples=n_samples,
+            include_noise=include_noise,
+            random_state=random_state + 3,
+            cholesky_L=geek_rating_L,
+        )
+    elif geek_rating_mode == "direct":
+        if geek_rating_pipeline is None:
+            raise ValueError("geek_rating_pipeline required for direct mode")
+        geek_rating_samples = sample_geek_rating_direct(
+            geek_rating_pipeline,
+            game,
+            complexity_samples,
+            rating_samples,
+            users_rated_samples,
+            n_samples=n_samples,
+            include_noise=include_noise,
+            random_state=random_state + 3,
+            cholesky_L=geek_rating_L,
+        )
+    else:
+        raise ValueError(f"Unknown geek_rating_mode: {geek_rating_mode}")
 
     # Point estimates
     complexity_point = float(np.clip(complexity_pipeline.predict(game)[0], 1, 5))
@@ -600,9 +856,14 @@ def simulate_geek_rating(
     # Convert to count scale only for geek_rating calculation
     users_rated_count = max(np.expm1(users_rated_point), 25)
 
-    geek_rating_point = (
-        (rating_point * users_rated_count) + (prior_rating * prior_weight)
-    ) / (users_rated_count + prior_weight)
+    # Point estimate for geek rating depends on mode
+    if geek_rating_mode == "bayesian":
+        geek_rating_point = (
+            (rating_point * users_rated_count) + (prior_rating * prior_weight)
+        ) / (users_rated_count + prior_weight)
+    else:
+        # Use median of samples as point estimate for stacking/direct
+        geek_rating_point = float(np.median(geek_rating_samples))
 
     return SimulationResult(
         game_id=game_id,
@@ -633,6 +894,8 @@ def simulate_batch(
     prior_weight: float = 2000,
     random_state: int = 42,
     cholesky_cache: dict = None,
+    geek_rating_mode: str = "bayesian",
+    geek_rating_pipeline: Optional[Pipeline] = None,
 ) -> List[SimulationResult]:
     """Run simulation for multiple games (vectorized).
 
@@ -649,6 +912,8 @@ def simulate_batch(
         prior_weight: Bayesian average prior weight.
         random_state: Random seed.
         cholesky_cache: Pre-computed Cholesky decompositions.
+        geek_rating_mode: How to compute geek rating: "bayesian", "stacking", or "direct".
+        geek_rating_pipeline: Required for stacking/direct modes.
 
     Returns:
         List of SimulationResult, one per game.
@@ -656,7 +921,8 @@ def simulate_batch(
     # Pre-compute Cholesky if not provided
     if cholesky_cache is None:
         cholesky_cache = precompute_cholesky(
-            complexity_pipeline, rating_pipeline, users_rated_pipeline
+            complexity_pipeline, rating_pipeline, users_rated_pipeline,
+            geek_rating_pipeline=geek_rating_pipeline if geek_rating_mode != "bayesian" else None,
         )
 
     n_games = len(games)
@@ -695,13 +961,43 @@ def simulate_batch(
         cholesky_L=cholesky_cache.get("users_rated"),
     )
 
-    # Step 4: Compute geek rating vectorized
-    geek_rating_samples = compute_geek_rating(
-        rating_samples,
-        users_rated_samples,
-        prior_rating=prior_rating,
-        prior_weight=prior_weight,
-    )
+    # Step 4: Compute geek rating using selected mode
+    if geek_rating_mode == "bayesian":
+        geek_rating_samples = compute_geek_rating(
+            rating_samples,
+            users_rated_samples,
+            prior_rating=prior_rating,
+            prior_weight=prior_weight,
+        )
+    elif geek_rating_mode == "stacking":
+        if geek_rating_pipeline is None:
+            raise ValueError("geek_rating_pipeline required for stacking mode")
+        geek_rating_samples = sample_geek_rating_stacking(
+            geek_rating_pipeline,
+            complexity_samples,
+            rating_samples,
+            users_rated_samples,
+            n_samples=n_samples,
+            include_noise=True,
+            random_state=random_state + 3,
+            cholesky_L=cholesky_cache.get("geek_rating"),
+        )
+    elif geek_rating_mode == "direct":
+        if geek_rating_pipeline is None:
+            raise ValueError("geek_rating_pipeline required for direct mode")
+        geek_rating_samples = sample_geek_rating_direct(
+            geek_rating_pipeline,
+            games,
+            complexity_samples,
+            rating_samples,
+            users_rated_samples,
+            n_samples=n_samples,
+            include_noise=True,
+            random_state=random_state + 3,
+            cholesky_L=cholesky_cache.get("geek_rating"),
+        )
+    else:
+        raise ValueError(f"Unknown geek_rating_mode: {geek_rating_mode}")
 
     # Point estimates (vectorized)
     complexity_points = np.clip(complexity_pipeline.predict(games), 1, 5)
@@ -715,9 +1011,14 @@ def simulate_batch(
     # Convert to count scale only for geek_rating calculation
     users_rated_counts = np.maximum(np.expm1(users_rated_points), 25)
 
-    geek_rating_points = (
-        (rating_points * users_rated_counts) + (prior_rating * prior_weight)
-    ) / (users_rated_counts + prior_weight)
+    # Point estimates for geek rating depend on mode
+    if geek_rating_mode == "bayesian":
+        geek_rating_points = (
+            (rating_points * users_rated_counts) + (prior_rating * prior_weight)
+        ) / (users_rated_counts + prior_weight)
+    else:
+        # Use median of samples as point estimate for stacking/direct
+        geek_rating_points = np.median(geek_rating_samples, axis=1)
 
     # Extract actuals
     actual_complexity = games["complexity"].values if "complexity" in games.columns else [None] * n_games
@@ -857,10 +1158,21 @@ def compute_simulation_metrics(
         for r in results:
             s = r.summary()
             actual_val = s[outcome]["actual"]
-            # Skip if actual is None or if complexity is 0 (means missing)
+            # Skip if actual is None
             if actual_val is None:
                 continue
+            # Skip missing data (0 means not yet rated/voted):
+            # - complexity == 0: no complexity votes
+            # - rating == 0: no ratings
+            # - users_rated == 0: no ratings
+            # - geek_rating: skip if users_rated == 0 (can't have valid geek_rating)
             if outcome == "complexity" and actual_val == 0:
+                continue
+            if outcome == "rating" and actual_val == 0:
+                continue
+            if outcome == "users_rated" and actual_val == 0:
+                continue
+            if outcome == "geek_rating" and s["users_rated"]["actual"] == 0:
                 continue
             actuals.append(actual_val)
             medians.append(s[outcome]["median"])

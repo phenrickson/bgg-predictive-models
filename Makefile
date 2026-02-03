@@ -87,8 +87,8 @@ models: hurdle complexity rating users_rated geek_rating
 # train individual models
 hurdle: train_hurdle score_hurdle
 complexity: train_complexity score_complexity
-rating: train_rating score_rating
-users_rated: train_users_rated score_users_rated
+rating: train_rating
+users_rated: train_users_rated
 
 ## train individual models
 # hurdle model
@@ -118,10 +118,6 @@ train_rating:
 	--model rating \
 	--finalize
 
-score_rating: 
-	uv run -m src.pipeline.score \
-	--model rating
-
 # users rated
 # rating
 train_users_rated: 
@@ -129,21 +125,15 @@ train_users_rated:
 	--model users_rated \
 	--finalize
 
-score_users_rated: 
-	uv run -m src.pipeline.score \
-	--model users_rated
-
 # geek rating
-# predict geek rating given models (uses experiment names from config.yaml)
 geek_rating:
-	uv run -m src.pipeline.geek_rating \
-	--experiment estimated-geek-rating
+	uv run -m src.models.outcomes.geek_rating
 
 # evaluate models over time periods
 .PHONY: evaluate
 evalute: 
-	uv run -m src.pipeline.evaluate
-
+	uv run -m src.pipeline.evaluate \ 
+	--simulate
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder

@@ -184,6 +184,7 @@ class ModelConfig:
     use_embeddings: bool = False
     min_ratings: int = 0
     algorithm_params: Optional[Dict[str, Any]] = None
+    mode: Optional[str] = None  # For geek_rating: "stacking" or "direct"
 
     def get_algorithm_params(self) -> Dict[str, Any]:
         """Get algorithm-specific parameters.
@@ -192,6 +193,17 @@ class ModelConfig:
             Dictionary of algorithm parameters, or empty dict if none configured.
         """
         return self.algorithm_params if self.algorithm_params is not None else {}
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation-based uncertainty estimation."""
+
+    n_samples: int = 500  # Number of posterior samples
+    geek_rating_mode: str = "bayesian"  # bayesian, stacking, or direct
+    output_dir: str = "models/simulation"
+    save_predictions: bool = True
+    random_state: int = 42
 
 
 @dataclass
@@ -246,6 +258,7 @@ class Config:
     scoring: Optional[ScoringConfig] = None
     embeddings: Optional[EmbeddingConfig] = None
     text_embeddings: Optional[TextEmbeddingConfig] = None
+    simulation: Optional[SimulationConfig] = None
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -394,6 +407,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             use_embeddings=model_config.get("use_embeddings", False),
             min_ratings=model_config.get("min_ratings", 0),
             algorithm_params=model_config.get("algorithm_params"),
+            mode=model_config.get("mode"),
         )
 
     # Create scoring config if present
@@ -463,6 +477,18 @@ def load_config(config_path: Optional[str] = None) -> Config:
             upload=te_upload_config,
         )
 
+    # Create simulation config if present
+    simulation_config = None
+    if "simulation" in config:
+        sim = config["simulation"]
+        simulation_config = SimulationConfig(
+            n_samples=sim.get("n_samples", 500),
+            geek_rating_mode=sim.get("geek_rating_mode", "bayesian"),
+            output_dir=sim.get("output_dir", "models/simulation"),
+            save_predictions=sim.get("save_predictions", True),
+            random_state=sim.get("random_state", 42),
+        )
+
     return Config(
         bucket_name=bucket_name,
         default_environment=config.get("default_environment", "dev"),
@@ -475,4 +501,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         scoring=scoring_config,
         embeddings=embeddings_config,
         text_embeddings=text_embeddings_config,
+        simulation=simulation_config,
     )

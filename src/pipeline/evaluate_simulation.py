@@ -133,6 +133,127 @@ def create_scatter_plots(
     logger.info(f"  Saved scatter plots to {plot_path}")
 
 
+def create_top_games_plot(
+    predictions_df: pl.DataFrame,
+    test_year: int,
+    output_dir: Path,
+    top_n: int = 100,
+) -> None:
+    """Create forest plot showing top N games with intervals for all outcomes.
+
+    Shows game names on y-axis with horizontal intervals for complexity, rating,
+    users_rated (log scale), and geek_rating. Filled dots for predictions,
+    open circles for actuals.
+
+    Args:
+        predictions_df: DataFrame with predictions and actuals.
+        test_year: The test year for labeling.
+        output_dir: Directory to save plots.
+        top_n: Number of top games to show (default 100).
+    """
+    df = predictions_df.to_pandas()
+
+    # Sort by predicted geek_rating (point prediction) descending
+    df_sorted = df.sort_values("geek_rating_point", ascending=False).head(top_n)
+    df_sorted = df_sorted.reset_index(drop=True)
+
+    # Create game labels (truncate long names)
+    df_sorted["label"] = df_sorted.apply(
+        lambda row: f"{row['name'][:30]}..." if len(str(row['name'])) > 30 else row['name'],
+        axis=1
+    )
+
+    outcomes = ["complexity", "rating", "users_rated", "geek_rating"]
+    n_games = len(df_sorted)
+
+    # Create figure with 4 subplots side by side
+    fig, axes = plt.subplots(1, 4, figsize=(20, max(12, n_games * 0.15)), sharey=True)
+
+    y_positions = np.arange(n_games)
+
+    for i, outcome in enumerate(outcomes):
+        ax = axes[i]
+
+        lower_90 = df_sorted[f"{outcome}_lower_90"]
+        upper_90 = df_sorted[f"{outcome}_upper_90"]
+        lower_50 = df_sorted[f"{outcome}_lower_50"]
+        upper_50 = df_sorted[f"{outcome}_upper_50"]
+        median = df_sorted[f"{outcome}_median"]
+        actual = df_sorted[f"{outcome}_actual"]
+
+        # Plot 90% intervals as thin lines
+        for j in range(n_games):
+            ax.plot(
+                [lower_90.iloc[j], upper_90.iloc[j]],
+                [y_positions[j], y_positions[j]],
+                color="steelblue",
+                linewidth=1,
+                alpha=0.6,
+            )
+
+        # Plot 50% intervals as thicker lines
+        for j in range(n_games):
+            ax.plot(
+                [lower_50.iloc[j], upper_50.iloc[j]],
+                [y_positions[j], y_positions[j]],
+                color="steelblue",
+                linewidth=3,
+                alpha=0.8,
+            )
+
+        # Plot median (prediction) as filled dots
+        ax.scatter(
+            median,
+            y_positions,
+            color="steelblue",
+            s=25,
+            zorder=5,
+            label="Predicted",
+        )
+
+        # Plot actual as open circles
+        ax.scatter(
+            actual,
+            y_positions,
+            facecolors="none",
+            edgecolors="red",
+            s=40,
+            linewidths=1.5,
+            zorder=6,
+            label="Actual",
+        )
+
+        ax.set_xlabel(outcome.replace("_", " ").title(), fontsize=11)
+        ax.set_title(outcome.replace("_", " ").title(), fontsize=12, fontweight="bold")
+        ax.grid(True, axis="x", alpha=0.3)
+
+        # Add legend only to first subplot
+        if i == 0:
+            ax.legend(loc="lower left", fontsize=8)
+
+    # Set y-axis labels on first subplot only
+    axes[0].set_yticks(y_positions)
+    axes[0].set_yticklabels(df_sorted["label"], fontsize=7)
+    axes[0].set_ylabel("Game", fontsize=11)
+
+    # Invert y-axis so rank 1 is at top
+    axes[0].invert_yaxis()
+
+    plt.suptitle(
+        f"Top {top_n} Games by Predicted Geek Rating - {test_year}\n"
+        "(line = 90% interval, thick = 50% interval, dot = predicted, circle = actual)",
+        fontsize=13,
+        y=1.01,
+    )
+    plt.tight_layout()
+
+    # Save
+    plot_path = output_dir / f"top_{top_n}_games_{test_year}.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    logger.info(f"  Saved top {top_n} games plot to {plot_path}")
+
+
 def load_pipeline(
     model_type: str,
     experiment_name: str,
@@ -141,7 +262,7 @@ def load_pipeline(
     """Load a trained pipeline from an experiment.
 
     Args:
-        model_type: Type of model (complexity, rating, users_rated).
+        model_type: Type of model (complexity, rating, users_rated, geek_rating).
         experiment_name: Name of the experiment.
         base_dir: Base directory for experiments.
 
@@ -171,6 +292,46 @@ def load_pipeline(
     return joblib.load(pipeline_path)
 
 
+def load_pipelines_from_config(
+    config,
+    base_dir: str = "models/experiments",
+) -> Dict[str, Any]:
+    """Load all pipelines needed for simulation from config.
+
+    Args:
+        config: Loaded Config object.
+        base_dir: Base directory for experiments.
+
+    Returns:
+        Dictionary with pipelines keyed by model type.
+    """
+    pipelines = {}
+
+    # Load required models (complexity, rating, users_rated)
+    for model_type in ["complexity", "rating", "users_rated"]:
+        if model_type not in config.models:
+            raise ValueError(f"Missing {model_type} in config.models")
+        exp_name = config.models[model_type].experiment_name
+        pipelines[model_type] = load_pipeline(model_type, exp_name, base_dir)
+        logger.info(f"  Loaded {model_type}: {exp_name}")
+
+    # Load geek_rating pipeline if mode requires it
+    geek_rating_mode = "bayesian"
+    if config.simulation:
+        geek_rating_mode = config.simulation.geek_rating_mode
+
+    if geek_rating_mode in ["stacking", "direct"]:
+        if "geek_rating" not in config.models:
+            raise ValueError(
+                f"geek_rating_mode={geek_rating_mode} requires geek_rating in config.models"
+            )
+        exp_name = config.models["geek_rating"].experiment_name
+        pipelines["geek_rating"] = load_pipeline("geek_rating", exp_name, base_dir)
+        logger.info(f"  Loaded geek_rating: {exp_name}")
+
+    return pipelines
+
+
 def check_bayesian_model(pipeline) -> bool:
     """Check if a pipeline contains a Bayesian model that supports simulation."""
     model = pipeline.named_steps.get("model")
@@ -181,38 +342,51 @@ def check_bayesian_model(pipeline) -> bool:
 
 def evaluate_year(
     test_year: int,
+    config=None,
     base_dir: str = "models/experiments",
     n_samples: int = 500,
     save_predictions: bool = False,
     output_dir: Optional[str] = None,
+    geek_rating_mode: str = "bayesian",
 ) -> Dict[str, Any]:
     """Evaluate simulation vs point prediction for a single test year.
 
     Args:
         test_year: The test year to evaluate.
+        config: Loaded Config object. If provided, loads models from config.
         base_dir: Base directory for experiments.
         n_samples: Number of posterior samples.
         save_predictions: Whether to save game-level predictions.
         output_dir: Directory to save predictions (defaults to base_dir/simulation).
+        geek_rating_mode: How to compute geek rating: "bayesian", "stacking", or "direct".
 
     Returns:
         Dictionary of evaluation results.
     """
     logger.info(f"\n{'='*60}")
     logger.info(f"Evaluating simulation for test year {test_year}")
+    logger.info(f"geek_rating_mode: {geek_rating_mode}")
     logger.info(f"{'='*60}")
 
-    # Load trained models
-    pipelines = {}
-    for model_type in ["complexity", "rating", "users_rated"]:
-        exp_name = f"eval-{model_type}-{test_year}"
+    # Load trained models - config-driven or legacy mode
+    if config is not None:
         try:
-            pipeline = load_pipeline(model_type, exp_name, base_dir)
-            pipelines[model_type] = pipeline
-            logger.info(f"  Loaded {model_type}: {exp_name}")
-        except FileNotFoundError as e:
-            logger.error(f"  Could not load {model_type}: {e}")
+            pipelines = load_pipelines_from_config(config, base_dir)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error(f"  Could not load pipelines from config: {e}")
             return {"test_year": test_year, "error": str(e)}
+    else:
+        # Legacy mode: load eval-{model}-{year} experiments
+        pipelines = {}
+        for model_type in ["complexity", "rating", "users_rated"]:
+            exp_name = f"eval-{model_type}-{test_year}"
+            try:
+                pipeline = load_pipeline(model_type, exp_name, base_dir)
+                pipelines[model_type] = pipeline
+                logger.info(f"  Loaded {model_type}: {exp_name}")
+            except FileNotFoundError as e:
+                logger.error(f"  Could not load {model_type}: {e}")
+                return {"test_year": test_year, "error": str(e)}
 
     # Check if models support Bayesian simulation
     for model_type, pipeline in pipelines.items():
@@ -223,7 +397,9 @@ def evaluate_year(
             return {"test_year": test_year, "error": f"{model_type} not Bayesian"}
 
     # Load test data
-    config = load_config()
+    if config is None:
+        config = load_config()
+
     data_config = DataConfig(
         min_ratings=0,
         requires_complexity_predictions=False,
@@ -261,12 +437,21 @@ def evaluate_year(
     prior_rating = scoring_params.get("prior_rating", 5.5)
     prior_weight = scoring_params.get("prior_weight", 2000)
 
+    # Get random state from config or default
+    random_state = 42
+    if config.simulation:
+        random_state = config.simulation.random_state
+
+    # Get geek_rating pipeline if needed
+    geek_rating_pipeline = pipelines.get("geek_rating")
+
     # Pre-compute Cholesky
     logger.info(f"  Pre-computing Cholesky decompositions...")
     cholesky_cache = precompute_cholesky(
         pipelines["complexity"],
         pipelines["rating"],
         pipelines["users_rated"],
+        geek_rating_pipeline=geek_rating_pipeline,
     )
 
     # Run simulation
@@ -279,8 +464,10 @@ def evaluate_year(
         n_samples=n_samples,
         prior_rating=prior_rating,
         prior_weight=prior_weight,
-        random_state=42,
+        random_state=random_state,
         cholesky_cache=cholesky_cache,
+        geek_rating_mode=geek_rating_mode,
+        geek_rating_pipeline=geek_rating_pipeline,
     )
 
     # Compute metrics
@@ -288,7 +475,7 @@ def evaluate_year(
 
     # Save game-level predictions if requested
     if save_predictions:
-        predictions_dir = Path("models/simulation")
+        predictions_dir = Path(output_dir) if output_dir else Path("models/simulation")
         predictions_dir.mkdir(parents=True, exist_ok=True)
 
         # Build predictions dataframe
@@ -355,6 +542,9 @@ def evaluate_year(
         # Create scatter plots
         create_scatter_plots(predictions_df, test_year, predictions_dir)
 
+        # Create top games plot
+        create_top_games_plot(predictions_df, test_year, predictions_dir)
+
     # Build output
     output = {
         "test_year": test_year,
@@ -408,6 +598,8 @@ Examples:
   uv run python evaluate_simulation.py --year 2023
   uv run python evaluate_simulation.py --start-year 2023 --end-year 2024
   uv run python evaluate_simulation.py --n-samples 1000
+  uv run python evaluate_simulation.py --geek-rating-mode direct
+  uv run python evaluate_simulation.py --legacy  # use eval-{model}-{year} experiments
         """,
     )
 
@@ -429,14 +621,12 @@ Examples:
     parser.add_argument(
         "--n-samples",
         type=int,
-        default=500,
-        help="Number of posterior samples (default: 500)",
+        help="Number of posterior samples (overrides config)",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="./models/experiments",
-        help="Base directory for experiments",
+        help="Base directory for experiments (overrides config)",
     )
     parser.add_argument(
         "--output",
@@ -446,12 +636,44 @@ Examples:
     parser.add_argument(
         "--save-predictions",
         action="store_true",
-        help="Save game-level predictions to parquet files",
+        default=None,
+        help="Save game-level predictions (overrides config)",
+    )
+    parser.add_argument(
+        "--geek-rating-mode",
+        type=str,
+        choices=["bayesian", "stacking", "direct"],
+        help="Geek rating mode (overrides config)",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Use legacy mode: load eval-{model}-{year} experiments instead of config",
     )
 
     args = parser.parse_args()
 
     setup_logging()
+
+    # Load config
+    config = load_config()
+
+    # Get settings from config with CLI overrides
+    n_samples = args.n_samples
+    if n_samples is None:
+        n_samples = config.simulation.n_samples if config.simulation else 500
+
+    output_dir = args.output_dir
+    if output_dir is None:
+        output_dir = config.simulation.output_dir if config.simulation else "./models/experiments"
+
+    save_predictions = args.save_predictions
+    if save_predictions is None:
+        save_predictions = config.simulation.save_predictions if config.simulation else False
+
+    geek_rating_mode = args.geek_rating_mode
+    if geek_rating_mode is None:
+        geek_rating_mode = config.simulation.geek_rating_mode if config.simulation else "bayesian"
 
     # Determine years to evaluate
     if args.year:
@@ -459,26 +681,28 @@ Examples:
     elif args.start_year and args.end_year:
         years = list(range(args.start_year, args.end_year + 1))
     else:
-        # Default to config
-        config = load_config()
         years = list(range(config.years.eval.start, config.years.eval.end + 1))
 
     logger.info("=" * 60)
     logger.info("SIMULATION EVALUATION")
     logger.info("=" * 60)
     logger.info(f"Years: {years}")
-    logger.info(f"Samples: {args.n_samples}")
-    logger.info(f"Experiments dir: {args.output_dir}")
+    logger.info(f"Samples: {n_samples}")
+    logger.info(f"Geek rating mode: {geek_rating_mode}")
+    logger.info(f"Output dir: {output_dir}")
+    logger.info(f"Config-driven: {not args.legacy}")
 
     # Evaluate each year
     all_results = []
     for year in years:
         result = evaluate_year(
             test_year=year,
-            base_dir=args.output_dir,
-            n_samples=args.n_samples,
-            save_predictions=args.save_predictions,
-            output_dir=args.output_dir,
+            config=None if args.legacy else config,
+            base_dir="./models/experiments",
+            n_samples=n_samples,
+            save_predictions=save_predictions,
+            output_dir=output_dir,
+            geek_rating_mode=geek_rating_mode,
         )
         all_results.append(result)
 

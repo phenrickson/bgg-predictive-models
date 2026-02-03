@@ -35,6 +35,7 @@ Examples:
   uv run python evaluate.py --dry-run          # Show configuration without running
   uv run python evaluate.py --start-year 2020  # Start evaluation from 2020
   uv run python evaluate.py --end-year 2022    # End evaluation at 2022
+  uv run python evaluate.py --simulation       # Include simulation-based uncertainty evaluation
   uv run python evaluate.py --output-dir ./custom_eval  # Custom output directory
         """,
     )
@@ -70,6 +71,12 @@ Examples:
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
+    )
+
+    parser.add_argument(
+        "--simulation",
+        action="store_true",
+        help="Run simulation-based evaluation after training models",
     )
 
     args = parser.parse_args()
@@ -112,6 +119,20 @@ Examples:
                 extras_str = f" ({', '.join(extras)})" if extras else ""
                 logger.info(f"  {model_type}: {model_config.type}{extras_str}")
 
+        if args.simulation:
+            logger.info("\nSimulation Configuration:")
+            if config.simulation:
+                logger.info(f"  n_samples: {config.simulation.n_samples}")
+                logger.info(f"  geek_rating_mode: {config.simulation.geek_rating_mode}")
+                if config.simulation.geek_rating_mode in ["stacking", "direct"]:
+                    geek_rating_config = config.models.get("geek_rating")
+                    if geek_rating_config:
+                        logger.info(f"  geek_rating model: {geek_rating_config.type}")
+                    else:
+                        logger.info(f"  geek_rating model: ard (default)")
+            else:
+                logger.info("  Using defaults (n_samples=500, geek_rating_mode=bayesian)")
+
         logger.info("\nTime Splits:")
         for i, split in enumerate(splits):
             logger.info(
@@ -134,6 +155,7 @@ Examples:
         run_time_based_evaluation(
             splits=splits,
             output_dir=args.output_dir,
+            run_simulation=args.simulation,
         )
 
         logger.info("\n" + "=" * 60)
