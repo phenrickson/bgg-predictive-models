@@ -94,8 +94,7 @@ users_rated: train_users_rated
 # hurdle model
 train_hurdle:
 	uv run -m src.pipeline.train \
-	--model hurdle \
-	--finalize
+	--model hurdle
 
 score_hurdle:
 	uv run -m src.pipeline.score \
@@ -104,8 +103,7 @@ score_hurdle:
 # complexity
 train_complexity: 
 	uv run -m src.pipeline.train \
-	--model complexity \
-	--finalize
+	--model complexity
 
 score_complexity:
 	uv run -m src.pipeline.score \
@@ -115,15 +113,13 @@ score_complexity:
 # rating
 train_rating: 
 	uv run -m src.pipeline.train \
-	--model rating \
-	--finalize
+	--model rating
 
 # users rated
 # rating
 train_users_rated: 
 	uv run -m src.pipeline.train \
-	--model users_rated \
-	--finalize
+	--model users_rated
 
 # geek rating
 geek_rating:
