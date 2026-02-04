@@ -692,6 +692,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "^Game:",
             "^Players: Expansions",
             "^Players: Games with expansions",
+            "^Category: Dized",  # Leakage: tutorials created after game success
         ]
 
         self.FAMILY_ALLOW_PATTERNS = [
