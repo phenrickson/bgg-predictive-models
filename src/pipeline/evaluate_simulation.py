@@ -258,6 +258,7 @@ def load_pipeline(
     model_type: str,
     experiment_name: str,
     base_dir: str = "models/experiments",
+    return_info: bool = False,
 ) -> object:
     """Load a trained pipeline from an experiment.
 
@@ -265,9 +266,10 @@ def load_pipeline(
         model_type: Type of model (complexity, rating, users_rated, geek_rating).
         experiment_name: Name of the experiment.
         base_dir: Base directory for experiments.
+        return_info: If True, return (pipeline, info_dict) with version metadata.
 
     Returns:
-        Loaded sklearn pipeline.
+        Loaded sklearn pipeline, or (pipeline, info) if return_info=True.
     """
     exp_dir = Path(base_dir) / model_type / experiment_name
 
@@ -289,7 +291,26 @@ def load_pipeline(
     if not pipeline_path.exists():
         raise FileNotFoundError(f"No pipeline found in {latest_version}")
 
-    return joblib.load(pipeline_path)
+    pipeline = joblib.load(pipeline_path)
+
+    if return_info:
+        # Load metadata if available
+        metadata = {}
+        metadata_path = latest_version / "metadata.json"
+        if metadata_path.exists():
+            import json
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+        info = {
+            "experiment_name": experiment_name,
+            "version": latest_version.name,
+            "path": str(latest_version),
+            "metadata": metadata,
+        }
+        return pipeline, info
+
+    return pipeline
 
 
 def load_pipelines_from_config(
@@ -349,6 +370,7 @@ def evaluate_year(
     output_dir: Optional[str] = None,
     geek_rating_mode: str = "bayesian",
     experiment_names: Optional[Dict[str, str]] = None,
+    run_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Evaluate simulation vs point prediction for a single test year.
 
@@ -363,6 +385,7 @@ def evaluate_year(
         geek_rating_mode: How to compute geek rating: "bayesian", "stacking", or "direct".
         experiment_names: Optional dict mapping model type to experiment name.
             If provided, loads these experiments directly.
+        run_name: Optional name for this simulation run. Creates subdirectory for outputs.
 
     Returns:
         Dictionary of evaluation results.
@@ -370,10 +393,13 @@ def evaluate_year(
     logger.info(f"\n{'='*60}")
     logger.info(f"Evaluating simulation for test year {test_year}")
     logger.info(f"geek_rating_mode: {geek_rating_mode}")
+    if run_name:
+        logger.info(f"run_name: {run_name}")
     logger.info(f"{'='*60}")
 
-    # Load trained models
+    # Load trained models and track version info
     pipelines = {}
+    model_info = {}
 
     if experiment_names is not None:
         # Load explicitly named experiments
@@ -383,9 +409,10 @@ def evaluate_year(
                 return {"test_year": test_year, "error": f"Missing {model_type}"}
             exp_name = experiment_names[model_type]
             try:
-                pipeline = load_pipeline(model_type, exp_name, base_dir)
+                pipeline, info = load_pipeline(model_type, exp_name, base_dir, return_info=True)
                 pipelines[model_type] = pipeline
-                logger.info(f"  Loaded {model_type}: {exp_name}")
+                model_info[model_type] = info
+                logger.info(f"  Loaded {model_type}: {exp_name} ({info['version']})")
             except FileNotFoundError as e:
                 logger.error(f"  Could not load {model_type}: {e}")
                 return {"test_year": test_year, "error": str(e)}
@@ -394,19 +421,34 @@ def evaluate_year(
         if "geek_rating" in experiment_names:
             exp_name = experiment_names["geek_rating"]
             try:
-                pipeline = load_pipeline("geek_rating", exp_name, base_dir)
+                pipeline, info = load_pipeline("geek_rating", exp_name, base_dir, return_info=True)
                 pipelines["geek_rating"] = pipeline
-                logger.info(f"  Loaded geek_rating: {exp_name}")
+                model_info["geek_rating"] = info
+                logger.info(f"  Loaded geek_rating: {exp_name} ({info['version']})")
             except FileNotFoundError as e:
                 logger.warning(f"  Could not load geek_rating: {e}")
 
     elif config is not None:
-        # Load from config experiment names
-        try:
-            pipelines = load_pipelines_from_config(config, base_dir)
-        except (FileNotFoundError, ValueError) as e:
-            logger.error(f"  Could not load pipelines from config: {e}")
-            return {"test_year": test_year, "error": str(e)}
+        # Load from config experiment names (with info tracking)
+        for model_type in ["complexity", "rating", "users_rated"]:
+            if model_type not in config.models:
+                raise ValueError(f"Missing {model_type} in config.models")
+            exp_name = config.models[model_type].experiment_name
+            pipeline, info = load_pipeline(model_type, exp_name, base_dir, return_info=True)
+            pipelines[model_type] = pipeline
+            model_info[model_type] = info
+            logger.info(f"  Loaded {model_type}: {exp_name} ({info['version']})")
+
+        # Load geek_rating if mode requires it
+        if geek_rating_mode in ["stacking", "direct"] and "geek_rating" in config.models:
+            exp_name = config.models["geek_rating"].experiment_name
+            try:
+                pipeline, info = load_pipeline("geek_rating", exp_name, base_dir, return_info=True)
+                pipelines["geek_rating"] = pipeline
+                model_info["geek_rating"] = info
+                logger.info(f"  Loaded geek_rating: {exp_name} ({info['version']})")
+            except FileNotFoundError as e:
+                logger.warning(f"  Could not load geek_rating: {e}")
     else:
         logger.error("  Must provide either experiment_names or config")
         return {"test_year": test_year, "error": "No experiments specified"}
@@ -499,6 +541,22 @@ def evaluate_year(
     # Save game-level predictions if requested
     if save_predictions:
         predictions_dir = Path(output_dir) if output_dir else Path("models/simulation")
+
+        # Determine run name - use provided or auto-increment
+        effective_run_name = run_name
+        if effective_run_name is None:
+            # Find next available version number
+            existing_versions = [
+                d.name for d in predictions_dir.iterdir()
+                if d.is_dir() and d.name.startswith("v") and d.name[1:].isdigit()
+            ] if predictions_dir.exists() else []
+            if existing_versions:
+                max_version = max(int(v[1:]) for v in existing_versions)
+                effective_run_name = f"v{max_version + 1}"
+            else:
+                effective_run_name = "v1"
+
+        predictions_dir = predictions_dir / effective_run_name
         predictions_dir.mkdir(parents=True, exist_ok=True)
 
         # Build predictions dataframe
@@ -561,6 +619,29 @@ def evaluate_year(
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
         logger.info(f"  Saved metrics to {metrics_path}")
+
+        # Save simulation run metadata
+        from datetime import datetime
+        run_metadata = {
+            "run_name": effective_run_name,
+            "test_year": test_year,
+            "timestamp": datetime.now().isoformat(),
+            "n_samples": n_samples,
+            "n_games": n_games,
+            "geek_rating_mode": geek_rating_mode,
+            "models": {
+                model_type: {
+                    "experiment": info["experiment_name"],
+                    "version": info["version"],
+                    "timestamp": info["metadata"].get("timestamp"),
+                }
+                for model_type, info in model_info.items()
+            },
+        }
+        run_metadata_path = predictions_dir / f"run_metadata_{test_year}.json"
+        with open(run_metadata_path, "w") as f:
+            json.dump(run_metadata, f, indent=2)
+        logger.info(f"  Saved run metadata to {run_metadata_path}")
 
         # Create scatter plots
         create_scatter_plots(predictions_df, test_year, predictions_dir)
@@ -668,6 +749,11 @@ Examples:
         choices=["bayesian", "stacking", "direct"],
         help="Geek rating mode (overrides config)",
     )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        help="Name for this simulation run (e.g., 'v1', 'baseline', 'no-predictions'). Creates output subdirectory.",
+    )
     # Explicit experiment names (used by evaluate.py)
     parser.add_argument(
         "--complexity-experiment",
@@ -733,6 +819,9 @@ Examples:
         if args.geek_rating_experiment:
             experiment_names["geek_rating"] = args.geek_rating_experiment
 
+    # Get run name
+    run_name = args.run_name
+
     logger.info("=" * 60)
     logger.info("SIMULATION EVALUATION")
     logger.info("=" * 60)
@@ -740,6 +829,8 @@ Examples:
     logger.info(f"Samples: {n_samples}")
     logger.info(f"Geek rating mode: {geek_rating_mode}")
     logger.info(f"Output dir: {output_dir}")
+    if run_name:
+        logger.info(f"Run name: {run_name}")
     if experiment_names:
         logger.info(f"Experiments: {experiment_names}")
     else:
@@ -757,6 +848,7 @@ Examples:
             output_dir=output_dir,
             geek_rating_mode=geek_rating_mode,
             experiment_names=experiment_names,
+            run_name=run_name,
         )
         all_results.append(result)
 
