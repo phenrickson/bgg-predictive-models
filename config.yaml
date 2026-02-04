@@ -75,6 +75,7 @@ models:
     experiment_name: ard-geek_rating-direct
     mode: direct  # or "stacking"
     min_ratings: 25  # only used for direct mode
+    include_predictions: false
 
 # Evaluate models over time
 evaluate:

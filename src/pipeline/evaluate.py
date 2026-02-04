@@ -191,6 +191,11 @@ def train_models_for_year(
     if geek_rating_mode in ["stacking", "direct"]:
         exp_name = f"eval-geek_rating-{test_year}"
         experiment_names["geek_rating"] = exp_name
+
+        # Get include_predictions from config (defaults to True)
+        geek_rating_config = config.models.get("geek_rating")
+        include_predictions = getattr(geek_rating_config, "include_predictions", True) if geek_rating_config else True
+
         run_command(
             [
                 "uv", "run", "-m", "src.models.outcomes.geek_rating",
@@ -202,6 +207,7 @@ def train_models_for_year(
                 "--mode", geek_rating_mode,
                 "--tune-start", str(tune_start),
                 "--tune-through", str(tune_through),
+                "--include-predictions", str(include_predictions).lower(),
             ],
             f"Training geek_rating: {exp_name}",
             dry_run=dry_run,

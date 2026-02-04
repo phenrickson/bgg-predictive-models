@@ -56,6 +56,13 @@ class GeekRatingModel(TrainableModel):
         "predicted_users_rated_log",  # Log-transformed for comparable scale
     ]
 
+    # Optional prediction features (controlled by include_predictions flag)
+    # predicted_complexity is always included as it's part of the model chain
+    OPTIONAL_PREDICTION_FEATURES = [
+        "predicted_rating",
+        "predicted_users_rated_log",
+    ]
+
     def __init__(
         self,
         training_config: TrainingConfig = None,
@@ -65,6 +72,7 @@ class GeekRatingModel(TrainableModel):
         prior_weight: float = 2000,
         hurdle_threshold: Optional[float] = None,
         min_ratings: int = 25,
+        include_predictions: bool = True,
         **kwargs,
     ):
         """Initialize GeekRatingModel.
@@ -80,6 +88,7 @@ class GeekRatingModel(TrainableModel):
             prior_weight: Weight given to prior rating.
             hurdle_threshold: Threshold for hurdle model classification.
             min_ratings: Minimum ratings for direct mode training data (default 25).
+            include_predictions: Whether to include sub-model predictions as features (direct mode only).
             **kwargs: Additional arguments passed to TrainableModel.
         """
         super().__init__(training_config=training_config, **kwargs)
@@ -89,6 +98,7 @@ class GeekRatingModel(TrainableModel):
         self.prior_weight = prior_weight
         self.hurdle_threshold = hurdle_threshold
         self.min_ratings = min_ratings
+        self.include_predictions = include_predictions
         self._sub_model_experiments: Dict[str, str] = {}
         self._direct_feature_columns: List[str] = []  # Store feature columns for direct mode
 
@@ -423,10 +433,15 @@ class GeekRatingModel(TrainableModel):
         # Build combined feature set
         X = df_pandas[feature_cols].copy()
 
-        # Add sub-model predictions
-        for col in self.PREDICTION_FEATURES:
-            if col in predictions_df.columns:
-                X[col] = predictions_df[col].values
+        # Always add predicted_complexity (part of model chain)
+        if "predicted_complexity" in predictions_df.columns:
+            X["predicted_complexity"] = predictions_df["predicted_complexity"].values
+
+        # Optionally add rating/users_rated predictions
+        if self.include_predictions:
+            for col in self.OPTIONAL_PREDICTION_FEATURES:
+                if col in predictions_df.columns:
+                    X[col] = predictions_df[col].values
 
         # Store feature columns for prediction time
         self._direct_feature_columns = list(X.columns)
@@ -477,7 +492,15 @@ class GeekRatingModel(TrainableModel):
         # Build pipeline with BGG preprocessor (handles all feature engineering)
         # Use tree preprocessing for tree-based models, linear for others
         preprocessor_type = "tree" if algorithm in ["catboost", "lightgbm"] else "linear"
-        preprocessor = create_bgg_preprocessor(model_type=preprocessor_type)
+        # Always preserve year_published and predicted_complexity
+        preserve_cols = ["year_published", "predicted_complexity"]
+        # Optionally preserve rating/users_rated predictions
+        if self.include_predictions:
+            preserve_cols = preserve_cols + self.OPTIONAL_PREDICTION_FEATURES
+        preprocessor = create_bgg_preprocessor(
+            model_type=preprocessor_type,
+            preserve_columns=preserve_cols,
+        )
 
         pipeline = Pipeline([
             ("preprocessor", preprocessor),
@@ -704,6 +727,7 @@ class GeekRatingModel(TrainableModel):
             "prior_weight": self.prior_weight,
             "hurdle_threshold": self.hurdle_threshold,
             "min_ratings": self.min_ratings,
+            "include_predictions": self.include_predictions,
             "sub_model_experiments": self._sub_model_experiments,
             "direct_feature_columns": self._direct_feature_columns,
         }
@@ -739,6 +763,7 @@ class GeekRatingModel(TrainableModel):
             self.prior_weight = metadata.get("prior_weight", 2000)
             self.hurdle_threshold = metadata.get("hurdle_threshold")
             self.min_ratings = metadata.get("min_ratings", 25)
+            self.include_predictions = metadata.get("include_predictions", True)
             self._sub_model_experiments = metadata.get("sub_model_experiments", {})
             self._direct_feature_columns = metadata.get("direct_feature_columns", [])
 
@@ -881,6 +906,7 @@ def main():
     # Get mode from config (default to stacking)
     mode_default = getattr(geek_rating_config, "mode", None) or "stacking"
     min_ratings_default = getattr(geek_rating_config, "min_ratings", None) or 25
+    include_predictions_default = getattr(geek_rating_config, "include_predictions", True)
 
     parser = argparse.ArgumentParser(description="Train geek rating model")
     parser.add_argument("--hurdle", default=hurdle_default, help="Hurdle experiment name")
@@ -893,6 +919,9 @@ def main():
                        help="Training mode: stacking (tune set only) or direct (all features)")
     parser.add_argument("--min-ratings", type=int, default=min_ratings_default,
                        help="Minimum ratings for direct mode training (default: 25)")
+    parser.add_argument("--include-predictions", type=lambda x: x.lower() == 'true',
+                       default=include_predictions_default,
+                       help="Include sub-model predictions as features in direct mode (default: true)")
     parser.add_argument("--output-dir", default="./models/experiments", help="Base output directory")
     parser.add_argument("--tune-start", type=int, default=None,
                        help="Start year for tune data (overrides config)")
@@ -909,7 +938,11 @@ def main():
     }
 
     # === Train model based on mode ===
-    model = GeekRatingModel(mode=args.mode, min_ratings=args.min_ratings)
+    model = GeekRatingModel(
+        mode=args.mode,
+        min_ratings=args.min_ratings,
+        include_predictions=args.include_predictions,
+    )
 
     if args.mode == "stacking":
         model.train_stacking_model(
@@ -946,6 +979,7 @@ def main():
     # Add mode-specific metadata
     if args.mode == "direct":
         experiment_metadata["min_ratings"] = args.min_ratings
+        experiment_metadata["include_predictions"] = args.include_predictions
         experiment_metadata["feature_columns"] = model._direct_feature_columns
 
     experiment = tracker.create_experiment(

@@ -185,6 +185,7 @@ class ModelConfig:
     min_ratings: int = 0
     algorithm_params: Optional[Dict[str, Any]] = None
     mode: Optional[str] = None  # For geek_rating: "stacking" or "direct"
+    include_predictions: bool = True  # For geek_rating direct mode: include sub-model predictions as features
 
     def get_algorithm_params(self) -> Dict[str, Any]:
         """Get algorithm-specific parameters.
@@ -408,6 +409,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             min_ratings=model_config.get("min_ratings", 0),
             algorithm_params=model_config.get("algorithm_params"),
             mode=model_config.get("mode"),
+            include_predictions=model_config.get("include_predictions", True),
         )
 
     # Create scoring config if present
