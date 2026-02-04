@@ -54,19 +54,19 @@ models:
     experiment_name: logistic-hurdle
     use_embeddings: true
   complexity:
-    type: ard
-    experiment_name: ard-ridge-complexity
+    type: bayesian_ridge
+    experiment_name: bayesian-ridge-complexity
     use_sample_weights: false
     use_embeddings: true
   rating:
-    type: ard
-    experiment_name: ard-ridge-rating
+    type: bayesian_ridge
+    experiment_name: bayesian-ridge-rating
     use_sample_weights: false
     min_ratings: 5
     use_embeddings: true
   users_rated:
-    type: ard
-    experiment_name: ard-ridge-users_rated
+    type: bayesian_ridge
+    experiment_name: bayesian-ridge-users_rated
     use_sample_weights: false
     min_ratings: 0
     use_embeddings: true
