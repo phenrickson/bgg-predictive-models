@@ -894,6 +894,10 @@ def main():
     parser.add_argument("--min-ratings", type=int, default=min_ratings_default,
                        help="Minimum ratings for direct mode training (default: 25)")
     parser.add_argument("--output-dir", default="./models/experiments", help="Base output directory")
+    parser.add_argument("--tune-start", type=int, default=None,
+                       help="Start year for tune data (overrides config)")
+    parser.add_argument("--tune-through", type=int, default=None,
+                       help="End year for tune data (overrides config)")
 
     args = parser.parse_args()
 
@@ -911,11 +915,14 @@ def main():
         model.train_stacking_model(
             sub_model_experiments=sub_model_experiments,
             algorithm=args.algorithm,
+            tune_start=args.tune_start,
+            tune_through=args.tune_through,
         )
     elif args.mode == "direct":
         model.train_direct_model(
             sub_model_experiments=sub_model_experiments,
             algorithm=args.algorithm,
+            tune_through=args.tune_through,
         )
 
     # === Create experiment tracker ===

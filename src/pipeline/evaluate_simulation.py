@@ -348,17 +348,21 @@ def evaluate_year(
     save_predictions: bool = False,
     output_dir: Optional[str] = None,
     geek_rating_mode: str = "bayesian",
+    experiment_names: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Evaluate simulation vs point prediction for a single test year.
 
     Args:
         test_year: The test year to evaluate.
-        config: Loaded Config object. If provided, loads models from config.
+        config: Loaded Config object. If provided and experiment_names is None,
+            loads models from config experiment names.
         base_dir: Base directory for experiments.
         n_samples: Number of posterior samples.
         save_predictions: Whether to save game-level predictions.
         output_dir: Directory to save predictions (defaults to base_dir/simulation).
         geek_rating_mode: How to compute geek rating: "bayesian", "stacking", or "direct".
+        experiment_names: Optional dict mapping model type to experiment name.
+            If provided, loads these experiments directly.
 
     Returns:
         Dictionary of evaluation results.
@@ -368,18 +372,16 @@ def evaluate_year(
     logger.info(f"geek_rating_mode: {geek_rating_mode}")
     logger.info(f"{'='*60}")
 
-    # Load trained models - config-driven or legacy mode
-    if config is not None:
-        try:
-            pipelines = load_pipelines_from_config(config, base_dir)
-        except (FileNotFoundError, ValueError) as e:
-            logger.error(f"  Could not load pipelines from config: {e}")
-            return {"test_year": test_year, "error": str(e)}
-    else:
-        # Legacy mode: load eval-{model}-{year} experiments
-        pipelines = {}
+    # Load trained models
+    pipelines = {}
+
+    if experiment_names is not None:
+        # Load explicitly named experiments
         for model_type in ["complexity", "rating", "users_rated"]:
-            exp_name = f"eval-{model_type}-{test_year}"
+            if model_type not in experiment_names:
+                logger.error(f"  Missing {model_type} in experiment_names")
+                return {"test_year": test_year, "error": f"Missing {model_type}"}
+            exp_name = experiment_names[model_type]
             try:
                 pipeline = load_pipeline(model_type, exp_name, base_dir)
                 pipelines[model_type] = pipeline
@@ -387,6 +389,27 @@ def evaluate_year(
             except FileNotFoundError as e:
                 logger.error(f"  Could not load {model_type}: {e}")
                 return {"test_year": test_year, "error": str(e)}
+
+        # Load geek_rating if provided
+        if "geek_rating" in experiment_names:
+            exp_name = experiment_names["geek_rating"]
+            try:
+                pipeline = load_pipeline("geek_rating", exp_name, base_dir)
+                pipelines["geek_rating"] = pipeline
+                logger.info(f"  Loaded geek_rating: {exp_name}")
+            except FileNotFoundError as e:
+                logger.warning(f"  Could not load geek_rating: {e}")
+
+    elif config is not None:
+        # Load from config experiment names
+        try:
+            pipelines = load_pipelines_from_config(config, base_dir)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error(f"  Could not load pipelines from config: {e}")
+            return {"test_year": test_year, "error": str(e)}
+    else:
+        logger.error("  Must provide either experiment_names or config")
+        return {"test_year": test_year, "error": "No experiments specified"}
 
     # Check if models support Bayesian simulation
     for model_type, pipeline in pipelines.items():
@@ -599,7 +622,7 @@ Examples:
   uv run python evaluate_simulation.py --start-year 2023 --end-year 2024
   uv run python evaluate_simulation.py --n-samples 1000
   uv run python evaluate_simulation.py --geek-rating-mode direct
-  uv run python evaluate_simulation.py --legacy  # use eval-{model}-{year} experiments
+  uv run python evaluate_simulation.py --complexity-experiment eval-complexity-2022 --rating-experiment eval-rating-2022 --users-rated-experiment eval-users_rated-2022
         """,
     )
 
@@ -645,10 +668,26 @@ Examples:
         choices=["bayesian", "stacking", "direct"],
         help="Geek rating mode (overrides config)",
     )
+    # Explicit experiment names (used by evaluate.py)
     parser.add_argument(
-        "--legacy",
-        action="store_true",
-        help="Use legacy mode: load eval-{model}-{year} experiments instead of config",
+        "--complexity-experiment",
+        type=str,
+        help="Complexity experiment name to load",
+    )
+    parser.add_argument(
+        "--rating-experiment",
+        type=str,
+        help="Rating experiment name to load",
+    )
+    parser.add_argument(
+        "--users-rated-experiment",
+        type=str,
+        help="Users rated experiment name to load",
+    )
+    parser.add_argument(
+        "--geek-rating-experiment",
+        type=str,
+        help="Geek rating experiment name to load",
     )
 
     args = parser.parse_args()
@@ -683,6 +722,17 @@ Examples:
     else:
         years = list(range(config.years.eval.start, config.years.eval.end + 1))
 
+    # Build experiment_names if explicit experiments provided
+    experiment_names = None
+    if args.complexity_experiment and args.rating_experiment and args.users_rated_experiment:
+        experiment_names = {
+            "complexity": args.complexity_experiment,
+            "rating": args.rating_experiment,
+            "users_rated": args.users_rated_experiment,
+        }
+        if args.geek_rating_experiment:
+            experiment_names["geek_rating"] = args.geek_rating_experiment
+
     logger.info("=" * 60)
     logger.info("SIMULATION EVALUATION")
     logger.info("=" * 60)
@@ -690,19 +740,23 @@ Examples:
     logger.info(f"Samples: {n_samples}")
     logger.info(f"Geek rating mode: {geek_rating_mode}")
     logger.info(f"Output dir: {output_dir}")
-    logger.info(f"Config-driven: {not args.legacy}")
+    if experiment_names:
+        logger.info(f"Experiments: {experiment_names}")
+    else:
+        logger.info("Using experiments from config")
 
     # Evaluate each year
     all_results = []
     for year in years:
         result = evaluate_year(
             test_year=year,
-            config=None if args.legacy else config,
+            config=config if experiment_names is None else None,
             base_dir="./models/experiments",
             n_samples=n_samples,
             save_predictions=save_predictions,
             output_dir=output_dir,
             geek_rating_mode=geek_rating_mode,
+            experiment_names=experiment_names,
         )
         all_results.append(result)
 

@@ -85,7 +85,7 @@ LIGHTGBM_LINEAR ?= lightgbm_linear
 models: hurdle complexity rating users_rated geek_rating
 
 # train individual models
-hurdle: train_hurdle score_hurdle
+hurdle: train_hurdle
 complexity: train_complexity score_complexity
 rating: train_rating
 users_rated: train_users_rated
