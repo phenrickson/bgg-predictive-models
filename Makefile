@@ -125,6 +125,10 @@ train_users_rated:
 geek_rating:
 	uv run -m src.models.outcomes.geek_rating
 
+## finalize
+finalize:
+	uv run -m src.pipeline.finalize
+
 # evaluate models over time periods
 .PHONY: evaluate
 evalute: 

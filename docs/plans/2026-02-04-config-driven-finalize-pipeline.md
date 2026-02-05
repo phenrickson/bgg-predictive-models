@@ -1,3 +1,25 @@
+# Config-Driven Finalize Pipeline
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Replace `src/pipeline/finalize.py` with a config-driven pipeline that reads model definitions from `config.yaml` and finalizes all models in dependency order, including intermediate complexity scoring and geek_rating training.
+
+**Architecture:** The pipeline shells out to existing entry points (`src.pipeline.finalize` for individual models, `src.pipeline.score` for complexity scoring, `src.models.outcomes.geek_rating` for geek_rating) via subprocess, following the same pattern as `src/pipeline/evaluate.py`. It reads experiment names and model configs from `config.yaml` and processes models in a fixed dependency order: hurdle → complexity → score complexity → rating → users_rated → geek_rating.
+
+**Tech Stack:** Python, argparse, subprocess, existing `src.utils.config.load_config()`
+
+---
+
+### Task 1: Replace `src/pipeline/finalize.py` with config-driven pipeline
+
+**Files:**
+- Modify: `src/pipeline/finalize.py`
+
+**Step 1: Write the new pipeline script**
+
+Replace the contents of `src/pipeline/finalize.py` with:
+
+```python
 #!/usr/bin/env python3
 """
 Finalize models for production.
@@ -28,36 +50,9 @@ from typing import List, Optional
 
 from src.utils.config import load_config
 from src.utils.logging import setup_logging
-from src.models.outcomes.train import finalize_model
-from src.models.experiments import ExperimentTracker
 
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_experiment_version(model_type: str, experiment_name: str) -> Optional[int]:
-    """Resolve the latest version number for an experiment on disk.
-
-    Args:
-        model_type: Model type (hurdle, complexity, etc.).
-        experiment_name: Experiment name.
-
-    Returns:
-        Latest version number, or None if experiment not found.
-    """
-    try:
-        tracker = ExperimentTracker(model_type)
-        experiment_dir = tracker.model_dir / experiment_name
-        if not experiment_dir.exists():
-            return None
-        versions = [
-            int(v.name[1:])
-            for v in experiment_dir.iterdir()
-            if v.is_dir() and v.name.startswith("v") and v.name[1:].isdigit()
-        ]
-        return max(versions) if versions else None
-    except Exception:
-        return None
 
 
 def run_command(cmd: List[str], description: str, dry_run: bool = False) -> bool:
@@ -94,7 +89,9 @@ def finalize_single_model(
     dry_run: bool = False,
     complexity_predictions_path: Optional[str] = None,
 ) -> bool:
-    """Finalize a single model.
+    """Finalize a single model by shelling out to src.pipeline.finalize single-model CLI.
+
+    Note: This calls src.models.outcomes.train main_finalize under the hood.
 
     Args:
         model_type: Model type (hurdle, complexity, rating, users_rated).
@@ -108,34 +105,21 @@ def finalize_single_model(
     """
     model_config = config.models.get(model_type)
     use_embeddings = getattr(model_config, "use_embeddings", False)
-    recent_year_threshold = getattr(config.years, "recent_year_threshold", 2)
 
-    if dry_run:
-        logger.info(f"  [DRY RUN] Finalize {model_type}: {experiment_name}")
-        if use_embeddings:
-            logger.info(f"    use_embeddings: True")
-        if complexity_predictions_path and model_type in ("rating", "users_rated"):
-            logger.info(f"    complexity_predictions: {complexity_predictions_path}")
-        return True
+    cmd = [
+        "uv", "run", "-m", "src.models.outcomes.train",
+        "finalize",
+        "--model", model_type,
+        "--experiment", experiment_name,
+    ]
 
-    logger.info(f"  Finalizing {model_type}: {experiment_name}")
+    if use_embeddings:
+        cmd.append("--use-embeddings")
 
-    try:
-        finalize_model(
-            model_type=model_type,
-            experiment_name=experiment_name,
-            use_embeddings=use_embeddings if use_embeddings else None,
-            complexity_predictions_path=(
-                complexity_predictions_path
-                if model_type in ("rating", "users_rated")
-                else None
-            ),
-            recent_year_threshold=recent_year_threshold,
-        )
-        return True
-    except Exception as e:
-        logger.error(f"  Failed to finalize {model_type}: {e}")
-        return False
+    if complexity_predictions_path and model_type in ("rating", "users_rated"):
+        cmd.extend(["--complexity-predictions", complexity_predictions_path])
+
+    return run_command(cmd, f"Finalizing {model_type}: {experiment_name}", dry_run=dry_run)
 
 
 def score_complexity(
@@ -214,6 +198,9 @@ def finalize_all(config, dry_run: bool = False, single_model: Optional[str] = No
             experiment_names[model_type] = getattr(model_config, "experiment_name")
 
     # Define dependency order
+    # hurdle and complexity have no dependencies
+    # rating and users_rated depend on complexity predictions
+    # geek_rating depends on all four
     ordered_steps = [
         "hurdle",
         "complexity",
@@ -244,17 +231,11 @@ def finalize_all(config, dry_run: bool = False, single_model: Optional[str] = No
 
     for model_type in ("hurdle", "complexity", "rating", "users_rated"):
         if model_type in experiment_names:
-            exp_name = experiment_names[model_type]
-            version = resolve_experiment_version(model_type, exp_name)
-            version_str = f"v{version}" if version else "not found"
-            logger.info(f"  {model_type}: {exp_name} ({version_str})")
+            logger.info(f"  {model_type}: {experiment_names[model_type]}")
 
     geek_config = config.models.get("geek_rating")
     if geek_config:
-        geek_exp = getattr(geek_config, "experiment_name", "N/A")
-        version = resolve_experiment_version("geek_rating", geek_exp)
-        version_str = f"v{version}" if version else "not found"
-        logger.info(f"  geek_rating: {geek_exp} ({version_str})")
+        logger.info(f"  geek_rating: {getattr(geek_config, 'experiment_name', 'N/A')}")
 
     if dry_run:
         logger.info("\n[DRY RUN MODE - No commands will be executed]")
@@ -303,9 +284,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  uv run -m src.pipeline.finalize                     # finalize all from config
-  uv run -m src.pipeline.finalize --model complexity   # just one
-  uv run -m src.pipeline.finalize --dry-run            # show what would run
+  uv run -m src.pipeline.finalize                    # finalize all from config
+  uv run -m src.pipeline.finalize --model complexity  # just one
+  uv run -m src.pipeline.finalize --dry-run           # show what would run
         """,
     )
 
@@ -335,3 +316,44 @@ Examples:
 
 if __name__ == "__main__":
     main()
+```
+
+**Key design decisions:**
+- Uses `run_command` helper from `evaluate.py` pattern (subprocess, streams output)
+- Reads all experiment names from `config.yaml` models section
+- Fixed dependency order: hurdle → complexity → score complexity → rating → users_rated → geek_rating
+- `--model X` automatically includes prerequisite steps (e.g., `--model rating` scores complexity first)
+- Stops on first failure
+- `--dry-run` logs commands without executing
+
+**Step 2: Verify dry-run works**
+
+Run: `uv run -m src.pipeline.finalize --dry-run`
+
+Expected: Logs showing the 6 steps with `[DRY RUN]` prefix and the exact subprocess commands that would be executed.
+
+**Step 3: Verify single-model dry-run works**
+
+Run: `uv run -m src.pipeline.finalize --model rating --dry-run`
+
+Expected: Logs showing only `score_complexity` and `rating` steps (since rating depends on complexity predictions).
+
+**Step 4: Commit**
+
+```bash
+git add src/pipeline/finalize.py
+git commit -m "feat: replace finalize.py with config-driven pipeline
+
+Reads model experiment names from config.yaml and finalizes all
+models in dependency order: hurdle, complexity, score complexity,
+rating, users_rated, geek_rating. Supports --dry-run and --model
+for single-model finalization."
+```
+
+---
+
+### Notes
+
+- The `finalize_single_model` function shells out to `src.models.outcomes.train finalize` which is the existing `main_finalize` entry point. Check that the subprocess argument format matches what `parse_finalize_arguments()` expects — it uses `--model` and `--experiment` as required args.
+- The `geek_rating` step calls `src.models.outcomes.geek_rating` directly (not finalize), since geek_rating has its own training path that takes the four upstream experiment names as inputs.
+- The complexity scoring step uses `src.pipeline.score --all-years` to generate predictions for all games, same as `evaluate.py` does.
