@@ -19,6 +19,10 @@ on:
         description: 'Cloud storage path for predictions (optional)'
         required: false
         default: ''
+      n_samples:
+        description: 'Number of posterior samples for simulation'
+        required: false
+        default: '1000'
       use_change_detection:
         description: 'Only score games with changed features'
         required: false
@@ -105,7 +109,7 @@ jobs:
         ENVIRONMENT=${{ needs.setup.outputs.env_tag }}
         EOF
 
-    - name: Trigger Predictions using score.py
+    - name: Trigger Simulations using score.py
       run: |
         USE_CHANGE_DETECTION="${{ github.event.inputs.use_change_detection || 'true' }}"
 
@@ -118,15 +122,17 @@ jobs:
           --service-url "${{ steps.get-url.outputs.service_url }}" \
           --start-year ${{ github.event.inputs.start_year || 2024 }} \
           --end-year ${{ github.event.inputs.end_year || 2029 }} \
+          --n-samples ${{ github.event.inputs.n_samples || 1000 }} \
           --upload-to-bigquery \
           $CHANGE_DETECTION_FLAG \
           ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
 
-    - name: Log Prediction Metadata
+    - name: Log Simulation Metadata
       run: |
-        echo "Prediction Parameters:"
+        echo "Simulation Parameters:"
         echo "Environment: ${{ needs.setup.outputs.env_tag }}"
         echo "Start Year: ${{ github.event.inputs.start_year || 2024 }}"
         echo "End Year: ${{ github.event.inputs.end_year || 2029 }}"
+        echo "N Samples: ${{ github.event.inputs.n_samples || 1000 }}"
         echo "Output Path: ${{ github.event.inputs.output_path || 'Using environment default' }}"
         echo "Using model names from config.yaml"

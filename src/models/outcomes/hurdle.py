@@ -203,6 +203,9 @@ class HurdleModel(TrainableModel):
     ) -> Dict[str, float]:
         """Find optimal probability threshold for classification.
 
+        Delegates to the module-level find_optimal_threshold function
+        and stores the result in self.optimal_threshold.
+
         Args:
             y_true: True binary labels.
             y_pred_proba: Predicted probabilities for positive class.
@@ -211,39 +214,9 @@ class HurdleModel(TrainableModel):
         Returns:
             Dictionary with optimal threshold and scores.
         """
-        scoring_functions = {
-            "f1": f1_score,
-            "f2": lambda y_true, y_pred: fbeta_score(y_true, y_pred, beta=2.0),
-            "precision": precision_score,
-            "recall": recall_score,
-            "accuracy": accuracy_score,
-        }
-
-        if metric not in scoring_functions:
-            raise ValueError(f"Metric must be one of {list(scoring_functions.keys())}")
-
-        thresholds = np.linspace(0, 1, 101)
-        best_threshold = 0.5
-        best_score = 0
-        best_f1 = 0
-
-        for threshold in thresholds:
-            y_pred = (y_pred_proba >= threshold).astype(int)
-            score = scoring_functions[metric](y_true, y_pred)
-            f1 = f1_score(y_true, y_pred)
-
-            if score > best_score:
-                best_score = score
-                best_threshold = threshold
-                best_f1 = f1
-
-        self.optimal_threshold = best_threshold
-
-        return {
-            "threshold": best_threshold,
-            f"{metric}_score": best_score,
-            "f1_score": best_f1,
-        }
+        result = find_optimal_threshold(y_true, y_pred_proba, metric)
+        self.optimal_threshold = result["threshold"]
+        return result
 
     def compute_additional_metrics(
         self,

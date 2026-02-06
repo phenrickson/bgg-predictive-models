@@ -179,6 +179,7 @@ scoring:
     complexity: complexity-v2026
     rating: rating-v2026
     users_rated: users_rated-v2026
+    geek_rating: geek_rating-v2026
     embeddings: embeddings-v2026
   parameters:
     prior_rating: 5.5

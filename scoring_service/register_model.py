@@ -125,7 +125,7 @@ def main():
     parser.add_argument(
         "--model-type",
         required=True,
-        choices=["hurdle", "rating", "complexity", "users_rated"],
+        choices=["hurdle", "rating", "complexity", "users_rated", "geek_rating"],
         help="Type of model to register",
     )
 

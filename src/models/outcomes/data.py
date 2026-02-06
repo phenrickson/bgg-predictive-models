@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
-import numpy as np
 import pandas as pd
 import polars as pl
 
@@ -218,98 +217,17 @@ def _load_base_features(
 
     where_clause = " AND ".join(where_clauses) if where_clauses else "TRUE"
 
+    loader = BGGDataLoader(config.get_data_warehouse_config())
+
     if use_embeddings:
-        return _load_features_with_embeddings(config, where_clause)
+        logger.info(f"Loading features with embeddings from BigQuery: {where_clause}")
+        return loader.load_data_with_embeddings(where_clause=where_clause if where_clause != "TRUE" else "")
     else:
-        # Use the standard loader for features only
-        loader = BGGDataLoader(config.get_bigquery_config())
         # Remove table alias prefix for simple query
         simple_where = where_clause.replace("f.", "")
         logger.info(f"Loading data from BigQuery with filter: {simple_where}")
-        return loader.load_data(where_clause=simple_where if simple_where != "TRUE" else None)
+        return loader.load_data(where_clause=simple_where if simple_where != "TRUE" else "")
 
-
-def _load_features_with_embeddings(config, where_clause: str) -> pl.DataFrame:
-    """Load features and embeddings in a single BigQuery query.
-
-    Args:
-        config: Application config.
-        where_clause: WHERE clause with 'f.' prefix for features table.
-
-    Returns:
-        Polars DataFrame with features and expanded embedding columns.
-    """
-    client = config.get_bigquery_config().get_client()
-    dw_config = config.get_bigquery_config()
-
-    # Build query that joins features with embeddings
-    query = f"""
-    SELECT
-        f.*,
-        e.embedding
-    FROM `{dw_config.project_id}.{dw_config.dataset}.{dw_config.table}` f
-    INNER JOIN `bgg-data-warehouse.predictions.bgg_description_embeddings` e
-        ON f.game_id = e.game_id
-    WHERE {where_clause}
-        AND f.year_published IS NOT NULL
-    """
-
-    logger.info("Loading features with embeddings from BigQuery (single query)")
-    logger.info(f"Filter: {where_clause}")
-
-    query_job = client.query(query)
-    query_job.result()
-    pandas_df = query_job.to_dataframe()
-
-    if len(pandas_df) == 0:
-        raise ValueError("No data returned from BigQuery query")
-
-    logger.info(f"Retrieved {len(pandas_df)} rows from BigQuery")
-
-    # Expand embedding array into individual columns
-    df_expanded = _expand_embedding_column(pandas_df)
-
-    return pl.from_pandas(df_expanded)
-
-
-def _expand_embedding_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Expand embedding array column into individual columns.
-
-    Args:
-        df: DataFrame with an 'embedding' column containing arrays.
-
-    Returns:
-        DataFrame with embedding expanded to emb_0, emb_1, ..., emb_N columns.
-    """
-    if "embedding" not in df.columns:
-        return df
-
-    # Get embedding dimension from first non-null embedding
-    sample_embedding = None
-    for emb in df["embedding"]:
-        if emb is not None and len(emb) > 0:
-            sample_embedding = emb
-            break
-
-    if sample_embedding is None:
-        raise ValueError("No valid embeddings found in data")
-
-    embedding_dim = len(sample_embedding)
-    logger.info(f"Embedding dimension: {embedding_dim}")
-
-    # Create column names
-    emb_columns = [f"emb_{i}" for i in range(embedding_dim)]
-
-    # Expand embeddings into columns
-    embeddings_matrix = np.vstack(df["embedding"].values)
-    embeddings_df = pd.DataFrame(embeddings_matrix, columns=emb_columns, index=df.index)
-
-    # Drop the original embedding column and concatenate expanded columns
-    df = pd.concat([df.drop(columns=["embedding"]), embeddings_df], axis=1)
-
-    logger.info(f"Loaded {len(df)} rows with {embedding_dim} embedding dimensions")
-
-    return df
 
 
 def _join_complexity_predictions(

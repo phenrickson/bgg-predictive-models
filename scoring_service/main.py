@@ -26,7 +26,7 @@ from registered_model import RegisteredModel  # noqa: E402
 from src.data.loader import BGGDataLoader  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
-from src.models.geek_rating import calculate_geek_rating  # noqa: E402
+from src.models.outcomes.simulation import simulate_batch, precompute_cholesky  # noqa: E402
 from auth import GCPAuthenticator, AuthenticationError  # noqa: E402
 
 load_dotenv()
@@ -81,14 +81,14 @@ class PredictGamesRequest(BaseModel):
     complexity_model_name: str
     rating_model_name: str
     users_rated_model_name: str
+    geek_rating_model_name: str
     hurdle_model_version: Optional[int] = None
     complexity_model_version: Optional[int] = None
     rating_model_version: Optional[int] = None
     users_rated_model_version: Optional[int] = None
+    geek_rating_model_version: Optional[int] = None
     start_year: Optional[int] = 2024
     end_year: Optional[int] = 2029
-    prior_rating: float = 5.5
-    prior_weight: float = 2000
     output_path: Optional[str] = "data/predictions/game_predictions.parquet"
     upload_to_data_warehouse: bool = True
     game_ids: Optional[List[int]] = None
@@ -106,6 +106,40 @@ class PredictGamesResponse(BaseModel):
     predictions: Optional[List[Dict[str, Any]]] = None
     games_scored: Optional[int] = None      # NEW: Number of games actually scored
     skipped_reason: Optional[str] = None    # NEW: Why scoring was skipped (e.g., "no_changes")
+
+
+class SimulateGamesRequest(BaseModel):
+    hurdle_model_name: str
+    complexity_model_name: str
+    rating_model_name: str
+    users_rated_model_name: str
+    geek_rating_model_name: str
+    hurdle_model_version: Optional[int] = None
+    complexity_model_version: Optional[int] = None
+    rating_model_version: Optional[int] = None
+    users_rated_model_version: Optional[int] = None
+    geek_rating_model_version: Optional[int] = None
+    game_ids: Optional[List[int]] = None
+    start_year: Optional[int] = 2024
+    end_year: Optional[int] = 2029
+    n_samples: int = 500
+    random_state: int = 42
+    output_path: Optional[str] = "data/predictions/game_simulations.parquet"
+    upload_to_data_warehouse: bool = True
+    use_change_detection: bool = False
+    max_games: Optional[int] = 50000
+
+
+class SimulateGamesResponse(BaseModel):
+    job_id: str
+    model_details: Dict[str, Any]
+    n_samples: int
+    games_simulated: int
+    results: Optional[List[Dict[str, Any]]] = None
+    output_location: Optional[str] = None
+    data_warehouse_job_id: Optional[str] = None
+    data_warehouse_table: Optional[str] = None
+    skipped_reason: Optional[str] = None
 
 
 class PredictComplexityRequest(BaseModel):
@@ -169,19 +203,10 @@ class PredictUsersRatedResponse(BaseModel):
     predictions: Optional[List[Dict[str, Any]]] = None
 
 
-def construct_year_filter(
-    start_year: Optional[int] = None, end_year: Optional[int] = None
-) -> str:
-    """
-    Construct SQL WHERE clause for year filtering.
-    """
-    where_clauses = []
-    if start_year is not None:
-        where_clauses.append(f"year_published >= {start_year}")
-    if end_year is not None:
-        where_clauses.append(f"year_published < {end_year}")
 
-    return " AND ".join(where_clauses) if where_clauses else ""
+def get_registered_model(model_type: str) -> RegisteredModel:
+    """Create a RegisteredModel for the given model type."""
+    return RegisteredModel(model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID)
 
 
 def load_game_data(
@@ -190,25 +215,30 @@ def load_game_data(
     game_ids: Optional[List[int]] = None
 ) -> pd.DataFrame:
     """
-    Load game data from data warehouse with optional year filtering or game_id filtering.
+    Load game data with embeddings from data warehouse via BGGDataLoader.
+
+    Joins games_features with description embeddings so all models
+    get the emb_0..emb_N columns they were trained with.
 
     If game_ids is provided, it takes precedence over year filtering.
     """
     config = load_config()
-    # Use data warehouse config for reading game data
-    data_warehouse_config = config.get_data_warehouse_config()
-    loader = BGGDataLoader(data_warehouse_config)
+    dw_config = config.get_data_warehouse_config()
+    loader = BGGDataLoader(dw_config)
 
+    # Build WHERE clause with f. prefix for the joined query
     if game_ids:
-        # Filter by specific game IDs
         game_ids_str = ",".join(str(gid) for gid in game_ids)
-        where_clause = f"game_id IN ({game_ids_str})"
+        where_clause = f"f.game_id IN ({game_ids_str})"
     else:
-        # Filter by year range
-        where_clause = construct_year_filter(start_year, end_year)
+        where_parts = []
+        if start_year is not None:
+            where_parts.append(f"f.year_published >= {start_year}")
+        if end_year is not None:
+            where_parts.append(f"f.year_published < {end_year}")
+        where_clause = " AND ".join(where_parts) if where_parts else ""
 
-    df = loader.load_data(where_clause=where_clause, preprocessor=None)
-
+    df = loader.load_data_with_embeddings(where_clause=where_clause)
     return df.to_pandas()
 
 
@@ -242,60 +272,19 @@ def load_games_for_main_scoring(
         DataFrame with game features for scoring
     """
     config = load_config()
-    data_warehouse_config = config.get_data_warehouse_config()
-    loader = BGGDataLoader(data_warehouse_config)
+    dw_config = config.get_data_warehouse_config()
+    loader = BGGDataLoader(dw_config)
 
-    ml_project = config.ml_project_id
-    dw_project = config.data_warehouse.project_id
-
-    # Build version mismatch conditions
-    version_checks = []
-    if hurdle_model_version is not None:
-        version_checks.append(f"lp.hurdle_model_version != {hurdle_model_version}")
-    if complexity_model_version is not None:
-        version_checks.append(f"lp.complexity_model_version != {complexity_model_version}")
-    if rating_model_version is not None:
-        version_checks.append(f"lp.rating_model_version != {rating_model_version}")
-    if users_rated_model_version is not None:
-        version_checks.append(f"lp.users_rated_model_version != {users_rated_model_version}")
-
-    version_condition = ""
-    if version_checks:
-        version_condition = "OR " + "\n          OR ".join(version_checks)
-
-    where_clause = f"""
-    game_id IN (
-      SELECT gf.game_id
-      FROM `{dw_project}.analytics.games_features` gf
-      LEFT JOIN `{dw_project}.staging.game_features_hash` fh
-        ON gf.game_id = fh.game_id
-      LEFT JOIN (
-        SELECT
-          game_id,
-          score_ts,
-          hurdle_model_version,
-          complexity_model_version,
-          rating_model_version,
-          users_rated_model_version,
-          ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
-        FROM `{ml_project}.raw.ml_predictions_landing`
-      ) lp ON gf.game_id = lp.game_id AND lp.rn = 1
-      WHERE
-        gf.year_published IS NOT NULL
-        AND gf.year_published >= {start_year}
-        AND gf.year_published < {end_year}
-        AND (
-          lp.game_id IS NULL
-          OR fh.last_updated > lp.score_ts
-          {version_condition}
-        )
-      LIMIT {max_games}
+    df = loader.load_changed_games_with_embeddings(
+        start_year=start_year,
+        end_year=end_year,
+        ml_project_id=config.ml_project_id,
+        max_games=max_games,
+        hurdle_model_version=hurdle_model_version,
+        complexity_model_version=complexity_model_version,
+        rating_model_version=rating_model_version,
+        users_rated_model_version=users_rated_model_version,
     )
-    """
-
-    logger.info(f"Loading games needing main predictions (years {start_year}-{end_year}, max {max_games})...")
-    df = loader.load_data(where_clause=where_clause, preprocessor=None)
-    logger.info(f"Found {len(df)} games needing main predictions")
     return df.to_pandas()
 
 
@@ -330,15 +319,16 @@ def predict_game_characteristics(
 
     # Predict rating and users rated for all games
     results["predicted_rating"] = rating_model.predict(features_with_complexity)
-    results["predicted_users_rated"] = users_rated_model.predict(
-        features_with_complexity
-    )
+    raw_log_users_rated = users_rated_model.predict(features_with_complexity)
 
-    # Ensure users is at least minimum threshold
+    # Transform from log scale to count scale
     results["predicted_users_rated"] = np.maximum(
-        np.round(np.expm1(results["predicted_users_rated"]) / 50) * 50,
+        np.round(np.expm1(raw_log_users_rated) / 50) * 50,
         25,
     )
+
+    # Keep log-scale version for geek_rating model
+    results["predicted_users_rated_log"] = np.log1p(results["predicted_users_rated"])
 
     return results
 
@@ -478,18 +468,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         job_id = str(uuid.uuid4())
 
         # Load models
-        registered_hurdle_model = RegisteredModel(
-            "hurdle", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
-        registered_complexity_model = RegisteredModel(
-            "complexity", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
-        registered_rating_model = RegisteredModel(
-            "rating", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
-        registered_users_rated_model = RegisteredModel(
-            "users_rated", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_hurdle_model = get_registered_model("hurdle")
+        registered_complexity_model = get_registered_model("complexity")
+        registered_rating_model = get_registered_model("rating")
+        registered_users_rated_model = get_registered_model("users_rated")
+        registered_geek_rating_model = get_registered_model("geek_rating")
 
         # Load model pipelines and registrations
         hurdle_pipeline, hurdle_registration = (
@@ -510,6 +493,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         users_rated_pipeline, users_rated_registration = (
             registered_users_rated_model.load_registered_model(
                 request.users_rated_model_name, request.users_rated_model_version
+            )
+        )
+        geek_rating_pipeline, geek_rating_registration = (
+            registered_geek_rating_model.load_registered_model(
+                request.geek_rating_model_name, request.geek_rating_model_version
             )
         )
 
@@ -542,12 +530,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                         "complexity": {"name": request.complexity_model_name},
                         "rating": {"name": request.rating_model_name},
                         "users_rated": {"name": request.users_rated_model_name},
+                        "geek_rating": {"name": request.geek_rating_model_name},
                     },
                     scoring_parameters={
                         "start_year": request.start_year,
                         "end_year": request.end_year,
-                        "prior_rating": request.prior_rating,
-                        "prior_weight": request.prior_weight,
                     },
                     games_scored=0,
                     skipped_reason="no_changes"
@@ -587,12 +574,18 @@ async def predict_games_endpoint(request: PredictGamesRequest):
         # Combine results
         results = pd.concat([results, characteristics], axis=1)
 
-        # Calculate predicted geek rating
-        results["predicted_geek_rating"] = calculate_geek_rating(
-            results,
-            prior_rating=request.prior_rating,
-            prior_weight=request.prior_weight,
+        # Predict geek rating using the direct model pipeline
+        # The direct model expects game features + sub-model prediction columns
+        geek_rating_features = df_pandas.copy()
+        geek_rating_features["predicted_complexity"] = characteristics["predicted_complexity"]
+        geek_rating_features["predicted_rating"] = characteristics["predicted_rating"]
+        geek_rating_features["predicted_users_rated_log"] = characteristics["predicted_users_rated_log"]
+        results["predicted_geek_rating"] = np.clip(
+            geek_rating_pipeline.predict(geek_rating_features), 1.0, 10.0
         )
+
+        # Drop predicted_users_rated_log from results (internal use only)
+        results.drop(columns=["predicted_users_rated_log"], inplace=True, errors="ignore")
 
         # Add model experiment identifiers and metadata
         results["hurdle_experiment"] = hurdle_registration["original_experiment"][
@@ -605,6 +598,9 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             "name"
         ]
         results["users_rated_experiment"] = users_rated_registration[
+            "original_experiment"
+        ]["name"]
+        results["geek_rating_experiment"] = geek_rating_registration[
             "original_experiment"
         ]["name"]
 
@@ -656,6 +652,9 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                         "users_rated": users_rated_registration["name"],
                         "users_rated_version": users_rated_registration["version"],
                         "users_rated_experiment": users_rated_registration["original_experiment"]["name"],
+                        "geek_rating": geek_rating_registration["name"],
+                        "geek_rating_version": geek_rating_registration["version"],
+                        "geek_rating_experiment": geek_rating_registration["original_experiment"]["name"],
                     }
 
                     # Prepare predictions DataFrame for data warehouse
@@ -714,6 +713,11 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 "version": users_rated_registration["version"],
                 "experiment": users_rated_registration["original_experiment"]["name"],
             },
+            "geek_rating_model": {
+                "name": geek_rating_registration["name"],
+                "version": geek_rating_registration["version"],
+                "experiment": geek_rating_registration["original_experiment"]["name"],
+            },
         }
 
         # Construct response
@@ -724,8 +728,6 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 "start_year": request.start_year,
                 "end_year": request.end_year,
                 "threshold": threshold,
-                "prior_rating": request.prior_rating,
-                "prior_weight": request.prior_weight,
             },
             output_location=output_path,
             data_warehouse_job_id=data_warehouse_job_id,
@@ -755,9 +757,7 @@ async def predict_complexity_endpoint(request: PredictComplexityRequest):
         job_id = str(uuid.uuid4())
 
         # Load registered complexity model
-        registered_complexity = RegisteredModel(
-            "complexity", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_complexity = get_registered_model("complexity")
         complexity_pipeline, complexity_registration = (
             registered_complexity.load_registered_model(
                 request.complexity_model_name,
@@ -860,9 +860,7 @@ async def predict_hurdle_endpoint(request: PredictHurdleRequest):
         job_id = str(uuid.uuid4())
 
         # Load registered hurdle model
-        registered_hurdle = RegisteredModel(
-            "hurdle", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_hurdle = get_registered_model("hurdle")
         hurdle_pipeline, hurdle_registration = (
             registered_hurdle.load_registered_model(
                 request.hurdle_model_name,
@@ -918,9 +916,7 @@ async def predict_rating_endpoint(request: PredictRatingRequest):
         job_id = str(uuid.uuid4())
 
         # Load registered rating model
-        registered_rating = RegisteredModel(
-            "rating", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_rating = get_registered_model("rating")
         rating_pipeline, rating_registration = (
             registered_rating.load_registered_model(
                 request.rating_model_name,
@@ -976,9 +972,7 @@ async def predict_users_rated_endpoint(request: PredictUsersRatedRequest):
         job_id = str(uuid.uuid4())
 
         # Load registered users_rated model
-        registered_users_rated = RegisteredModel(
-            "users_rated", BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_users_rated = get_registered_model("users_rated")
         users_rated_pipeline, users_rated_registration = (
             registered_users_rated.load_registered_model(
                 request.users_rated_model_name,
@@ -1031,18 +1025,233 @@ async def predict_users_rated_endpoint(request: PredictUsersRatedRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/simulate_games", response_model=SimulateGamesResponse)
+async def simulate_games_endpoint(request: SimulateGamesRequest):
+    """Simulate games with full uncertainty propagation through model chain.
+
+    Runs Bayesian posterior sampling through the dependency chain:
+    complexity -> rating/users_rated (conditional on complexity) -> geek_rating (direct model).
+    Also predicts hurdle probabilities. Returns per-game summary statistics with
+    credible intervals, and optionally uploads to BigQuery data warehouse.
+    """
+    try:
+        import uuid
+
+        job_id = str(uuid.uuid4())
+
+        # Load all model pipelines (including hurdle)
+        registered_hurdle = get_registered_model("hurdle")
+        registered_complexity = get_registered_model("complexity")
+        registered_rating = get_registered_model("rating")
+        registered_users_rated = get_registered_model("users_rated")
+        registered_geek_rating = get_registered_model("geek_rating")
+
+        hurdle_pipeline, hurdle_reg = registered_hurdle.load_registered_model(
+            request.hurdle_model_name, request.hurdle_model_version
+        )
+        complexity_pipeline, complexity_reg = registered_complexity.load_registered_model(
+            request.complexity_model_name, request.complexity_model_version
+        )
+        rating_pipeline, rating_reg = registered_rating.load_registered_model(
+            request.rating_model_name, request.rating_model_version
+        )
+        users_rated_pipeline, users_rated_reg = registered_users_rated.load_registered_model(
+            request.users_rated_model_name, request.users_rated_model_version
+        )
+        geek_rating_pipeline, geek_rating_reg = registered_geek_rating.load_registered_model(
+            request.geek_rating_model_name, request.geek_rating_model_version
+        )
+
+        # Load game data
+        if request.game_ids:
+            logger.info(f"Loading {len(request.game_ids)} specific games for simulation")
+            df_pandas = load_game_data(game_ids=request.game_ids)
+        elif request.use_change_detection:
+            logger.info(f"Loading changed games for years {request.start_year}-{request.end_year}")
+            df_pandas = load_games_for_main_scoring(
+                start_year=request.start_year,
+                end_year=request.end_year,
+                max_games=request.max_games,
+                hurdle_model_version=hurdle_reg["version"],
+                complexity_model_version=complexity_reg["version"],
+                rating_model_version=rating_reg["version"],
+                users_rated_model_version=users_rated_reg["version"],
+            )
+            if len(df_pandas) == 0:
+                return SimulateGamesResponse(
+                    job_id=job_id, model_details={}, n_samples=request.n_samples,
+                    games_simulated=0, skipped_reason="no_changes",
+                )
+        else:
+            logger.info(f"Loading games for years {request.start_year}-{request.end_year}")
+            df_pandas = load_game_data(request.start_year, request.end_year)
+
+        logger.info(f"Simulating {len(df_pandas)} games with {request.n_samples} samples")
+
+        # Predict hurdle probabilities
+        predicted_hurdle_prob = predict_hurdle_probabilities(hurdle_pipeline, df_pandas)
+
+        # Pre-compute Cholesky decompositions for speed
+        cholesky_cache = precompute_cholesky(
+            complexity_pipeline, rating_pipeline, users_rated_pipeline,
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Run batch simulation
+        sim_results = simulate_batch(
+            games=df_pandas,
+            complexity_pipeline=complexity_pipeline,
+            rating_pipeline=rating_pipeline,
+            users_rated_pipeline=users_rated_pipeline,
+            n_samples=request.n_samples,
+            random_state=request.random_state,
+            cholesky_cache=cholesky_cache,
+            geek_rating_mode="direct",
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Flatten simulation results into a DataFrame for upload/storage
+        flat_rows = []
+        for i, r in enumerate(sim_results):
+            flat_rows.append({
+                "game_id": r.game_id,
+                "name": r.game_name,
+                "year_published": df_pandas.iloc[i]["year_published"],
+                "predicted_hurdle_prob": float(predicted_hurdle_prob.iloc[i]),
+                "predicted_complexity": float(np.median(r.complexity_samples)),
+                "predicted_rating": float(np.median(r.rating_samples)),
+                "predicted_users_rated": float(np.median(r.users_rated_count_samples)),
+                "predicted_geek_rating": float(np.median(r.geek_rating_samples)),
+                "complexity_lower_90": float(r.interval(r.complexity_samples, 0.90)[0]),
+                "complexity_upper_90": float(r.interval(r.complexity_samples, 0.90)[1]),
+                "rating_lower_90": float(r.interval(r.rating_samples, 0.90)[0]),
+                "rating_upper_90": float(r.interval(r.rating_samples, 0.90)[1]),
+                "users_rated_lower_90": float(r.interval(r.users_rated_count_samples, 0.90)[0]),
+                "users_rated_upper_90": float(r.interval(r.users_rated_count_samples, 0.90)[1]),
+                "geek_rating_lower_90": float(r.interval(r.geek_rating_samples, 0.90)[0]),
+                "geek_rating_upper_90": float(r.interval(r.geek_rating_samples, 0.90)[1]),
+            })
+        flat_results = pd.DataFrame(flat_rows)
+
+        # Build model details
+        model_details = {
+            "hurdle": {
+                "name": hurdle_reg["name"],
+                "version": hurdle_reg["version"],
+                "experiment": hurdle_reg["original_experiment"]["name"],
+            },
+            "complexity": {
+                "name": complexity_reg["name"],
+                "version": complexity_reg["version"],
+                "experiment": complexity_reg["original_experiment"]["name"],
+            },
+            "rating": {
+                "name": rating_reg["name"],
+                "version": rating_reg["version"],
+                "experiment": rating_reg["original_experiment"]["name"],
+            },
+            "users_rated": {
+                "name": users_rated_reg["name"],
+                "version": users_rated_reg["version"],
+                "experiment": users_rated_reg["original_experiment"]["name"],
+            },
+            "geek_rating": {
+                "name": geek_rating_reg["name"],
+                "version": geek_rating_reg["version"],
+                "experiment": geek_rating_reg["original_experiment"]["name"],
+            },
+        }
+
+        # When game_ids provided, return full simulation summaries in response
+        if request.game_ids:
+            results_list = [r.summary() for r in sim_results]
+            output_path = None
+            data_warehouse_job_id = None
+            data_warehouse_table = None
+        else:
+            results_list = None
+
+            # Save locally + upload to GCS
+            local_output_path = request.output_path or f"/tmp/{job_id}_simulations.parquet"
+            flat_results.to_parquet(local_output_path, index=False)
+
+            storage_client = authenticator.get_storage_client()
+            bucket = storage_client.bucket(BUCKET_NAME)
+            gcs_output_path = f"{ENVIRONMENT_PREFIX}/predictions/{job_id}_simulations.parquet"
+            blob = bucket.blob(gcs_output_path)
+            blob.upload_from_filename(local_output_path)
+            output_path = f"gs://{BUCKET_NAME}/{gcs_output_path}"
+
+            # Upload to BigQuery data warehouse
+            data_warehouse_job_id = None
+            data_warehouse_table = None
+            if request.upload_to_data_warehouse:
+                try:
+                    logger.info("Uploading simulation results to data warehouse landing table")
+
+                    model_versions = {
+                        "hurdle": hurdle_reg["name"],
+                        "hurdle_version": hurdle_reg["version"],
+                        "hurdle_experiment": hurdle_reg["original_experiment"]["name"],
+                        "complexity": complexity_reg["name"],
+                        "complexity_version": complexity_reg["version"],
+                        "complexity_experiment": complexity_reg["original_experiment"]["name"],
+                        "rating": rating_reg["name"],
+                        "rating_version": rating_reg["version"],
+                        "rating_experiment": rating_reg["original_experiment"]["name"],
+                        "users_rated": users_rated_reg["name"],
+                        "users_rated_version": users_rated_reg["version"],
+                        "users_rated_experiment": users_rated_reg["original_experiment"]["name"],
+                        "geek_rating": geek_rating_reg["name"],
+                        "geek_rating_version": geek_rating_reg["version"],
+                        "geek_rating_experiment": geek_rating_reg["original_experiment"]["name"],
+                    }
+
+                    dw_uploader = DataWarehousePredictionUploader()
+                    data_warehouse_job_id = dw_uploader.upload_predictions(
+                        flat_results, job_id, model_versions=model_versions
+                    )
+                    data_warehouse_table = dw_uploader.table_id
+
+                    logger.info(f"Successfully uploaded to data warehouse: {data_warehouse_table}")
+                    logger.info(f"Data warehouse job ID: {data_warehouse_job_id}")
+                except Exception as e:
+                    import traceback
+                    logger.error(f"Failed to upload to data warehouse: {str(e)}")
+                    logger.error(f"Data warehouse error traceback: {traceback.format_exc()}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to upload simulation results to data warehouse: {str(e)}",
+                    )
+
+        return SimulateGamesResponse(
+            job_id=job_id,
+            model_details=model_details,
+            n_samples=request.n_samples,
+            games_simulated=len(sim_results),
+            results=results_list,
+            output_location=output_path,
+            data_warehouse_job_id=data_warehouse_job_id,
+            data_warehouse_table=data_warehouse_table,
+        )
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Error in simulation: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Existing endpoints from previous implementation
 @app.get("/models")
 async def list_available_models():
     """List all available registered models across different types."""
-    model_types = ["hurdle", "rating", "complexity", "users_rated"]
+    model_types = ["hurdle", "rating", "complexity", "users_rated", "geek_rating"]
     available_models = {}
 
     for model_type in model_types:
         try:
-            registered_model = RegisteredModel(
-                model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
-            )
+            registered_model = get_registered_model(model_type)
             available_models[model_type] = registered_model.list_registered_models()
         except Exception:
             available_models[model_type] = []
@@ -1056,9 +1265,7 @@ async def get_model_info(
 ):
     """Get detailed information about a specific registered model."""
     try:
-        registered_model = RegisteredModel(
-            model_type, BUCKET_NAME, project_id=GCP_PROJECT_ID
-        )
+        registered_model = get_registered_model(model_type)
         pipeline, registration = registered_model.load_registered_model(
             model_name, version
         )

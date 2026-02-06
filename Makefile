@@ -129,11 +129,14 @@ geek_rating:
 finalize:
 	uv run -m src.pipeline.finalize
 
-# evaluate models over time periods
-.PHONY: evaluate
-evalute: 
-	uv run -m src.pipeline.evaluate \ 
-	--simulate
+# evaluate over time using config.yaml settings
+.PHONY: evaluate evaluate-verbose evaluate-dry-run
+evaluate:
+	uv run -m src.pipeline.evaluate -simulate
+
+
+evaluate-dry-run:  ## Show what evaluation would do without running
+	uv run -m src.pipeline.evaluate --dry-run --verbose
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
@@ -169,7 +172,7 @@ register_text_embeddings:
 # evaluate over time using config.yaml settings
 .PHONY: evaluate evaluate-verbose evaluate-dry-run evaluate-simulation
 evaluate:
-	uv run -m src.pipeline.evaluate
+	uv run -m src.pipeline.evaluate -simulate
 
 evaluate-verbose:  ## Run evaluation with verbose logging
 	uv run -m src.pipeline.evaluate --verbose
@@ -180,38 +183,13 @@ evaluate-dry-run:  ## Show what evaluation would do without running
 evaluate-simulation:  ## Run simulation-based evaluation
 	uv run -m src.pipeline.evaluate_simulation --save-predictions
 
-### register model candidates
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings register
-register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
+### register models (reads from config.yaml)
+.PHONY: register register-dry-run
+register:
+	uv run python register.py
 
-# register models
-register_complexity:
-	uv run -m scoring_service.register_model \
-	--model complexity \
-	--experiment $(COMPLEXITY_CANDIDATE) \
-	--name complexity-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting game complexity"
-
-register_rating:
-	uv run -m scoring_service.register_model \
-	--model rating \
-	--experiment $(RATING_CANDIDATE) \
-	--name rating-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting game rating"
-
-register_users_rated:
-	uv run -m scoring_service.register_model \
-	--model users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--name users_rated-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting users_rated"
-
-register_hurdle:
-	uv run -m scoring_service.register_model \
-	--model hurdle \
-	--experiment $(HURDLE_CANDIDATE) \
-	--name hurdle-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
+register-dry-run:
+	uv run python register.py --dry-run
 
 EMBEDDINGS_CANDIDATE ?= svd-embeddings
 register_embeddings:
@@ -310,10 +288,6 @@ scoring-service:
     --service-url http://localhost:8080 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
-    --hurdle-model hurdle-v$(CURRENT_YEAR) \
-    --complexity-model complexity-v$(CURRENT_YEAR) \
-    --rating-model rating-v$(CURRENT_YEAR) \
-    --users-rated-model users_rated-v$(CURRENT_YEAR) \
     --download
 
 scoring-service-upload:
@@ -321,10 +295,6 @@ scoring-service-upload:
     --service-url http://localhost:8080 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
-    --hurdle-model hurdle-v$(CURRENT_YEAR) \
-    --complexity-model complexity-v$(CURRENT_YEAR) \
-    --rating-model rating-v$(CURRENT_YEAR) \
-    --users-rated-model users_rated-v$(CURRENT_YEAR) \
 	--upload-to-bigquery \
 	--download
 

@@ -87,6 +87,115 @@ class TrainingConfig:
     test_through: Optional[int] = None
 
 
+def get_regressor_mapping():
+    """Get mapping of algorithm names to regressor classes.
+
+    Returns a fresh dict to avoid mutation issues with class references.
+    Lazy import to avoid circular dependencies.
+    """
+    from sklearn.linear_model import (
+        Ridge,
+        Lasso,
+        LinearRegression,
+        BayesianRidge,
+        ARDRegression,
+    )
+    from catboost import CatBoostRegressor
+    import lightgbm as lgb
+
+    return {
+        "linear": LinearRegression,
+        "ridge": Ridge,
+        "lasso": Lasso,
+        "bayesian_ridge": BayesianRidge,
+        "ard": ARDRegression,
+        "catboost": CatBoostRegressor,
+        "lightgbm": lgb.LGBMRegressor,
+        "lightgbm_linear": lgb.LGBMRegressor,
+    }
+
+
+# Default parameter grids for regressors
+REGRESSOR_PARAM_GRIDS = {
+    "linear": {},
+    "ridge": {
+        "model__alpha": [0.0001, 0.0005, 0.01, 0.1, 1.0, 5],
+        "model__solver": ["auto"],
+        "model__fit_intercept": [True],
+    },
+    "lasso": {
+        "model__alpha": [0.1, 1.0, 10.0],
+        "model__selection": ["cyclic", "random"],
+    },
+    "bayesian_ridge": {
+        # BayesianRidge learns alpha/lambda automatically via EM
+        "model__fit_intercept": [True],
+    },
+    "ard": {
+        # ARDRegression uses per-feature relevance determination
+        "model__fit_intercept": [True],
+        "model__threshold_lambda": [10000, 100000],
+    },
+    "catboost": {
+        "model__iterations": [500],
+        "model__learning_rate": [0.01, 0.5],
+        "model__depth": [4, 6, 8],
+        "model__l2_leaf_reg": [1, 3, 5],
+    },
+    "lightgbm": {
+        "model__n_estimators": [500],
+        "model__learning_rate": [0.01],
+        "model__max_depth": [-1],
+        "model__num_leaves": [50, 100],
+        "model__min_child_samples": [10],
+        "model__reg_alpha": [0.1],
+    },
+    "lightgbm_linear": {
+        "model__n_estimators": [500, 1000],
+        "model__learning_rate": [0.01, 0.05],
+        "model__max_depth": [3, 5, 7],
+        "model__num_leaves": [31, 50],
+        "model__min_child_samples": [10, 20],
+        "model__reg_alpha": [0.1, 1.0],
+        "model__linear_tree": [True],
+    },
+}
+
+
+def configure_regressor(
+    algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None
+):
+    """Configure a regressor and its parameter grid.
+
+    Args:
+        algorithm: Algorithm name (e.g., 'ridge', 'ard', 'lightgbm').
+        algorithm_params: Optional algorithm-specific parameters.
+
+    Returns:
+        Tuple of (regressor_instance, param_grid).
+
+    Raises:
+        ValueError: If algorithm is not supported.
+    """
+    model_mapping = get_regressor_mapping()
+
+    if algorithm not in model_mapping:
+        raise ValueError(
+            f"Unknown algorithm '{algorithm}'. "
+            f"Supported: {list(model_mapping.keys())}"
+        )
+
+    model_class = model_mapping[algorithm]
+    if algorithm_params:
+        model = model_class(**algorithm_params)
+    else:
+        model = model_class()
+
+    param_grid = REGRESSOR_PARAM_GRIDS.get(algorithm, {})
+
+    return model, param_grid
+
+
 class Predictor(Protocol):
     """Protocol defining the interface for all predictive models.
 

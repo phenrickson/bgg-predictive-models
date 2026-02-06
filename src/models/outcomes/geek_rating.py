@@ -1190,6 +1190,24 @@ def main():
             for _, row in importance_df.head(10).iterrows():
                 logger.info(f"  {row['feature']}: {row['coefficient']:.4f}")
 
+    # === Log model info (required for registration) ===
+    model_info = {
+        "n_features": len(model.pipeline.named_steps["model"].coef_) if hasattr(model.pipeline.named_steps["model"], "coef_") else 0,
+        "best_params": {
+            k: v for k, v in model.pipeline.named_steps["model"].get_params().items()
+            if not callable(v)
+        },
+        "mode": args.mode,
+        "algorithm": args.algorithm,
+        "sub_model_experiments": sub_model_experiments,
+    }
+    if hasattr(model.pipeline.named_steps["model"], "intercept_"):
+        model_info["intercept"] = float(model.pipeline.named_steps["model"].intercept_)
+    if args.mode == "direct":
+        model_info["n_raw_features"] = len(model._direct_feature_columns)
+        model_info["include_predictions"] = args.include_predictions
+    experiment.log_model_info(model_info)
+
     # === Create diagnostic plots ===
     # Prepare predictions DataFrame for diagnostics
     predictions_for_plot = test_valid_pl.select([

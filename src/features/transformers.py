@@ -1,3 +1,4 @@
+import ast
 import numpy as np
 import pandas as pd
 import re
@@ -136,14 +137,23 @@ class LogTransformer(BaseEstimator, TransformerMixin):
 
     def get_feature_names_out(self, input_features=None):
         """
-        Return the names of the transformed year features.
+        Return feature names after log transformation.
+
+        Parameters
+        ----------
+        input_features : array-like, optional
+            Input feature names. If None, uses the fitted columns.
 
         Returns
         -------
         ndarray
-            Names of the transformed year features.
+            Feature names (same as input since log transform preserves column names).
         """
-        return np.array(["year_published_transformed"])
+        if input_features is not None:
+            return np.asarray(input_features)
+        if self.columns_ is not None:
+            return np.asarray(self.columns_)
+        return np.asarray(self.columns)
 
 
 class YearTransformer(BaseEstimator, TransformerMixin):
@@ -848,9 +858,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             elif isinstance(mechanics, str):
                 # In case mechanics is a string representation of a list
                 try:
-                    return len(eval(mechanics))
-                except (TypeError, SyntaxError, NameError):
-                    # Handle potential errors in eval
+                    return len(ast.literal_eval(mechanics))
+                except (TypeError, SyntaxError, ValueError):
+                    # Handle potential errors in literal_eval
                     return 0
             else:
                 # Log unexpected type for debugging
@@ -884,9 +894,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             elif isinstance(categories, str):
                 # In case categories is a string representation of a list
                 try:
-                    return len(eval(categories))
-                except (TypeError, SyntaxError, NameError):
-                    # Handle potential errors in eval
+                    return len(ast.literal_eval(categories))
+                except (TypeError, SyntaxError, ValueError):
+                    # Handle potential errors in literal_eval
                     return 0
             else:
                 # Log unexpected type for debugging
