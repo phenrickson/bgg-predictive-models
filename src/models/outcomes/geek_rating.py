@@ -42,7 +42,7 @@ class GeekRatingModel(TrainableModel):
     target_column = "geek_rating"
     model_task = "regression"
 
-    # Need embeddings to run sub-models, but stacking model itself uses prediction features
+    # Default data_config - will be overridden per-instance in __init__ for direct mode
     data_config = DataConfig(
         min_ratings=0,
         requires_complexity_predictions=False,
@@ -87,17 +87,22 @@ class GeekRatingModel(TrainableModel):
             prior_rating: Prior mean rating for Bayesian average.
             prior_weight: Weight given to prior rating.
             hurdle_threshold: Threshold for hurdle model classification.
-            min_ratings: Minimum ratings for direct mode training data (default 25).
+            min_ratings: Minimum ratings for training data filtering (default 25).
+                NOTE: This is NOT passed to data_config. Data is loaded with min_ratings=0
+                so tune/test include all games. Filtering by min_ratings happens in
+                prepare_features for train split only.
             include_predictions: Whether to include sub-model predictions as features (direct mode only).
             **kwargs: Additional arguments passed to TrainableModel.
         """
+        # Don't pass min_ratings to super - keep class-level data_config with min_ratings=0
+        # so ALL data is loaded. Filtering happens in prepare_features.
         super().__init__(training_config=training_config, **kwargs)
         self.mode = mode
         self.sub_models = sub_models or {}
         self.prior_rating = prior_rating
         self.prior_weight = prior_weight
         self.hurdle_threshold = hurdle_threshold
-        self.min_ratings = min_ratings
+        self.min_ratings = min_ratings  # Store for use in prepare_features
         self.include_predictions = include_predictions
         self._sub_model_experiments: Dict[str, str] = {}
         self._direct_feature_columns: List[str] = []  # Store feature columns for direct mode
@@ -175,6 +180,211 @@ class GeekRatingModel(TrainableModel):
         # Geek ratings are typically between 1 and 10, but with Bayesian
         # shrinkage they cluster more narrowly
         return np.clip(predictions, 1.0, 10.0)
+
+    def prepare_features(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        split_name: str,
+        args: Any = None,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Prepare features by running sub-models to generate predictions.
+
+        Args:
+            X: Input features DataFrame.
+            y: Target values.
+            split_name: Name of the split ('train', 'tune', 'test').
+            args: Arguments namespace with sub-model experiment names.
+
+        Returns:
+            Tuple of (prepared_X with prediction columns, y).
+        """
+        from src.utils.config import load_config
+
+        # Get sub-model experiments from args or config
+        if args is not None and hasattr(args, "sub_model_experiments"):
+            sub_model_experiments = args.sub_model_experiments
+        else:
+            config = load_config()
+            sub_model_experiments = {
+                "hurdle": getattr(config.models.get("hurdle"), "experiment_name", None),
+                "complexity": getattr(config.models.get("complexity"), "experiment_name", None),
+                "rating": getattr(config.models.get("rating"), "experiment_name", None),
+                "users_rated": getattr(config.models.get("users_rated"), "experiment_name", None),
+            }
+
+        # Store for later use
+        self._sub_model_experiments = sub_model_experiments
+
+        # Order matters: complexity must come before rating/users_rated
+        ordered_experiments = {}
+        for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
+            if model_type in sub_model_experiments and sub_model_experiments[model_type]:
+                ordered_experiments[model_type] = sub_model_experiments[model_type]
+
+        # Generate predictions from sub-models
+        logger.info(f"Generating sub-model predictions for {split_name} set ({len(X)} samples)")
+        predictions_df = self.generate_predictions_for_games(X, ordered_experiments)
+
+        if self.mode == "stacking":
+            # Stacking mode: only use prediction features
+            X_prepared = predictions_df[self.PREDICTION_FEATURES].copy()
+        else:
+            # Direct mode: combine original features with predictions
+            exclude_cols = [
+                "game_id", "name", "geek_rating",
+                "rating", "users_rated", "complexity", "hurdle",
+                "log_users_rated",
+            ]
+            feature_cols = [c for c in X.columns if c not in exclude_cols]
+            X_prepared = X[feature_cols].copy()
+
+            # Add predicted_complexity (always)
+            if "predicted_complexity" in predictions_df.columns:
+                X_prepared["predicted_complexity"] = predictions_df["predicted_complexity"].values
+
+            # Optionally add other prediction features
+            if self.include_predictions:
+                for col in self.OPTIONAL_PREDICTION_FEATURES:
+                    if col in predictions_df.columns:
+                        X_prepared[col] = predictions_df[col].values
+
+            self._direct_feature_columns = list(X_prepared.columns)
+
+        # Handle filtering differently for train vs tune/test
+        if split_name == "train":
+            # For training: filter to users_rated >= min_ratings AND geek_rating > 0
+            users_rated = X["users_rated"] if "users_rated" in X.columns else None
+            zero_mask = y == 0
+
+            if users_rated is not None:
+                min_ratings_mask = users_rated < self.min_ratings
+                combined_mask = zero_mask | min_ratings_mask
+                n_zero = zero_mask.sum()
+                n_low_ratings = min_ratings_mask.sum()
+                n_filtered = combined_mask.sum()
+                logger.info(
+                    f"Filtering training data: {n_zero} games with geek_rating=0, "
+                    f"{n_low_ratings} games with users_rated < {self.min_ratings}, "
+                    f"{n_filtered} total removed"
+                )
+                X_prepared = X_prepared[~combined_mask].copy()
+                y = y[~combined_mask].copy()
+            elif zero_mask.any():
+                # Fallback if users_rated not available
+                n_filtered = zero_mask.sum()
+                logger.info(f"Filtering {n_filtered} games with geek_rating=0 from training")
+                X_prepared = X_prepared[~zero_mask].copy()
+                y = y[~zero_mask].copy()
+        else:
+            # For tune/test: filter to games above hurdle threshold, replace geek_rating=0 with prior (5.5)
+            from src.models.score import extract_threshold
+
+            # Get hurdle threshold
+            hurdle_threshold = self.hurdle_threshold
+            if hurdle_threshold is None and "hurdle" in sub_model_experiments:
+                hurdle_threshold = extract_threshold(sub_model_experiments["hurdle"], "hurdle")
+            if hurdle_threshold is None:
+                hurdle_threshold = 0.5  # Default fallback
+
+            # Filter to games above hurdle threshold
+            if "predicted_hurdle_prob" in predictions_df.columns:
+                hurdle_mask = predictions_df["predicted_hurdle_prob"] >= hurdle_threshold
+                n_before = len(X_prepared)
+                n_above_threshold = hurdle_mask.sum()
+                logger.info(
+                    f"Filtering {split_name} to games above hurdle threshold {hurdle_threshold:.3f}: "
+                    f"{n_above_threshold}/{n_before} games"
+                )
+                X_prepared = X_prepared[hurdle_mask].copy()
+                y = y[hurdle_mask].copy()
+
+            # Replace geek_rating=0 with prior (5.5)
+            zero_mask = y == 0
+            if zero_mask.any():
+                n_zeros = zero_mask.sum()
+                logger.info(f"Replacing {n_zeros} games with geek_rating=0 -> 5.5 (prior) for {split_name}")
+                y = y.copy()
+                y[zero_mask] = 5.5
+
+        return X_prepared, y
+
+    def filter_for_refit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        original_X: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Filter tune data for refit (train + tune combined).
+
+        When refitting on combined train + tune data, we want to apply the same
+        filtering as training: only games with users_rated >= min_ratings AND
+        geek_rating > 0.
+
+        Args:
+            X: Prepared features from tune set (after prepare_features).
+            y: Target values from tune set (after prepare_features, so 0s are now 5.5).
+            original_X: Original X before prepare_features (has users_rated column).
+
+        Returns:
+            Tuple of (filtered_X, filtered_y) for refit.
+        """
+        # y has already had 0s replaced with 5.5 by prepare_features
+        # We need to filter based on original users_rated and identify games that
+        # originally had geek_rating=0 (now 5.5 but we should exclude them)
+
+        # For refit, we want games with users_rated >= min_ratings
+        # The geek_rating=0 -> 5.5 replacement means we can't easily identify those
+        # So we need to filter based on users_rated from original_X
+
+        if "users_rated" not in original_X.columns:
+            logger.warning("users_rated not in original_X, cannot filter for refit")
+            return X, y
+
+        # Get users_rated values aligned with current X index
+        users_rated = original_X.loc[X.index, "users_rated"]
+        min_ratings_mask = users_rated >= self.min_ratings
+
+        n_before = len(X)
+        X_filtered = X[min_ratings_mask].copy()
+        y_filtered = y[min_ratings_mask].copy()
+        n_after = len(X_filtered)
+
+        logger.info(
+            f"Filtered tune data for refit: {n_before} -> {n_after} "
+            f"(removed {n_before - n_after} games with users_rated < {self.min_ratings})"
+        )
+
+        return X_filtered, y_filtered
+
+    def create_pipeline(
+        self,
+        estimator: Any,
+        preprocessor: Any,
+        algorithm: str,
+        args: Any = None,
+    ) -> Pipeline:
+        """Create pipeline with mode-specific preprocessing.
+
+        Args:
+            estimator: The model estimator.
+            preprocessor: The preprocessing pipeline (ignored for stacking mode).
+            algorithm: Algorithm name.
+            args: Optional arguments namespace.
+
+        Returns:
+            sklearn Pipeline.
+        """
+        if self.mode == "stacking":
+            # Stacking mode: use PolynomialFeatures for interactions
+            return Pipeline([
+                ("interactions", PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)),
+                ("scaler", StandardScaler()),
+                ("model", estimator),
+            ])
+        else:
+            # Direct mode: use standard BGG preprocessor
+            return Pipeline([("preprocessor", preprocessor), ("model", estimator)])
 
     def combine_bayesian(
         self, rating: np.ndarray, users_rated: np.ndarray
@@ -881,361 +1091,10 @@ def _create_comparison_plot(
 
 
 def main():
-    """Train and evaluate geek rating stacking model."""
-    import argparse
-    import json
-    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-    from src.utils.config import load_config
-    from src.utils.logging import setup_logging
-    from src.models.outcomes.data import load_data
-    from src.models.experiments import ExperimentTracker, create_diagnostic_plots
+    """Train geek rating model using the standard training pipeline."""
+    from src.models.outcomes.train import train_model
 
-    setup_logging()
-
-    config = load_config()
-
-    # Get defaults from config
-    hurdle_default = getattr(config.models.get("hurdle"), "experiment_name", None)
-    complexity_default = getattr(config.models.get("complexity"), "experiment_name", None)
-    rating_default = getattr(config.models.get("rating"), "experiment_name", None)
-    users_rated_default = getattr(config.models.get("users_rated"), "experiment_name", None)
-    geek_rating_config = config.models.get("geek_rating", {})
-    algorithm_default = getattr(geek_rating_config, "type", "ridge")
-    experiment_default = getattr(geek_rating_config, "experiment_name", "ridge-geek_rating")
-
-    # Get mode from config (default to stacking)
-    mode_default = getattr(geek_rating_config, "mode", None) or "stacking"
-    min_ratings_default = getattr(geek_rating_config, "min_ratings", None) or 25
-    include_predictions_default = getattr(geek_rating_config, "include_predictions", True)
-
-    parser = argparse.ArgumentParser(description="Train geek rating model")
-    parser.add_argument("--hurdle", default=hurdle_default, help="Hurdle experiment name")
-    parser.add_argument("--complexity", default=complexity_default, help="Complexity experiment name")
-    parser.add_argument("--rating", default=rating_default, help="Rating experiment name")
-    parser.add_argument("--users-rated", default=users_rated_default, help="Users rated experiment name")
-    parser.add_argument("--algorithm", default=algorithm_default, help="Model algorithm")
-    parser.add_argument("--experiment", default=experiment_default, help="Experiment name")
-    parser.add_argument("--mode", default=mode_default, choices=["stacking", "direct"],
-                       help="Training mode: stacking (tune set only) or direct (all features)")
-    parser.add_argument("--min-ratings", type=int, default=min_ratings_default,
-                       help="Minimum ratings for direct mode training (default: 25)")
-    parser.add_argument("--include-predictions", type=lambda x: x.lower() == 'true',
-                       default=include_predictions_default,
-                       help="Include sub-model predictions as features in direct mode (default: true)")
-    parser.add_argument("--output-dir", default="./models/experiments", help="Base output directory")
-    parser.add_argument("--tune-start", type=int, default=None,
-                       help="Start year for tune data (overrides config)")
-    parser.add_argument("--tune-through", type=int, default=None,
-                       help="End year for tune data (overrides config)")
-
-    args = parser.parse_args()
-
-    sub_model_experiments = {
-        "hurdle": args.hurdle,
-        "complexity": args.complexity,
-        "rating": args.rating,
-        "users_rated": args.users_rated,
-    }
-
-    # === Train model based on mode ===
-    model = GeekRatingModel(
-        mode=args.mode,
-        min_ratings=args.min_ratings,
-        include_predictions=args.include_predictions,
-    )
-
-    if args.mode == "stacking":
-        model.train_stacking_model(
-            sub_model_experiments=sub_model_experiments,
-            algorithm=args.algorithm,
-            tune_start=args.tune_start,
-            tune_through=args.tune_through,
-        )
-    elif args.mode == "direct":
-        model.train_direct_model(
-            sub_model_experiments=sub_model_experiments,
-            algorithm=args.algorithm,
-            tune_through=args.tune_through,
-        )
-
-    # === Create experiment tracker ===
-    tracker = ExperimentTracker(model_type="geek_rating", base_dir=args.output_dir)
-
-    experiment_metadata = {
-        "model_type": "geek_rating",
-        "model_task": "regression",
-        "algorithm": args.algorithm,
-        "target_column": "geek_rating",
-        "tune_start": config.years.training.tune_start,
-        "tune_through": config.years.training.tune_through,
-        "test_start": config.years.training.test_start,
-        "test_through": config.years.training.test_through,
-        "sub_model_experiments": sub_model_experiments,
-        "mode": args.mode,
-        "prior_rating": model.prior_rating,
-        "prior_weight": model.prior_weight,
-    }
-
-    # Add mode-specific metadata
-    if args.mode == "direct":
-        experiment_metadata["min_ratings"] = args.min_ratings
-        experiment_metadata["include_predictions"] = args.include_predictions
-        experiment_metadata["feature_columns"] = model._direct_feature_columns
-
-    experiment = tracker.create_experiment(
-        name=args.experiment,
-        metadata=experiment_metadata,
-    )
-
-    # === Save pipeline ===
-    experiment.save_pipeline(model.pipeline)
-    logger.info(f"Saved pipeline to {experiment.exp_dir / 'pipeline.pkl'}")
-
-    # === Evaluate on tune set (training data) ===
-    tune_start = config.years.training.tune_start
-    tune_through = config.years.training.tune_through
-
-    logger.info(f"\n=== Evaluating on tune set: {tune_start}-{tune_through} ===")
-
-    data_config = DataConfig(min_ratings=0, supports_embeddings=True)
-    tune_df = load_data(
-        data_config=data_config,
-        start_year=tune_start,
-        end_year=tune_through,
-        use_embeddings=True,
-        apply_filters=False,
-    )
-    tune_pandas = tune_df.to_pandas()
-
-    # Generate sub-model predictions for tune set
-    ordered_experiments = {}
-    for model_type in ["hurdle", "complexity", "rating", "users_rated"]:
-        if model_type in sub_model_experiments:
-            ordered_experiments[model_type] = sub_model_experiments[model_type]
-
-    tune_predictions = model.generate_predictions_for_games(tune_pandas, ordered_experiments)
-    tune_predictions["geek_rating"] = tune_pandas["geek_rating"].values
-
-    # Filter to games with valid geek ratings
-    tune_valid_mask = tune_predictions["geek_rating"] > 0
-    tune_valid = tune_predictions[tune_valid_mask].copy()
-    tune_y_true = tune_valid["geek_rating"].values
-
-    # For direct mode, need to merge original features with predictions
-    if args.mode == "direct":
-        tune_features = tune_pandas[tune_valid_mask].copy()
-        for col in model.PREDICTION_FEATURES:
-            if col in tune_valid.columns:
-                tune_features[col] = tune_valid[col].values
-        tune_model_preds = model.predict_from_features(tune_features)
-    else:
-        tune_model_preds = model.predict_from_features(tune_valid)
-
-    tune_metrics = {
-        "rmse": float(np.sqrt(mean_squared_error(tune_y_true, tune_model_preds))),
-        "mae": float(mean_absolute_error(tune_y_true, tune_model_preds)),
-        "r2": float(r2_score(tune_y_true, tune_model_preds)),
-        "n_samples": int(len(tune_valid)),
-    }
-
-    logger.info(f"Tune set: {len(tune_valid)} games with valid geek ratings")
-    logger.info(f"  RMSE: {tune_metrics['rmse']:.4f}")
-    logger.info(f"  MAE:  {tune_metrics['mae']:.4f}")
-    logger.info(f"  R²:   {tune_metrics['r2']:.4f}")
-
-    experiment.log_metrics(tune_metrics, "tune")
-
-    # === Evaluate on test set ===
-    test_start = config.years.training.test_start
-    test_through = config.years.training.test_through
-
-    logger.info(f"\n=== Evaluating on test set: {test_start}-{test_through} ===")
-
-    test_df = load_data(
-        data_config=data_config,
-        start_year=test_start,
-        end_year=test_through,
-        use_embeddings=True,
-        apply_filters=False,
-    )
-    test_pandas = test_df.to_pandas()
-
-    test_predictions = model.generate_predictions_for_games(test_pandas, ordered_experiments)
-    test_predictions["geek_rating"] = test_pandas["geek_rating"].values
-
-    # Filter to games with valid geek ratings
-    valid_mask = test_predictions["geek_rating"] > 0
-    test_valid = test_predictions[valid_mask].copy()
-    logger.info(f"Test set: {len(test_valid)} games with valid geek ratings")
-
-    y_true = test_valid["geek_rating"].values
-
-    # === Bayesian average predictions ===
-    bayesian_preds = model.combine_bayesian(
-        test_valid["predicted_rating"].values,
-        test_valid["predicted_users_rated"].values,
-    )
-
-    bayesian_metrics = {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, bayesian_preds))),
-        "mae": float(mean_absolute_error(y_true, bayesian_preds)),
-        "r2": float(r2_score(y_true, bayesian_preds)),
-        "n_samples": int(len(test_valid)),
-    }
-
-    logger.info("\n--- Bayesian Average Results ---")
-    logger.info(f"  RMSE: {bayesian_metrics['rmse']:.4f}")
-    logger.info(f"  MAE:  {bayesian_metrics['mae']:.4f}")
-    logger.info(f"  R²:   {bayesian_metrics['r2']:.4f}")
-
-    # Save Bayesian metrics separately
-    bayesian_metrics_path = experiment.exp_dir / "bayesian_metrics.json"
-    with open(bayesian_metrics_path, "w") as f:
-        json.dump(bayesian_metrics, f, indent=2)
-
-    # === Model predictions (stacking or direct) ===
-    # For direct mode, need to merge original features with predictions
-    if args.mode == "direct":
-        test_features = test_pandas[valid_mask].copy()
-        for col in model.PREDICTION_FEATURES:
-            if col in test_valid.columns:
-                test_features[col] = test_valid[col].values
-        model_preds = model.predict_from_features(test_features)
-    else:
-        model_preds = model.predict_from_features(test_valid)
-
-    model_metrics = {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, model_preds))),
-        "mae": float(mean_absolute_error(y_true, model_preds)),
-        "r2": float(r2_score(y_true, model_preds)),
-        "n_samples": int(len(test_valid)),
-    }
-
-    logger.info(f"\n--- {args.mode.title()} Model Results ---")
-    logger.info(f"  RMSE: {model_metrics['rmse']:.4f}")
-    logger.info(f"  MAE:  {model_metrics['mae']:.4f}")
-    logger.info(f"  R²:   {model_metrics['r2']:.4f}")
-
-    experiment.log_metrics(model_metrics, "test")
-
-    # === Comparison ===
-    logger.info("\n--- Comparison ---")
-    rmse_diff = model_metrics["rmse"] - bayesian_metrics["rmse"]
-    mae_diff = model_metrics["mae"] - bayesian_metrics["mae"]
-    r2_diff = model_metrics["r2"] - bayesian_metrics["r2"]
-
-    logger.info(f"  RMSE diff ({args.mode} - bayesian): {rmse_diff:+.4f}")
-    logger.info(f"  MAE diff  ({args.mode} - bayesian): {mae_diff:+.4f}")
-    logger.info(f"  R² diff   ({args.mode} - bayesian): {r2_diff:+.4f}")
-
-    if rmse_diff < 0:
-        logger.info(f"  -> {args.mode.title()} model has lower RMSE (better)")
-    else:
-        logger.info("  -> Bayesian average has lower RMSE (better)")
-
-    # === Log predictions ===
-    test_valid["predicted_geek_rating_bayesian"] = bayesian_preds
-    test_valid[f"predicted_geek_rating_{args.mode}"] = model_preds
-
-    # Convert to polars and log predictions
-    test_valid_pl = pl.from_pandas(test_valid)
-    experiment.log_predictions(
-        predictions=model_preds,
-        actuals=y_true,
-        df=test_valid_pl,
-        dataset="test",
-    )
-
-    # === Log feature importance/coefficients ===
-    final_model = model.pipeline.named_steps["model"]
-    if hasattr(final_model, "coef_"):
-        coefs = final_model.coef_
-        feature_names = None
-
-        # Get feature names - different for stacking vs direct
-        if args.mode == "stacking" and "interactions" in model.pipeline.named_steps:
-            poly = model.pipeline.named_steps["interactions"]
-            feature_names = list(poly.get_feature_names_out(model.PREDICTION_FEATURES))
-        elif args.mode == "direct" and "preprocessor" in model.pipeline.named_steps:
-            # For direct mode, use extract_feature_importance which handles the pipeline properly
-            try:
-                from src.models.experiments import extract_feature_importance
-                importance_df = extract_feature_importance(model.pipeline, model_type="regression")
-                coef_path = experiment.exp_dir / "coefficients.csv"
-                importance_df.to_csv(coef_path, index=False)
-                logger.info(f"Saved coefficients to {coef_path}")
-
-                logger.info(f"\n--- {args.mode.title()} Model Coefficients (top 10) ---")
-                for _, row in importance_df.head(10).iterrows():
-                    logger.info(f"  {row['feature']}: {row['coefficient']:.4f}")
-                feature_names = None  # Skip the generic block below
-            except Exception as e:
-                logger.warning(f"Could not extract feature importance: {e}")
-                feature_names = [f"feature_{i}" for i in range(len(coefs))]
-        else:
-            feature_names = [f"feature_{i}" for i in range(len(coefs))]
-
-        # Only create DataFrame if we didn't already do it via extract_feature_importance
-        if feature_names is not None:
-            importance_df = pd.DataFrame({
-                "feature": feature_names,
-                "coefficient": coefs,
-                "abs_coefficient": np.abs(coefs),
-            }).sort_values("abs_coefficient", ascending=False)
-            coef_path = experiment.exp_dir / "coefficients.csv"
-            importance_df.to_csv(coef_path, index=False)
-            logger.info(f"Saved coefficients to {coef_path}")
-
-            logger.info(f"\n--- {args.mode.title()} Model Coefficients (top 10) ---")
-            for _, row in importance_df.head(10).iterrows():
-                logger.info(f"  {row['feature']}: {row['coefficient']:.4f}")
-
-    # === Log model info (required for registration) ===
-    model_info = {
-        "n_features": len(model.pipeline.named_steps["model"].coef_) if hasattr(model.pipeline.named_steps["model"], "coef_") else 0,
-        "best_params": {
-            k: v for k, v in model.pipeline.named_steps["model"].get_params().items()
-            if not callable(v)
-        },
-        "mode": args.mode,
-        "algorithm": args.algorithm,
-        "sub_model_experiments": sub_model_experiments,
-    }
-    if hasattr(model.pipeline.named_steps["model"], "intercept_"):
-        model_info["intercept"] = float(model.pipeline.named_steps["model"].intercept_)
-    if args.mode == "direct":
-        model_info["n_raw_features"] = len(model._direct_feature_columns)
-        model_info["include_predictions"] = args.include_predictions
-    experiment.log_model_info(model_info)
-
-    # === Create diagnostic plots ===
-    # Prepare predictions DataFrame for diagnostics
-    predictions_for_plot = test_valid_pl.select([
-        "game_id",
-        pl.col(f"predicted_geek_rating_{args.mode}").alias("prediction"),
-        pl.col("geek_rating").alias("actual"),
-    ])
-    create_diagnostic_plots(experiment, predictions_for_plot, model_type="regression")
-
-    # Create comparison plot (Bayesian vs Model)
-    _create_comparison_plot(
-        y_true=y_true,
-        bayesian_preds=bayesian_preds,
-        stacking_preds=model_preds,  # Using model_preds for either mode
-        output_path=experiment.exp_dir / "plots" / f"bayesian_vs_{args.mode}.png",
-    )
-
-    # === Update metadata with final info ===
-    experiment.metadata.update({
-        "data_sizes": {
-            "tune": len(tune_valid),
-            "test": len(test_valid),
-        },
-        "feature_count": len(model.PREDICTION_FEATURES),
-    })
-    experiment._save_metadata()
-
-    logger.info(f"\n=== Experiment saved to: {experiment.exp_dir} ===")
+    train_model(GeekRatingModel)
 
 
 if __name__ == "__main__":

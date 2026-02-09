@@ -216,11 +216,28 @@ def parse_arguments() -> argparse.Namespace:
     if not args.use_sample_weights and model_config is not None:
         args.use_sample_weights = model_config.use_sample_weights
 
+    # Load min_ratings from config
+    if model_config is not None:
+        args.min_ratings = model_config.min_ratings
+
     # Load include_count_features from config (default False)
     args.include_count_features = getattr(model_config, "include_count_features", False) if model_config else False
 
     # Load algorithm_params from config
     args.algorithm_params = model_config.get_algorithm_params() if model_config else {}
+
+    # Load geek_rating-specific config (mode, sub_model_experiments)
+    if args.model == "geek_rating":
+        args.mode = getattr(model_config, "mode", None) or "stacking"
+        args.include_predictions = getattr(model_config, "include_predictions", True)
+
+        # Build sub_model_experiments from other model configs
+        args.sub_model_experiments = {
+            "hurdle": getattr(config.models.get("hurdle"), "experiment_name", None),
+            "complexity": getattr(config.models.get("complexity"), "experiment_name", None),
+            "rating": getattr(config.models.get("rating"), "experiment_name", None),
+            "users_rated": getattr(config.models.get("users_rated"), "experiment_name", None),
+        }
 
     # Load complexity predictions path from config if not provided via CLI
     # Models like rating/users_rated need this to get complexity predictions
@@ -285,8 +302,16 @@ def train_model(
 
     setup_logging()
 
-    # Instantiate model
-    model = model_class()
+    # Instantiate model with any model-specific kwargs from args
+    model_kwargs = {}
+    if hasattr(args, "mode"):
+        model_kwargs["mode"] = args.mode
+    if hasattr(args, "min_ratings"):
+        model_kwargs["min_ratings"] = args.min_ratings
+    if hasattr(args, "include_predictions"):
+        model_kwargs["include_predictions"] = args.include_predictions
+
+    model = model_class(**model_kwargs)
 
     # Determine algorithm
     algorithm = args.algorithm
@@ -320,6 +345,23 @@ def train_model(
     tune_X, tune_y = select_X_y(tune_df, model.target_column)
     test_X, test_y = select_X_y(test_df, model.target_column)
 
+    # Store original tune_X before prepare_features (needed for refit filtering)
+    tune_X_original = tune_X.copy()
+
+    # Allow models to prepare features (e.g., run sub-models for stacking)
+    train_X, train_y = model.prepare_features(train_X, train_y, "train", args)
+    tune_X, tune_y = model.prepare_features(tune_X, tune_y, "tune", args)
+    test_X, test_y = model.prepare_features(test_X, test_y, "test", args)
+
+    # Filter polars DataFrames to match filtered X/y (for experiment logging)
+    # This handles cases where prepare_features filters rows (e.g., geek_rating hurdle filter)
+    if len(train_X) < len(train_df):
+        train_df = train_df[train_X.index.tolist()]
+    if len(tune_X) < len(tune_df):
+        tune_df = tune_df[tune_X.index.tolist()]
+    if len(test_X) < len(test_df):
+        test_df = test_df[test_X.index.tolist()]
+
     logger.info(f"Train: {train_X.shape}, Tune: {tune_X.shape}, Test: {test_X.shape}")
 
     # Configure model and preprocessing
@@ -333,6 +375,12 @@ def train_model(
     if model.data_config.requires_complexity_predictions:
         preserve_columns.append("predicted_complexity")
 
+    # For geek_rating in direct mode, preserve sub-model predictions
+    if args.model == "geek_rating" and getattr(args, "mode", None) == "direct":
+        preserve_columns.append("predicted_complexity")
+        if getattr(args, "include_predictions", True):
+            preserve_columns.extend(["predicted_rating", "predicted_users_rated_log"])
+
     preprocessor = create_preprocessing_pipeline(
         model_type=args.preprocessor_type,
         model_name=algorithm,
@@ -341,7 +389,8 @@ def train_model(
         include_count_features=args.include_count_features,
     )
 
-    pipeline = Pipeline([("preprocessor", preprocessor), ("model", estimator)])
+    # Allow models to customize pipeline construction
+    pipeline = model.create_pipeline(estimator, preprocessor, algorithm, args)
 
     # Calculate sample weights if requested
     sample_weights = None
@@ -391,8 +440,15 @@ def train_model(
 
     # Fit final model on train + tune
     logger.info("Fitting final model on combined train + tune data")
-    X_combined = pd.concat([train_X, tune_X])
-    y_combined = pd.concat([train_y, tune_y])
+
+    # For geek_rating, filter tune data for refit (same criteria as training)
+    if hasattr(model, "filter_for_refit"):
+        tune_X_refit, tune_y_refit = model.filter_for_refit(tune_X, tune_y, tune_X_original)
+    else:
+        tune_X_refit, tune_y_refit = tune_X, tune_y
+
+    X_combined = pd.concat([train_X, tune_X_refit])
+    y_combined = pd.concat([train_y, tune_y_refit])
 
     if args.use_sample_weights:
         combined_weights = calculate_sample_weights(

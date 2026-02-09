@@ -239,6 +239,7 @@ class TrainableModel(ABC):
         training_config: Optional[TrainingConfig] = None,
         pipeline: Optional[Pipeline] = None,
         version: Optional[str] = None,
+        min_ratings: Optional[int] = None,
     ):
         """Initialize the model.
 
@@ -246,10 +247,17 @@ class TrainableModel(ABC):
             training_config: Configuration for training parameters.
             pipeline: Fitted sklearn pipeline (preprocessor + model).
             version: Model version string.
+            min_ratings: Minimum ratings filter for training data. If provided,
+                overrides the class-level data_config.min_ratings.
         """
         self.training_config = training_config
         self.pipeline = pipeline
         self.version = version
+
+        # Override data_config.min_ratings if provided
+        if min_ratings is not None:
+            from dataclasses import replace
+            self.data_config = replace(self.data_config, min_ratings=min_ratings)
         self._metadata: Dict[str, Any] = {}
 
     def predict(self, features: pd.DataFrame) -> np.ndarray:
@@ -597,6 +605,10 @@ class TrainableModel(ABC):
         import matplotlib.pyplot as plt
 
         df = self.get_coefficient_estimates([confidence_level])
+
+        # Filter out coefficients that are exactly zero (pruned by ARD)
+        df = df[df["coefficient"] != 0]
+
         df_top = df.head(top_n)
 
         level_pct = int(confidence_level * 100)
@@ -780,6 +792,52 @@ class TrainableModel(ABC):
             Tuple of (model_instance, param_grid).
         """
         ...
+
+    def prepare_features(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        split_name: str,
+        args: Any = None,
+    ) -> tuple:
+        """Prepare features before training/evaluation.
+
+        Override in subclasses that need custom feature preparation,
+        such as running sub-models to generate prediction features.
+
+        Args:
+            X: Input features DataFrame.
+            y: Target values.
+            split_name: Name of the split ('train', 'tune', 'test').
+            args: Optional arguments namespace with config.
+
+        Returns:
+            Tuple of (prepared_X, prepared_y).
+        """
+        return X, y
+
+    def create_pipeline(
+        self,
+        estimator: Any,
+        preprocessor: Any,
+        algorithm: str,
+        args: Any = None,
+    ) -> Pipeline:
+        """Create the training pipeline.
+
+        Override in subclasses that need custom pipeline construction
+        (e.g., PolynomialFeatures for stacking models).
+
+        Args:
+            estimator: The model estimator.
+            preprocessor: The preprocessing pipeline.
+            algorithm: Algorithm name.
+            args: Optional arguments namespace with config.
+
+        Returns:
+            sklearn Pipeline.
+        """
+        return Pipeline([("preprocessor", preprocessor), ("model", estimator)])
 
     def compute_additional_metrics(
         self,
