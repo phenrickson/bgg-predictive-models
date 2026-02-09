@@ -3,7 +3,8 @@ name: Build Training Docker Image
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - 'model/**'
     paths:
       - 'pyproject.toml'
       - 'docker/training.Dockerfile'
