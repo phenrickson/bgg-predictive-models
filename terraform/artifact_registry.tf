@@ -11,13 +11,13 @@ resource "google_artifact_registry_repository" "bgg_predictive_models" {
   description   = "Docker repository for BGG predictive models"
   format        = "DOCKER"
 
-  # Keep all images with prod tag (current deployments + rollback)
+  # Keep only the 3 most recent images per package
   cleanup_policies {
-    id     = "keep-prod-tagged"
+    id     = "keep-recent-versions"
     action = "KEEP"
 
-    condition {
-      tag_prefixes = ["prod"]
+    most_recent_versions {
+      keep_count = 3
     }
   }
 
