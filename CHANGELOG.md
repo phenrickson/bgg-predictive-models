@@ -7,9 +7,9 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - **Artifact Registry Cleanup Policy**: Terraform-managed cleanup policies to reduce storage costs
-  - Keeps 3 most recent images with `prod*` tags (current + 2 rollback versions)
+  - Keeps 5 most recent images per package
   - Deletes untagged images after 7 days
-  - Deletes old non-prod tagged images after 14 days
+  - Deletes old tagged images after 14 days
   - Repository: `us-central1-docker.pkg.dev/bgg-predictive-models/bgg-predictive-models`
 
 ### Changed

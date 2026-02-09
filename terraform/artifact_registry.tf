@@ -17,7 +17,7 @@ resource "google_artifact_registry_repository" "bgg_predictive_models" {
     action = "KEEP"
 
     most_recent_versions {
-      keep_count = 3
+      keep_count = 5
     }
   }
 
