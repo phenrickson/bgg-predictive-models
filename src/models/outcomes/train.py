@@ -192,6 +192,47 @@ def parse_arguments() -> argparse.Namespace:
         help="Finalize model for production after training",
     )
 
+    # Geek rating specific options
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["stacking", "direct"],
+        help="Geek rating mode (stacking or direct)",
+    )
+    parser.add_argument(
+        "--include-predictions",
+        type=str,
+        default=None,
+        help="Include sub-model predictions as features in direct mode (true/false)",
+    )
+
+    # Sub-model experiment names (for geek_rating training with specific experiments)
+    parser.add_argument(
+        "--hurdle-experiment",
+        type=str,
+        default=None,
+        help="Hurdle experiment name (for geek_rating sub-model)",
+    )
+    parser.add_argument(
+        "--complexity-experiment",
+        type=str,
+        default=None,
+        help="Complexity experiment name (for geek_rating sub-model)",
+    )
+    parser.add_argument(
+        "--rating-experiment",
+        type=str,
+        default=None,
+        help="Rating experiment name (for geek_rating sub-model)",
+    )
+    parser.add_argument(
+        "--users-rated-experiment",
+        type=str,
+        default=None,
+        help="Users rated experiment name (for geek_rating sub-model)",
+    )
+
     args = parser.parse_args()
 
     # Load defaults from config if not provided
@@ -228,15 +269,22 @@ def parse_arguments() -> argparse.Namespace:
 
     # Load geek_rating-specific config (mode, sub_model_experiments)
     if args.model == "geek_rating":
-        args.mode = getattr(model_config, "mode", None) or "stacking"
-        args.include_predictions = getattr(model_config, "include_predictions", True)
+        # Mode: CLI > config > default
+        if args.mode is None:
+            args.mode = getattr(model_config, "mode", None) or "stacking"
 
-        # Build sub_model_experiments from other model configs
+        # Include predictions: CLI > config > default
+        if args.include_predictions is not None:
+            args.include_predictions = args.include_predictions.lower() == "true"
+        else:
+            args.include_predictions = getattr(model_config, "include_predictions", True)
+
+        # Build sub_model_experiments: CLI overrides > config defaults
         args.sub_model_experiments = {
-            "hurdle": getattr(config.models.get("hurdle"), "experiment_name", None),
-            "complexity": getattr(config.models.get("complexity"), "experiment_name", None),
-            "rating": getattr(config.models.get("rating"), "experiment_name", None),
-            "users_rated": getattr(config.models.get("users_rated"), "experiment_name", None),
+            "hurdle": args.hurdle_experiment or getattr(config.models.get("hurdle"), "experiment_name", None),
+            "complexity": args.complexity_experiment or getattr(config.models.get("complexity"), "experiment_name", None),
+            "rating": args.rating_experiment or getattr(config.models.get("rating"), "experiment_name", None),
+            "users_rated": args.users_rated_experiment or getattr(config.models.get("users_rated"), "experiment_name", None),
         }
 
     # Load complexity predictions path from config if not provided via CLI
@@ -304,11 +352,12 @@ def train_model(
 
     # Instantiate model with any model-specific kwargs from args
     model_kwargs = {}
-    if hasattr(args, "mode"):
-        model_kwargs["mode"] = args.mode
     if hasattr(args, "min_ratings"):
         model_kwargs["min_ratings"] = args.min_ratings
-    if hasattr(args, "include_predictions"):
+    # mode and include_predictions are geek_rating-specific
+    if hasattr(args, "mode") and args.mode is not None:
+        model_kwargs["mode"] = args.mode
+    if hasattr(args, "include_predictions") and args.include_predictions is not None:
         model_kwargs["include_predictions"] = args.include_predictions
 
     model = model_class(**model_kwargs)

@@ -510,6 +510,14 @@ def evaluate_year(
     # Get geek_rating pipeline if needed
     geek_rating_pipeline = pipelines.get("geek_rating")
 
+    # Fail early if mode requires geek_rating but pipeline is missing
+    if geek_rating_mode in ("stacking", "direct") and geek_rating_pipeline is None:
+        logger.error(
+            f"  geek_rating_mode={geek_rating_mode} requires geek_rating pipeline, "
+            f"but it was not loaded. Falling back to bayesian mode."
+        )
+        geek_rating_mode = "bayesian"
+
     # Pre-compute Cholesky
     logger.info(f"  Pre-computing Cholesky decompositions...")
     cholesky_cache = precompute_cholesky(
@@ -542,19 +550,11 @@ def evaluate_year(
     if save_predictions:
         predictions_dir = Path(output_dir) if output_dir else Path("models/simulation")
 
-        # Determine run name - use provided or auto-increment
+        # Determine run name - use provided or derive from mode and date
         effective_run_name = run_name
         if effective_run_name is None:
-            # Find next available version number
-            existing_versions = [
-                d.name for d in predictions_dir.iterdir()
-                if d.is_dir() and d.name.startswith("v") and d.name[1:].isdigit()
-            ] if predictions_dir.exists() else []
-            if existing_versions:
-                max_version = max(int(v[1:]) for v in existing_versions)
-                effective_run_name = f"v{max_version + 1}"
-            else:
-                effective_run_name = "v1"
+            from datetime import date
+            effective_run_name = f"{geek_rating_mode}-{date.today().isoformat()}"
 
         predictions_dir = predictions_dir / effective_run_name
         predictions_dir.mkdir(parents=True, exist_ok=True)

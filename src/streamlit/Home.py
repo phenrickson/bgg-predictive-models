@@ -35,6 +35,13 @@ Monitor and analyze model experiments:
 - Explore feature importance and model parameters
 - Access experiment metadata and details
 
+### 🔬 Simulations
+Review simulation evaluation runs:
+- Compare runs side-by-side with summary metrics
+- Drill into individual runs with interactive filters
+- View scatter plots and prediction intervals
+- Compute metrics on the fly with adjustable filters
+
 ### 🎯 Embeddings
 Explore game embeddings from user ratings:
 - View scree plots and explained variance

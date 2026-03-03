@@ -21,7 +21,6 @@ help:  ## Show this help message
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make years                       Show year configuration for model training'
 	@echo '  make evaluate                    Evaluate models over time using config.yaml'
-	@echo '  make evaluate-verbose            Run evaluation with verbose logging'
 	@echo '  make evaluate-dry-run            Show what evaluation would do without running'
 	@echo '  make predictions                 Generate predictions using trained models'
 	@echo '  make embeddings                  Train all embedding models (pca, svd, umap)'
@@ -89,6 +88,7 @@ hurdle: train_hurdle
 complexity: train_complexity score_complexity
 rating: train_rating
 users_rated: train_users_rated
+geek_rating: train_geek_rating
 
 ## train individual models
 # hurdle model
@@ -122,21 +122,21 @@ train_users_rated:
 	--model users_rated
 
 # geek rating
-geek_rating:
-	uv run -m src.models.outcomes.geek_rating
+train_geek_rating:
+	uv run -m src.pipeline.train \
+	--model geek_rating
 
 ## finalize
 finalize:
 	uv run -m src.pipeline.finalize
 
 # evaluate over time using config.yaml settings
-.PHONY: evaluate evaluate-verbose evaluate-dry-run
+.PHONY: evaluate evaluate-dry-run
 evaluate:
-	uv run -m src.pipeline.evaluate -simulate
-
+	uv run -m src.pipeline.evaluate
 
 evaluate-dry-run:  ## Show what evaluation would do without running
-	uv run -m src.pipeline.evaluate --dry-run --verbose
+	uv run -m src.pipeline.evaluate --dry-run
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
@@ -167,21 +167,6 @@ register_text_embeddings:
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
 
-
-
-# evaluate over time using config.yaml settings
-.PHONY: evaluate evaluate-verbose evaluate-dry-run evaluate-simulation
-evaluate:
-	uv run -m src.pipeline.evaluate -simulate
-
-evaluate-verbose:  ## Run evaluation with verbose logging
-	uv run -m src.pipeline.evaluate --verbose
-
-evaluate-dry-run:  ## Show what evaluation would do without running
-	uv run -m src.pipeline.evaluate --dry-run --verbose
-
-evaluate-simulation:  ## Run simulation-based evaluation
-	uv run -m src.pipeline.evaluate_simulation --save-predictions
 
 ### register models (reads from config.yaml)
 .PHONY: register register-dry-run
