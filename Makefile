@@ -250,8 +250,10 @@ docker-training:
 docker-scoring:
 	docker build -f docker/scoring.Dockerfile -t bgg-scoring-service .
 
-start-scoring:
+start-scoring: docker-scoring
+	@docker rm -f bgg-scoring 2>/dev/null || true
 	docker run -d \
+	--name bgg-scoring \
 	-p 8087:8080 \
 	-v $(PWD)/credentials:/app/credentials \
 	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
@@ -259,25 +261,25 @@ start-scoring:
 	bgg-scoring-service
 
 stop-scoring:
-	@containers=$$(docker ps -q --filter ancestor=bgg-scoring-service); \
-	if [ -n "$$containers" ]; then \
-		echo "Stopping scoring service containers: $$containers"; \
-		docker stop $$containers; \
+	@if docker ps -q --filter name=bgg-scoring | grep -q .; then \
+		echo "Stopping scoring service container"; \
+		docker stop bgg-scoring && docker rm bgg-scoring; \
 	else \
-		echo "No running scoring service containers found"; \
+		echo "No running scoring service container found"; \
+		docker rm bgg-scoring 2>/dev/null || true; \
 	fi
 
 # run scoring service locally
 scoring-service:
 	uv run -m scoring_service.score \
-    --service-url http://localhost:8080 \
+    --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
     --download
 
 scoring-service-upload:
 	uv run -m scoring_service.score \
-    --service-url http://localhost:8080 \
+    --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
 	--upload-to-bigquery \

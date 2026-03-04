@@ -27,6 +27,7 @@ from src.data.loader import BGGDataLoader  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
 from src.models.outcomes.simulation import simulate_batch, precompute_cholesky  # noqa: E402
+from src.models.explain import LinearExplainer  # noqa: E402
 from auth import GCPAuthenticator, AuthenticationError  # noqa: E402
 
 load_dotenv()
@@ -202,6 +203,25 @@ class PredictUsersRatedResponse(BaseModel):
     bq_job_id: Optional[str] = None
     predictions: Optional[List[Dict[str, Any]]] = None
 
+
+class ExplainGameRequest(BaseModel):
+    game_id: int
+    complexity_model_name: str
+    rating_model_name: str
+    users_rated_model_name: str
+    geek_rating_model_name: str
+    complexity_model_version: Optional[int] = None
+    rating_model_version: Optional[int] = None
+    users_rated_model_version: Optional[int] = None
+    geek_rating_model_version: Optional[int] = None
+    top_n: int = 15
+
+
+class ExplainGameResponse(BaseModel):
+    job_id: str
+    game_id: int
+    game_name: Optional[str] = None
+    explanations: Dict[str, Any]
 
 
 def get_registered_model(model_type: str) -> RegisteredModel:
@@ -1238,6 +1258,94 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
     except Exception as e:
         import traceback
         logger.error(f"Error in simulation: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/explain_game", response_model=ExplainGameResponse)
+async def explain_game_endpoint(request: ExplainGameRequest):
+    """Explain predictions for a game across all outcomes.
+
+    Returns per-feature contribution breakdowns for complexity, rating,
+    users_rated, and geek_rating, handling the model dependency chain.
+    """
+    import traceback
+
+    try:
+        job_id = str(uuid.uuid4())
+        logger.info(f"Explain request for game_id={request.game_id}, job_id={job_id}")
+
+        # Load game data
+        game_df = load_game_data(game_ids=[request.game_id])
+        if len(game_df) == 0:
+            raise HTTPException(
+                status_code=404, detail=f"Game {request.game_id} not found"
+            )
+
+        game_name = (
+            game_df["name"].iloc[0] if "name" in game_df.columns else None
+        )
+
+        # Load all 4 model pipelines
+        models = {}
+        model_configs = {
+            "complexity": (request.complexity_model_name, request.complexity_model_version),
+            "rating": (request.rating_model_name, request.rating_model_version),
+            "users_rated": (request.users_rated_model_name, request.users_rated_model_version),
+            "geek_rating": (request.geek_rating_model_name, request.geek_rating_model_version),
+        }
+        for model_type, (name, version) in model_configs.items():
+            registered = get_registered_model(model_type)
+            pipeline, _ = registered.load_registered_model(name, version)
+            models[model_type] = pipeline
+
+        explanations = {}
+
+        def explain_model(pipeline, features_df):
+            explainer = LinearExplainer(pipeline)
+            result = explainer.explain_with_prediction(features_df, top_n=request.top_n)
+            contributions = result["contributions"]
+            # Replace NaN/inf with None for JSON serialization
+            contributions = contributions.where(contributions.notna(), None)
+            return {
+                "prediction": float(result["prediction"]),
+                "intercept": float(result["intercept"]),
+                "contributions": contributions.to_dict(orient="records"),
+            }
+
+        # 1. Complexity (no dependencies)
+        explanations["complexity"] = explain_model(models["complexity"], game_df)
+
+        # 2. Rating and users_rated (depend on predicted_complexity)
+        features_with_complexity = game_df.copy()
+        features_with_complexity["predicted_complexity"] = explanations["complexity"]["prediction"]
+
+        explanations["rating"] = explain_model(models["rating"], features_with_complexity)
+        explanations["users_rated"] = explain_model(models["users_rated"], features_with_complexity)
+
+        # 3. Geek rating (depends on all upstream predictions)
+        features_for_geek = features_with_complexity.copy()
+        features_for_geek["predicted_rating"] = explanations["rating"]["prediction"]
+        # users_rated model predicts on log scale
+        predicted_users_rated_count = np.maximum(
+            np.round(np.expm1(explanations["users_rated"]["prediction"]) / 50) * 50,
+            25,
+        )
+        features_for_geek["predicted_users_rated_log"] = np.log1p(predicted_users_rated_count)
+
+        explanations["geek_rating"] = explain_model(models["geek_rating"], features_for_geek)
+
+        return ExplainGameResponse(
+            job_id=job_id,
+            game_id=request.game_id,
+            game_name=game_name,
+            explanations=explanations,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error explaining game: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 

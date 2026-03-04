@@ -161,6 +161,11 @@ class LinearExplainer:
 
         # Handle DataFrame output from preprocessor
         if isinstance(X_transformed, pd.DataFrame):
+            # Extract feature names from transformed output if still using generic names
+            if self.feature_names_[0].startswith("feature_"):
+                names = X_transformed.columns.tolist()
+                if len(names) == len(self.coef_):
+                    self.feature_names_ = names
             X_transformed = X_transformed.values
 
         values = X_transformed[0]

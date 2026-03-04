@@ -292,15 +292,23 @@ class Experiment:
     def load_pipeline(self) -> Pipeline:
         """Load the complete sklearn pipeline.
 
+        Prefers finalized pipeline if available, falls back to training pipeline.
+
         Returns:
             Complete sklearn pipeline including preprocessing and model
         """
+        finalized_path = self.exp_dir / "finalized" / "pipeline.pkl"
         pipeline_path = self.exp_dir / "pipeline.pkl"
-        if not pipeline_path.exists():
-            raise ValueError(f"No pipeline found for experiment {self.name}")
 
-        with open(pipeline_path, "rb") as f:
-            return pickle.load(f)
+        if finalized_path.exists():
+            with open(finalized_path, "rb") as f:
+                return pickle.load(f)
+
+        if pipeline_path.exists():
+            with open(pipeline_path, "rb") as f:
+                return pickle.load(f)
+
+        raise ValueError(f"No pipeline found for experiment {self.name}")
 
     def finalize_model(
         self,

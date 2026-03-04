@@ -182,14 +182,15 @@ def train_geek_rating(
     include_predictions = getattr(geek_config, "include_predictions", True)
 
     cmd = [
-        "uv", "run", "-m", "src.models.outcomes.geek_rating",
-        "--hurdle", experiment_names["hurdle"],
-        "--complexity", experiment_names["complexity"],
-        "--rating", experiment_names["rating"],
-        "--users-rated", experiment_names["users_rated"],
+        "uv", "run", "-m", "src.pipeline.train",
+        "--model", "geek_rating",
         "--experiment", geek_experiment,
         "--mode", mode,
         "--include-predictions", str(include_predictions).lower(),
+        "--hurdle-experiment", experiment_names["hurdle"],
+        "--complexity-experiment", experiment_names["complexity"],
+        "--rating-experiment", experiment_names["rating"],
+        "--users-rated-experiment", experiment_names["users_rated"],
     ]
 
     return run_command(cmd, f"Training geek_rating: {geek_experiment}", dry_run=dry_run)
