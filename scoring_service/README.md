@@ -36,22 +36,54 @@ The scoring service provides a REST API for scoring new data using registered mo
 
 ### API Endpoints
 
-#### Score Data
+#### Simulate Games (Bayesian Posterior Sampling)
+
 ```http
-POST /score
+POST /simulate_games
 ```
 
-Request body:
+Generates predictions with credible intervals via posterior sampling.
+
 ```json
 {
-  "model_type": "rating",
-  "model_name": "production_rating_model",
-  "model_version": 1,  // optional, uses latest if not specified
-  "start_year": 2020,  // optional
-  "end_year": 2025,    // optional
-  "data_source": "query",
-  "output_location": "path/to/save/predictions.parquet"  // optional
+  "hurdle_model_name": "hurdle-v2026",
+  "complexity_model_name": "complexity-v2026",
+  "rating_model_name": "rating-v2026",
+  "users_rated_model_name": "users_rated-v2026",
+  "geek_rating_model_name": "geek_rating-v2026",
+  "game_ids": [456459],
+  "n_samples": 1000,
+  "upload_to_data_warehouse": false
 }
+```
+
+#### Explain Game Predictions
+
+```http
+POST /explain_game
+```
+
+Returns per-feature contribution breakdowns for all outcomes (complexity, rating, users_rated, geek_rating). Handles the model dependency chain internally.
+
+```json
+{
+  "game_id": 456459,
+  "complexity_model_name": "complexity-v2026",
+  "rating_model_name": "rating-v2026",
+  "users_rated_model_name": "users_rated-v2026",
+  "geek_rating_model_name": "geek_rating-v2026",
+  "top_n": 15
+}
+```
+
+#### Individual Model Endpoints
+
+```http
+POST /predict_complexity
+POST /predict_hurdle
+POST /predict_rating
+POST /predict_users_rated
+POST /predict_games
 ```
 
 #### List Models
