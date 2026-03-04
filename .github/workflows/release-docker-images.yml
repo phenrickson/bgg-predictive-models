@@ -46,20 +46,19 @@ jobs:
 
     - name: Configure Docker Auth
       run: |
-        gcloud auth configure-docker gcr.io
         gcloud auth configure-docker us-central1-docker.pkg.dev
 
     - name: Tag and Push Scoring Service Release
       run: |
         # Pull the latest prod image
-        docker pull gcr.io/${{ env.GCP_PROJECT_ID }}/bgg-model-scoring:prod
-        
+        docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:prod
+
         # Tag with version
-        docker tag gcr.io/${{ env.GCP_PROJECT_ID }}/bgg-model-scoring:prod \
-          gcr.io/${{ env.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}
-        
+        docker tag us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:prod \
+          us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.version.outputs.version }}
+
         # Push version tag
-        docker push gcr.io/${{ env.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}
+        docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.version.outputs.version }}
 
     - name: Tag and Push Training Release
       run: |
@@ -78,7 +77,7 @@ jobs:
         echo "## Docker Images" >> release_notes.md
         echo "" >> release_notes.md
         echo "### Scoring Service" >> release_notes.md
-        echo "- \`gcr.io/${{ env.GCP_PROJECT_ID }}/bgg-model-scoring:${{ steps.version.outputs.version }}\`" >> release_notes.md
+        echo "- \`us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/scoring:${{ steps.version.outputs.version }}\`" >> release_notes.md
         echo "" >> release_notes.md
         echo "### Training" >> release_notes.md
         echo "- \`us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/training:${{ steps.version.outputs.version }}\`" >> release_notes.md
