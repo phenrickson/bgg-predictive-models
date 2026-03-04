@@ -7,35 +7,79 @@ import os
 import polars as pl
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from src.utils.logging import setup_logging
 from src.models.experiments import ExperimentTracker
+from src.models.outcomes.train import get_model_class
+from src.models.outcomes.data import load_scoring_data as _load_scoring_data
 
 logger = setup_logging()
 
 
-def get_model_info(finalized_dir: Path) -> Optional[int]:
-    """Extract final end year from finalized model directory.
+def get_model_info(finalized_dir: Path) -> dict:
+    """Extract metadata from finalized model directory.
 
     Args:
         finalized_dir: Path to finalized model directory
 
     Returns:
-        Final training end year if found, None otherwise
+        Dictionary with model info including:
+        - final_end_year: Training cutoff year
+        - use_embeddings: Whether model was trained with embeddings
     """
     info_path = finalized_dir / "info.json"
-    final_end_year = None
+    info = {}
 
     if info_path.exists():
         try:
             with open(info_path, "r") as f:
                 info = json.load(f)
-                final_end_year = info.get("final_end_year")
         except Exception as e:
             logger.info(f"Warning: Error reading model info: {e}")
 
-    return final_end_year
+    return info
+
+
+def get_finalized_model_info(
+    experiment_name: str,
+    model_type: str,
+) -> dict:
+    """Get metadata from the finalized model for an experiment.
+
+    Args:
+        experiment_name: Name of the experiment
+        model_type: Type of model
+
+    Returns:
+        Dictionary with finalized model metadata.
+    """
+    tracker = ExperimentTracker(model_type)
+
+    # Find the latest version of the experiment
+    experiments = tracker.list_experiments()
+    matching_experiments = [
+        exp for exp in experiments if exp["name"] == experiment_name
+    ]
+
+    if not matching_experiments:
+        raise ValueError(f"No experiments found matching {experiment_name}")
+
+    latest_experiment = max(matching_experiments, key=lambda x: x["version"])
+
+    # Load the experiment
+    experiment = tracker.load_experiment(
+        latest_experiment["name"], latest_experiment["version"]
+    )
+
+    # Get finalized model info
+    finalized_dir = experiment.exp_dir / "finalized"
+    info = get_model_info(finalized_dir)
+
+    # Also include experiment metadata for use_embeddings
+    info["use_embeddings"] = experiment.metadata.get("use_embeddings", False)
+
+    return info
 
 
 def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
@@ -105,7 +149,28 @@ def extract_threshold(experiment_name: str, model_type: str) -> Optional[float]:
     return None
 
 
-def load_model(experiment_name: str, model_type: Optional[str] = None):
+def get_known_model_types() -> list:
+    """Get list of known model types from the model registry.
+
+    Returns:
+        List of model type strings.
+    """
+    # Trigger registry population
+    try:
+        get_model_class("hurdle")
+    except ValueError:
+        pass
+
+    from src.models.outcomes.train import MODEL_REGISTRY
+
+    return list(MODEL_REGISTRY.keys())
+
+
+def load_model(
+    experiment_name: str,
+    model_type: Optional[str] = None,
+    base_dir: Optional[str] = None,
+):
     """Load the finalized model and preprocessing pipeline.
 
     Attempts to load the experiment by extracting the model type from the experiment name.
@@ -114,6 +179,7 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
     Args:
         experiment_name: Name of the experiment to load
         model_type: Optional model type to restrict the search
+        base_dir: Optional base directory for experiments (defaults to "models/experiments")
 
     Returns:
         Finalized pipeline
@@ -123,24 +189,18 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
         # If model_type is provided, only search in that type
         model_types = [model_type]
     else:
-        # Otherwise, search in all known model types
-        model_types = ["hurdle", "rating", "complexity", "users_rated"]
+        # Otherwise, search in all known model types from registry
+        model_types = get_known_model_types()
 
-    # logger.info diagnostic information
-    logger.info(f"Attempting to load experiment: {experiment_name}")
-    logger.info(f"Searching in model types: {model_types}")
 
     # Try each model type until successful
     for current_model_type in model_types:
         try:
-            logger.info(f"Trying model type: {current_model_type}")
-            tracker = ExperimentTracker(current_model_type)
-
-            # logger.info available experiments for this model type
+            if base_dir:
+                tracker = ExperimentTracker(current_model_type, base_dir=base_dir)
+            else:
+                tracker = ExperimentTracker(current_model_type)
             experiments = tracker.list_experiments()
-            logger.info(
-                f"Available experiments for {current_model_type}: {[exp['full_name'] for exp in experiments]}"
-            )
 
             # Handle cases with or without version
             if "/" in experiment_name:
@@ -155,9 +215,6 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                 ]
 
                 if not matching_experiments:
-                    logger.info(
-                        f"No experiments found matching base name: {experiment_name}"
-                    )
                     continue
 
                 # Sort and get the latest version
@@ -165,64 +222,52 @@ def load_model(experiment_name: str, model_type: Optional[str] = None):
                     matching_experiments, key=lambda x: x["version"]
                 )
 
-                logger.info(
-                    f"Auto-selecting latest version: {latest_experiment['full_name']}"
-                )
                 experiment = tracker.load_experiment(
                     latest_experiment["name"], latest_experiment["version"]
                 )
 
-            # logger.info experiment directory for debugging
-            logger.info(f"Experiment directory: {experiment.exp_dir}")
+            # Look for pipeline in multiple locations (in order of preference)
+            import joblib
 
-            # Explicitly look for finalized model
-            finalized_path = experiment.exp_dir / "finalized" / "pipeline.pkl"
-            logger.info(f"Checking finalized model path: {finalized_path}")
-            logger.info(f"Path exists: {finalized_path.exists()}")
+            potential_paths = [
+                # Finalized model in experiment dir
+                experiment.exp_dir / "finalized" / "pipeline.pkl",
+                # Direct pipeline in experiment dir (e.g., from time-based eval)
+                experiment.exp_dir / "pipeline.pkl",
+            ]
 
-            if not finalized_path.exists():
-                # Look for latest version's finalized model
-                version_dirs = [
-                    d
-                    for d in experiment.exp_dir.iterdir()
-                    if d.is_dir() and d.name.startswith("v")
-                ]
-                logger.info(
-                    f"Version directories found: {[d.name for d in version_dirs]}"
+            # Also check version subdirectories
+            version_dirs = [
+                d
+                for d in experiment.exp_dir.iterdir()
+                if d.is_dir() and d.name.startswith("v")
+            ]
+
+            if version_dirs:
+                latest_version_dir = max(
+                    version_dirs, key=lambda x: int(x.name[1:])
                 )
+                potential_paths.extend([
+                    latest_version_dir / "finalized" / "pipeline.pkl",
+                    latest_version_dir / "pipeline.pkl",
+                ])
 
-                if version_dirs:
-                    latest_version_dir = max(
-                        version_dirs, key=lambda x: int(x.name[1:])
-                    )
-                    finalized_path = latest_version_dir / "finalized" / "pipeline.pkl"
-                    logger.info(
-                        f"Checking alternative finalized model path: {finalized_path}"
-                    )
-                    logger.info(f"Alternative path exists: {finalized_path.exists()}")
+            # Try each path
+            for pipeline_path in potential_paths:
+                if pipeline_path.exists():
+                    logger.info(f"Loaded {experiment_name} from {pipeline_path}")
+                    return joblib.load(pipeline_path)
 
-            if finalized_path.exists():
-                logger.info(
-                    f"Successfully loaded finalized model from: {finalized_path}"
-                )
-                import joblib
+            raise FileNotFoundError(f"No model found for {experiment_name}")
 
-                return joblib.load(finalized_path)
-
-            raise FileNotFoundError(f"No finalized model found for {experiment_name}")
-
-        except (ValueError, FileNotFoundError, Exception) as e:
-            logger.info(
-                f"Failed to load in {current_model_type} model type: {type(e).__name__}: {e}"
-            )
-            import traceback
-
-            traceback.print_exc()
+        except (ValueError, FileNotFoundError, Exception):
             continue
 
     # If no model type works, raise an error
+    search_dir = base_dir or "models/experiments"
     raise ValueError(
-        f"Could not load experiment '{experiment_name}' in any known model type"
+        f"Could not load experiment '{experiment_name}' in any known model type "
+        f"(searched in {search_dir})"
     )
 
 
@@ -233,9 +278,13 @@ def load_scoring_data(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     complexity_predictions: Optional[pl.DataFrame] = None,
+    use_embeddings: Optional[bool] = None,
 ) -> pl.DataFrame:
     """
     Load data for scoring based on provided parameters.
+
+    Uses the centralized data loader from src.models.outcomes.data to ensure
+    consistent feature loading between training and scoring.
 
     Args:
         data_path: Optional path to a CSV file for scoring
@@ -244,68 +293,76 @@ def load_scoring_data(
         start_year: First year of data to include
         end_year: Last year of data to include
         complexity_predictions: Optional DataFrame with pre-computed complexity predictions
+            (alternative to complexity_predictions_path)
+        use_embeddings: Whether to load embeddings. If None, reads from finalized model info.
 
     Returns:
         Polars DataFrame with data to be scored
     """
-    from src.data.loader import BGGDataLoader
-    from src.utils.config import load_config
-    from src.models.experiments import ExperimentTracker
-
-    # Load configuration and data loader
-    config = load_config()
-    loader = BGGDataLoader(config.get_bigquery_config())
-
     # If data path is provided, load directly from CSV
     if data_path:
         return pl.read_csv(data_path)
 
-    # Retrieve the finalized model metadata
-    tracker = ExperimentTracker(model_type)
+    # Get model class for data_config
+    model_class = get_model_class(model_type)
+    model = model_class()
+    data_config = model.data_config
 
-    # Find the latest version of the experiment
-    experiments = tracker.list_experiments()
-    matching_experiments = [
-        exp for exp in experiments if exp["name"] == experiment_name
-    ]
-    if not matching_experiments:
-        raise ValueError(f"No experiments found matching {experiment_name}")
+    # Get finalized model info to determine start_year and use_embeddings
+    model_info = get_finalized_model_info(experiment_name, model_type)
+    final_end_year = model_info.get("final_end_year")
 
-    latest_experiment = max(matching_experiments, key=lambda x: x["version"])
-
-    # Load the experiment with the latest version
-    experiment = tracker.load_experiment(
-        latest_experiment["name"], latest_experiment["version"]
-    )
-
-    # Get model info
-    finalized_dir = experiment.exp_dir / "finalized"
-    final_end_year = get_model_info(finalized_dir)
-
-    # Determine start and end years for scoring
+    # Determine start year for scoring (year after training cutoff)
     if start_year is None:
         start_year = final_end_year + 1 if final_end_year else 0
 
+    # Default end year to far future
     if end_year is None:
-        # Default to 5 years greater than the current year
         end_year = datetime.now().year + 5
 
-    # Construct where clause for year filtering
-    where_clause = [f"year_published >= {start_year}"]
+    # Determine whether to use embeddings from model info if not specified
+    if use_embeddings is None:
+        use_embeddings = model_info.get("use_embeddings", False)
 
-    # Add end year filtering if specified
-    if end_year is not None:
-        where_clause.append(f"year_published <= {end_year}")
+    logger.info(f"Loading scoring data: years {start_year}-{end_year}")
+    logger.info(f"Use embeddings: {use_embeddings}")
 
-    # Combine where clauses
-    where_str = " AND ".join(where_clause)
+    # Handle complexity predictions - can be passed as DataFrame or path
+    complexity_predictions_path = None
+    if complexity_predictions is not None:
+        # If passed as DataFrame, we'll join manually after loading
+        pass
+    elif data_config.requires_complexity_predictions:
+        # Auto-load complexity predictions from config
+        from src.utils.config import load_config
+        config = load_config()
+        complexity_config = config.models.get("complexity")
+        if complexity_config and hasattr(complexity_config, "experiment_name"):
+            # Look for predictions in the predictions directory
+            predictions_dir = Path(config.predictions_dir)
+            complexity_predictions_path = predictions_dir / f"{complexity_config.experiment_name}.parquet"
+            if complexity_predictions_path.exists():
+                logger.info(f"Auto-loading complexity predictions from {complexity_predictions_path}")
+            else:
+                logger.warning(
+                    f"Complexity predictions not found at {complexity_predictions_path}. "
+                    "Run score_complexity first or provide --complexity-predictions path."
+                )
+                complexity_predictions_path = None
 
-    # Load data with optional filtering
-    df = loader.load_data(where_clause=where_str, preprocessor=None)
+    # Use centralized data loader
+    df = _load_scoring_data(
+        data_config=data_config,
+        start_year=start_year,
+        end_year=end_year,
+        use_embeddings=use_embeddings,
+        complexity_predictions_path=str(complexity_predictions_path) if complexity_predictions_path else None,
+        local_data_path=None,
+    )
 
-    # If complexity predictions are provided and model requires them, join predictions
-    if complexity_predictions is not None and model_type in ["rating", "users_rated"]:
-        logger.info("Joining pre-computed complexity predictions")
+    # If complexity predictions provided as DataFrame, join them manually
+    if complexity_predictions is not None and data_config.requires_complexity_predictions:
+        logger.info("Joining pre-computed complexity predictions from DataFrame")
         df = df.join(
             complexity_predictions.select(["game_id", "predicted_complexity"]),
             on="game_id",
@@ -326,108 +383,122 @@ def predict_data(
     experiment_name: str,
     model_type: str = "hurdle",
     complexity_predictions: Optional[pl.DataFrame] = None,
-) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[float]]:
+    return_uncertainty: bool = False,
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[float], Optional[np.ndarray]]:
     """
     Predict data using the given pipeline and model type.
+
+    Uses model classes from src.models.outcomes to handle model-specific
+    prediction logic and post-processing.
 
     Args:
         pipeline: Trained model pipeline
         df: Input DataFrame to predict
         experiment_name: Name of experiment for threshold retrieval
         model_type: Type of model being used
+        complexity_predictions: Unused, kept for backward compatibility
+        return_uncertainty: If True, return uncertainty estimates for Bayesian models
 
     Returns:
-        Tuple of (predicted_values, None, threshold)
+        Tuple of (predicted_values, predicted_class, threshold, std_dev)
+        std_dev is None for non-Bayesian models or when return_uncertainty=False
     """
-    import numpy as np
+    # Get the model class for this type
+    model_class = get_model_class(model_type)
+    model = model_class()
+    model.pipeline = pipeline
 
-    # Predict based on model type
-    if model_type == "hurdle":
-        # Use predict_proba for hurdle model
-        predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
+    df_pandas = df.to_pandas()
 
-        # Try to extract threshold from the experiment
+    logger.info(f"{model_type.capitalize()} Model Prediction:")
+    logger.info(f"Input DataFrame shape: {df.shape}")
+
+    std_dev = None
+
+    # Handle classification vs regression
+    if model.model_task == "classification":
+        # For hurdle model, get probabilities
+        raw_predictions = model.predict_proba(df_pandas)[:, 1]
+
+        # Get threshold from experiment metadata
         threshold = extract_threshold(experiment_name, model_type)
-
-        # Use default threshold of 0.5 if none found
         threshold = threshold if threshold is not None else 0.5
+        model.optimal_threshold = threshold
+
         logger.info(f"Using classification threshold: {threshold}")
 
-        predicted_class = predictions >= threshold
-        predicted_values = predictions
-    elif model_type == "complexity":
-        # Diagnostic logging for complexity model
-        logger.info("Complexity Model Prediction Diagnostics:")
-
-        # Convert to pandas for prediction
-        df_pandas = df.to_pandas()
-
-        logger.info(f"Input DataFrame shape: {df.shape}")
-        logger.info(f"Input columns: {df.columns}")
-
-        # logger.info first few rows of input data
-        logger.info("First few rows of input data:")
-        logger.info(df_pandas.head())
-
-        # Predict and log details
-        predictions = pipeline.predict(df_pandas)
-        logger.info(f"Raw predictions: {predictions}")
-        logger.info(
-            f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
-        )
-
-        # Constrain predictions to 1-5 range
-        predicted_values = np.clip(predictions, 1, 5)
-        logger.info(f"Constrained predictions: {predicted_values}")
-
-        predicted_class = None  # No predicted_class for regression
-        threshold = None  # No threshold for complexity
-    elif model_type in ["users_rated", "rating"]:
-        # Regression outcome for rating and users_rated models
-        logger.info(f"{model_type.capitalize()} Model Prediction Diagnostics:")
-
-        # Convert to pandas for prediction
-        df_pandas = df.to_pandas()
-
-        logger.info(f"Input DataFrame shape: {df.shape}")
-        logger.info(f"Input columns: {df.columns}")
-
-        # Predict and log details
-        predictions = pipeline.predict(df_pandas)
-        logger.info(f"Raw predictions: {predictions}")
-        logger.info(
-            f"Prediction stats: min={predictions.min()}, max={predictions.max()}, mean={predictions.mean()}"
-        )
-
-        # Inverse transform log predictions for users_rated
-        if model_type == "users_rated":
-            # First apply expm1, then round to nearest 50, with a minimum of 25
-            predicted_values = np.maximum(np.round(np.expm1(predictions) / 50) * 50, 25)
-        else:
-            # Constrain rating predictions to appropriate range
-            predicted_values = np.clip(predictions, 1, 10)
-
-        logger.info(f"Transformed predictions: {predicted_values}")
-
-        predicted_class = None  # No predicted_class for regression
-        threshold = None  # No threshold for regression
-    elif model_type == "hurdle":
-        # Use predict_proba for hurdle model
-        predictions = pipeline.predict_proba(df.to_pandas())[:, 1]
-
-        # Try to extract threshold from the experiment
-        threshold = extract_threshold(experiment_name, model_type)
-
-        # Use default threshold of 0.5 if none found
-        threshold = threshold if threshold is not None else 0.5
-        logger.info(f"Using classification threshold: {threshold}")
-
-        predicted_class = predictions >= threshold
-        predicted_values = predictions
+        predicted_class = raw_predictions >= threshold
+        predicted_values = raw_predictions
     else:
-        raise ValueError(f"Unsupported model type: {model_type}")
+        # For regression models, check for uncertainty support
+        if return_uncertainty and model.supports_uncertainty:
+            result = model.predict_with_uncertainty(df_pandas)
+            predicted_values = result.values
+            std_dev = result.std
 
-    return predicted_values, predicted_class, threshold
+            logger.info(
+                f"Prediction stats: min={predicted_values.min():.4f}, "
+                f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
+            )
+            if std_dev is not None:
+                logger.info(
+                    f"Uncertainty stats: min_std={std_dev.min():.4f}, "
+                    f"max_std={std_dev.max():.4f}, mean_std={std_dev.mean():.4f}"
+                )
+        else:
+            # Standard prediction path
+            raw_predictions = pipeline.predict(df_pandas)
+
+            logger.info(
+                f"Raw prediction stats: min={raw_predictions.min():.4f}, "
+                f"max={raw_predictions.max():.4f}, mean={raw_predictions.mean():.4f}"
+            )
+
+            # Use model's post-processing (clipping, inverse transforms, etc.)
+            predicted_values = model.post_process_predictions(raw_predictions)
+
+            logger.info(
+                f"Post-processed stats: min={predicted_values.min():.4f}, "
+                f"max={predicted_values.max():.4f}, mean={predicted_values.mean():.4f}"
+            )
+
+        predicted_class = None
+        threshold = None
+
+    return predicted_values, predicted_class, threshold, std_dev
+
+
+def compute_confidence_bounds(
+    values: np.ndarray,
+    std: np.ndarray,
+    level: float,
+    lower_bound: Optional[float] = None,
+    upper_bound: Optional[float] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute confidence interval bounds.
+
+    Args:
+        values: Point estimates.
+        std: Standard deviations.
+        level: Confidence level (e.g., 0.95 for 95% CI).
+        lower_bound: Optional lower clipping bound.
+        upper_bound: Optional upper clipping bound.
+
+    Returns:
+        Tuple of (lower, upper) bounds.
+    """
+    from scipy import stats
+
+    z = stats.norm.ppf((1 + level) / 2)
+    lower = values - z * std
+    upper = values + z * std
+
+    if lower_bound is not None:
+        lower = np.maximum(lower, lower_bound)
+    if upper_bound is not None:
+        upper = np.minimum(upper, upper_bound)
+
+    return lower, upper
 
 
 def prepare_results(
@@ -436,6 +507,8 @@ def prepare_results(
     predicted_class: Optional[np.ndarray],
     model_type: str,
     threshold: Optional[float] = None,
+    std_dev: Optional[np.ndarray] = None,
+    confidence_levels: Optional[List[float]] = None,
 ) -> pl.DataFrame:
     """
     Prepare results DataFrame based on model type.
@@ -446,34 +519,73 @@ def prepare_results(
         predicted_class: Predicted classes (for classification models)
         model_type: Type of model being used
         threshold: Optional threshold used for classification
+        std_dev: Optional standard deviation for uncertainty quantification
+        confidence_levels: List of confidence levels for intervals (default: [0.80, 0.90, 0.95])
 
     Returns:
         Results DataFrame with predictions
     """
+    if confidence_levels is None:
+        confidence_levels = [0.80, 0.90, 0.95]
+
+    # Model-specific bounds for clipping
+    BOUNDS = {
+        "complexity": (1, 5),
+        "rating": (1, 10),
+        "users_rated": (0, None),
+    }
+
     # Select columns based on model type
     if model_type == "complexity":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_complexity", predicted_values),
-                pl.Series("complexity", df.select("complexity").to_pandas().squeeze()),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_complexity", predicted_values),
+            pl.Series("complexity", df.select("complexity").to_pandas().squeeze()),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_complexity_std", std_dev))
+            lb, ub = BOUNDS["complexity"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_complexity_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_complexity_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "rating":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_rating", predicted_values),
-                pl.Series("rating", df.select("rating").to_pandas().squeeze()),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_rating", predicted_values),
+            pl.Series("rating", df.select("rating").to_pandas().squeeze()),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_rating_std", std_dev))
+            lb, ub = BOUNDS["rating"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_rating_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_rating_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "users_rated":
-        results = df.select(["game_id", "name", "year_published"]).with_columns(
-            [
-                pl.Series("predicted_users_rated", predicted_values),
-                pl.Series(
-                    "users_rated", df.select("users_rated").to_pandas().squeeze()
-                ),
-            ]
-        )
+        columns = [
+            pl.Series("predicted_users_rated", predicted_values),
+            pl.Series(
+                "users_rated", df.select("users_rated").to_pandas().squeeze()
+            ),
+        ]
+        if std_dev is not None:
+            columns.append(pl.Series("predicted_users_rated_std", std_dev))
+            lb, ub = BOUNDS["users_rated"]
+            for level in confidence_levels:
+                level_pct = int(level * 100)
+                lower, upper = compute_confidence_bounds(predicted_values, std_dev, level, lb, ub)
+                columns.extend([
+                    pl.Series(f"predicted_users_rated_lower_{level_pct}", lower),
+                    pl.Series(f"predicted_users_rated_upper_{level_pct}", upper),
+                ])
+        results = df.select(["game_id", "name", "year_published"]).with_columns(columns)
     elif model_type == "hurdle":
         # Existing logic for hurdle model
         results = df.select(["game_id", "name", "year_published"]).with_columns(
@@ -543,6 +655,16 @@ def save_and_display_results(
     # Save results locally
     results.write_parquet(str(output_path))
     logger.info(f"Predictions for {experiment_name} saved to {output_path}")
+
+    # For complexity model, also save to predictions_dir for downstream models
+    if model_type == "complexity":
+        from src.utils.config import load_config
+        config = load_config()
+        predictions_dir = Path(config.predictions_dir)
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        downstream_path = predictions_dir / f"{experiment_name}.parquet"
+        results.write_parquet(str(downstream_path))
+        logger.info(f"Complexity predictions also saved to {downstream_path}")
 
     # Also save to GCS if bucket name is configured
     bucket_name = os.getenv("GCS_BUCKET_NAME")
@@ -630,6 +752,7 @@ def score_data(
     output_path: str = None,
     model_type: str = "hurdle",
     complexity_predictions: Optional[pl.DataFrame] = None,
+    return_uncertainty: bool = False,
 ):
     """Score data using the finalized model.
 
@@ -641,22 +764,35 @@ def score_data(
         min_ratings: Minimum number of ratings to filter games (default 0)
         output_path: Path to save predictions (optional, will use experiment name if not provided)
         model_type: Type of model to use (default: hurdle)
+        complexity_predictions: Optional pre-computed complexity predictions DataFrame
+        return_uncertainty: If True, include uncertainty estimates for Bayesian models
     """
     # Handle case where model type is included in experiment name
     if experiment_name is not None and "/" in experiment_name:
         # If experiment name includes model type (e.g., 'rating/full-features')
         model_type, experiment_name = experiment_name.split("/")
 
-    # Determine experiment name if not provided
+    # Determine experiment name if not provided - read from config first
     if experiment_name is None:
-        from src.models.experiments import ExperimentTracker
+        from src.utils.config import load_config
 
-        tracker = ExperimentTracker(model_type)
-        experiments = tracker.list_experiments()
-        if not experiments:
-            raise ValueError(f"No {model_type} model experiments found.")
-        experiment = max(experiments, key=lambda x: x.get("version", 0))
-        experiment_name = experiment["name"]
+        config = load_config()
+        model_config = config.models.get(model_type)
+
+        if model_config and hasattr(model_config, "experiment_name") and model_config.experiment_name:
+            experiment_name = model_config.experiment_name
+            logger.info(f"Using experiment from config: {experiment_name}")
+        else:
+            # Fall back to latest experiment if not in config
+            from src.models.experiments import ExperimentTracker
+
+            tracker = ExperimentTracker(model_type)
+            experiments = tracker.list_experiments()
+            if not experiments:
+                raise ValueError(f"No {model_type} model experiments found.")
+            experiment = max(experiments, key=lambda x: x.get("version", 0))
+            experiment_name = experiment["name"]
+            logger.info(f"Using latest experiment (not found in config): {experiment_name}")
 
     # logger.info debug information about model type
     logger.info(f"Using model type: {model_type}")
@@ -675,17 +811,18 @@ def score_data(
     )
 
     # Predict data
-    predicted_prob, predicted_class, threshold = predict_data(
+    predicted_prob, predicted_class, threshold, std_dev = predict_data(
         pipeline,
         df,
         experiment_name,
         model_type=model_type,
         complexity_predictions=complexity_predictions,
+        return_uncertainty=return_uncertainty,
     )
 
     # Prepare results
     results = prepare_results(
-        df, predicted_prob, predicted_class, model_type, threshold
+        df, predicted_prob, predicted_class, model_type, threshold, std_dev
     )
 
     # Save and display results
@@ -704,12 +841,17 @@ def main():
         help="Name of experiment with finalized model. Can include model type (e.g., 'rating/full-features')",
     )
     parser.add_argument(
-        "--model-type",
+        "--model",
         default="hurdle",
-        help="Model type directory to search for experiments (default: hurdle)",
+        help="Model type (hurdle, complexity, rating, users_rated)",
     )
     parser.add_argument("--start-year", type=int, help="First year of data to include")
     parser.add_argument("--end-year", type=int, help="Last year of data to include")
+    parser.add_argument(
+        "--all-years",
+        action="store_true",
+        help="Score all data regardless of year (ignores start-year/end-year defaults)",
+    )
     parser.add_argument(
         "--min-ratings",
         type=int,
@@ -721,6 +863,12 @@ def main():
         "--complexity-predictions",
         help="Path to parquet file with pre-computed complexity predictions",
     )
+    parser.add_argument(
+        "--with-uncertainty",
+        action="store_true",
+        default=False,
+        help="Include uncertainty estimates in output (for Bayesian models)",
+    )
 
     args = parser.parse_args()
 
@@ -728,7 +876,7 @@ def main():
     if args.experiment and "/" in args.experiment:
         model_type, experiment_name = args.experiment.split("/")
     else:
-        model_type = args.model_type
+        model_type = args.model
         experiment_name = args.experiment
 
     # Load complexity predictions if provided
@@ -736,15 +884,24 @@ def main():
     if args.complexity_predictions:
         complexity_predictions = pl.read_parquet(args.complexity_predictions)
 
+    # Handle --all-years flag
+    start_year = args.start_year
+    end_year = args.end_year
+    if args.all_years:
+        # Use sentinel values that will be interpreted as "no filter"
+        start_year = -9999  # Before any game
+        end_year = 9999     # Far future
+
     score_data(
         data_path=args.data,
         experiment_name=experiment_name,
-        start_year=args.start_year,
-        end_year=args.end_year,
+        start_year=start_year,
+        end_year=end_year,
         min_ratings=args.min_ratings,
         output_path=args.output,
         model_type=model_type,
         complexity_predictions=complexity_predictions,
+        return_uncertainty=args.with_uncertainty,
     )
 
 

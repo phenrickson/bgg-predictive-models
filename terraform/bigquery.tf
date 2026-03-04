@@ -152,6 +152,46 @@ resource "google_bigquery_table" "ml_predictions_landing" {
       mode = "NULLABLE"
     },
     {
+      name = "complexity_lower_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "complexity_upper_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "rating_lower_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "rating_upper_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "users_rated_lower_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "users_rated_upper_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "geek_rating_lower_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
+      name = "geek_rating_upper_90"
+      type = "FLOAT"
+      mode = "NULLABLE"
+    },
+    {
       name = "score_ts"
       type = "TIMESTAMP"
       mode = "REQUIRED"

@@ -48,7 +48,7 @@ bgg-predictive-models/
   - **Complexity Model**: Estimates game complexity (CatBoost/Ridge regression)
   - **Rating Model**: Predicts average game rating (CatBoost/Ridge regression)
   - **Users Rated Model**: Predicts number of users who will rate the game (LightGBM/Ridge regression)
-- **Geek Rating Calculation**: Bayesian average calculation using predicted components
+- **Geek Rating Model**: Direct regression model using predicted components as features
 - **Time-Based Evaluation**: Rolling window validation across multiple years
 - **Experiment Tracking**: Comprehensive experiment management and versioning
 - **Model Registration**: Production model registration with validation and versioning
@@ -247,8 +247,7 @@ The scoring service generates predictions with these columns:
 | `predicted_complexity` | Predicted complexity/weight score |
 | `predicted_rating` | Predicted average rating |
 | `predicted_users_rated` | Predicted number of raters (min 25, rounded to 50) |
-| `predicted_geek_rating` | Bayesian weighted rating (the "BGG Rank" score) |
-| `model_versions` | JSON metadata with model names/versions |
+| `predicted_geek_rating` | Predicted geek rating from direct regression model |
 | `score_ts` | Timestamp of prediction |
 
 Predictions are stored in:
@@ -289,6 +288,12 @@ gcloud builds submit --config scoring_service/cloudbuild.yaml
 | `/health` | GET | Health check with auth status |
 | `/auth/status` | GET | Detailed authentication info |
 | `/predict_games` | POST | Generate predictions |
+| `/simulate_games` | POST | Predictions with Bayesian posterior sampling and credible intervals |
+| `/predict_complexity` | POST | Complexity predictions with change detection |
+| `/predict_hurdle` | POST | Hurdle probability predictions |
+| `/predict_rating` | POST | Rating predictions |
+| `/predict_users_rated` | POST | Users rated predictions |
+| `/explain_game` | POST | Per-feature contribution breakdown for a game across all outcomes |
 | `/models` | GET | List registered models |
 | `/model/{type}/{name}/info` | GET | Model details |
 
@@ -297,24 +302,37 @@ gcloud builds submit --config scoring_service/cloudbuild.yaml
 ```python
 import requests
 
-# Score new games
+SERVICE_URL = "http://localhost:8087"
+
+# Simulate games with Bayesian posterior sampling
 response = requests.post(
-    "http://localhost:8080/predict_games",
+    f"{SERVICE_URL}/simulate_games",
     json={
         "hurdle_model_name": "hurdle-v2026",
         "complexity_model_name": "complexity-v2026",
         "rating_model_name": "rating-v2026",
         "users_rated_model_name": "users_rated-v2026",
-        "start_year": 2025,
-        "end_year": 2030,
-        "prior_rating": 5.5,
-        "prior_weight": 2000,
-        "upload_to_data_warehouse": True
+        "geek_rating_model_name": "geek_rating-v2026",
+        "game_ids": [456459],
+        "n_samples": 1000,
+        "upload_to_data_warehouse": False
     }
 )
+# Returns: predictions with point estimates and 90%/50% credible intervals
 
-result = response.json()
-# Returns: job_id, model_details, output_location, data_warehouse_job_id
+# Explain a game's predictions (feature contributions)
+response = requests.post(
+    f"{SERVICE_URL}/explain_game",
+    json={
+        "game_id": 456459,
+        "complexity_model_name": "complexity-v2026",
+        "rating_model_name": "rating-v2026",
+        "users_rated_model_name": "users_rated-v2026",
+        "geek_rating_model_name": "geek_rating-v2026",
+        "top_n": 15
+    }
+)
+# Returns: per-feature contributions for complexity, rating, users_rated, geek_rating
 ```
 
 ## Configuration

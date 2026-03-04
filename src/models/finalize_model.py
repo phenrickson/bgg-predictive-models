@@ -12,7 +12,7 @@ from src.models.experiments import ExperimentTracker
 from src.models.experiments import Experiment
 from src.utils.config import load_config
 from src.data.loader import BGGDataLoader
-from src.models.hurdle import setup_logging
+from src.utils.logging import setup_logging
 from src.models.training import calculate_sample_weights  # Import the function
 
 

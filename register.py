@@ -4,7 +4,8 @@ Registration script that replicates the 'make register' functionality.
 Registers all trained models to the scoring service.
 """
 
-import yaml
+import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ def load_registration_config() -> Dict[str, Any]:
             "complexity": config.models["complexity"].experiment_name,
             "rating": config.models["rating"].experiment_name,
             "users_rated": config.models["users_rated"].experiment_name,
+            "geek_rating": config.models["geek_rating"].experiment_name,
         },
     }
 
@@ -126,8 +128,80 @@ def register_hurdle(config: Dict[str, Any]) -> None:
     run_command(cmd, "Registering hurdle model")
 
 
+def register_geek_rating(config: Dict[str, Any]) -> None:
+    """Register geek_rating model"""
+    cmd = [
+        "uv",
+        "run",
+        "-m",
+        "scoring_service.register_model",
+        "--model-type",
+        "geek_rating",
+        "--experiment",
+        config["experiments"]["geek_rating"],
+        "--name",
+        f"geek_rating-v{config['current_year']}",
+        "--description",
+        f"Production (v{config['current_year']}) direct model for predicting geek rating",
+    ]
+    run_command(cmd, "Registering geek_rating model")
+
+
+def dry_run(config: Dict[str, Any]) -> bool:
+    """Validate environment, config, and experiment existence without uploading."""
+    from src.utils.config import load_config
+    from src.models.experiments import ExperimentTracker
+
+    app_config = load_config()
+    environment = app_config.get_environment_prefix()
+    bucket_name = app_config.get_bucket_name()
+    project_id = os.getenv("ML_PROJECT_ID") or os.getenv("GCP_PROJECT_ID")
+
+    logger.info(f"Environment: {environment}")
+    logger.info(f"GCS Bucket:  {bucket_name}")
+    logger.info(f"Project ID:  {project_id}")
+    logger.info(f"GCS Prefix:  {environment}/models/registered/")
+    logger.info(f"Year:        {config['current_year']}")
+
+    all_ok = True
+    for model_type, experiment_name in config["experiments"].items():
+        registered_name = f"{model_type}-v{config['current_year']}"
+        gcs_path = f"gs://{bucket_name}/{environment}/models/registered/{model_type}/{registered_name}/"
+
+        tracker = ExperimentTracker(model_type)
+        experiments = tracker.list_experiments()
+        matching = [e for e in experiments if e["name"] == experiment_name]
+
+        if matching:
+            latest = max(matching, key=lambda x: x["version"])
+            logger.info(
+                f"  ✓ {model_type}: experiment='{experiment_name}' "
+                f"(v{latest['version']}) -> {gcs_path}"
+            )
+        else:
+            logger.info(
+                f"  ✗ {model_type}: experiment='{experiment_name}' NOT FOUND locally"
+            )
+            all_ok = False
+
+    if all_ok:
+        logger.info("\nDry run passed. All experiments found.")
+    else:
+        logger.info("\nDry run failed. Missing experiments listed above.")
+
+    return all_ok
+
+
 def main():
     """Main registration pipeline - replicates 'make register'"""
+    parser = argparse.ArgumentParser(description="Register trained models to scoring service")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config, environment, and experiments without uploading",
+    )
+    args = parser.parse_args()
+
     logger.info("Starting BGG Model Registration Pipeline")
     logger.info("=======================================")
 
@@ -136,35 +210,43 @@ def main():
         config = load_registration_config()
         logger.info("Loaded configuration from config.yaml")
         logger.info(f"Current year: {config['current_year']}")
+
+        if args.dry_run:
+            ok = dry_run(config)
+            if not ok:
+                sys.exit(1)
+            return
+
         logger.info(f"Registering models with version: v{config['current_year']}")
 
-        # Register models in sequence (matches Makefile order)
-        # Register complexity model
+        # Register models in sequence
         logger.info(
             f"\n📝 Registering complexity model ({config['experiments']['complexity']})"
         )
         register_complexity(config)
 
-        # Register rating model
         logger.info(
             f"\n📝 Registering rating model ({config['experiments']['rating']})"
         )
         register_rating(config)
 
-        # Register users_rated model
         logger.info(
             f"\n📝 Registering users_rated model ({config['experiments']['users_rated']})"
         )
         register_users_rated(config)
 
-        # Register hurdle model
         logger.info(
             f"\n📝 Registering hurdle model ({config['experiments']['hurdle']})"
         )
         register_hurdle(config)
 
+        logger.info(
+            f"\n📝 Registering geek_rating model ({config['experiments']['geek_rating']})"
+        )
+        register_geek_rating(config)
+
         logger.info(f"\n{'=' * 60}")
-        logger.info("🎉 All models registered successfully!")
+        logger.info("All models registered successfully!")
         logger.info(
             f"Models are now available in the scoring service with version v{config['current_year']}"
         )

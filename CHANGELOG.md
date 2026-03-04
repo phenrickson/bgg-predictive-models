@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-03-04
+
+### Added
+
+- **Prediction Explainability Endpoint**: `/explain_game` endpoint on the scoring service
+  - Returns per-feature contribution breakdowns for all outcomes (complexity, rating, users_rated, geek_rating)
+  - Handles model dependency chain internally (complexity → rating/users_rated → geek_rating)
+  - Uses `LinearExplainer` to decompose linear model predictions into feature contributions
+  - Returns feature names, raw values, coefficients, and contribution magnitudes
+- **Bayesian Simulation Endpoint**: `/simulate_games` endpoint with posterior sampling
+  - Generates credible intervals (90% and 50%) for all predictions
+  - Supports configurable number of posterior samples
+- **Geek Rating Direct Model**: Dedicated trained model for geek_rating prediction
+  - Replaces computed Bayesian average with a direct regression model
+  - Uses predicted complexity, rating, and users_rated as features
+
+### Changed
+
+- **Model Registration**: `load_pipeline()` now prefers finalized model when available
+  - Finalized models are trained on all data (train + tune + test)
+  - Registration now correctly uploads the finalized pipeline to GCS
+  - Fixes bug where train-split-only models were being registered
+- **Makefile Improvements**:
+  - `start-scoring` now builds the Docker image automatically (depends on `docker-scoring`)
+  - Named container (`bgg-scoring`) for reliable `stop-scoring`
+  - Fixed port mismatch: scoring service targets now use port 8087 consistently
+- **LinearExplainer**: Extracts feature names from preprocessor output when `experiment_dir` is not available
+  - Enables meaningful feature names in the scoring service context
+
+### Fixed
+
+- **finalize.py**: Fixed geek_rating CLI args to route through `src.pipeline.train` with correct argument names
+- **Scoring service port**: `scoring-service` and `scoring-service-upload` targets now use port 8087 to match Docker mapping
+
 ## [Unreleased]
 
 ### Added
@@ -217,7 +251,11 @@ For detailed migration steps, see [docs/MIGRATION_GCP_PROJECT.md](docs/MIGRATION
 
 ## Version History
 
-### [0.2.2] - Current
+### [0.4.0] - Current
+
+Prediction explainability, Bayesian simulation, and finalized model registration.
+
+### [0.2.2]
 
 Enhanced scoring service with ad-hoc predictions and automated complexity scoring.
 

@@ -3,40 +3,6 @@
 # Default settings
 RAW_DIR := data/raw
 
-## set years for training, tuning, testing
-CURRENT_YEAR = 2026
-TRAIN_END_YEAR = $(shell expr $(CURRENT_YEAR) - 4)
-TUNE_END_YEAR = $(shell expr $(TRAIN_END_YEAR) + 1)
-TEST_START_YEAR = $(shell expr $(TUNE_END_YEAR) + 1)
-TEST_END_YEAR = $(shell expr $(TEST_START_YEAR))
-
-# years for evaluation over time
-EVAL_START_YEAR = $(shell expr $(CURRENT_YEAR) -5)
-EVAL_END_YEAR = $(shell expr $(EVAL_START_YEAR) +4)
-
-# set years for scoring (including current and previous year)
-SCORE_START_YEAR = $(shell expr $(CURRENT_YEAR) - 1)
-SCORE_END_YEAR = $(shell expr $(CURRENT_YEAR) + 4)
-
-# show years
-.PHONY: years
-years: 
-	@echo "=== Year Configuration for Model Training ==="
-	@echo "Current Year: $(CURRENT_YEAR)"
-	@echo ""
-	@echo "=== Dataset Year Ranges ==="
-	@echo "Training Data:   [earliest] to $(TRAIN_END_YEAR) (exclusive)"
-	@echo "Tuning Data:     $(TRAIN_END_YEAR) to $(TUNE_END_YEAR) (inclusive)"
-	@echo "Testing Data:    $(TEST_START_YEAR) to $(TEST_END_YEAR) (inclusive)"
-	@echo ""
-	@echo "=== Usage in Model Scripts ==="
-	@echo "• Training uses all data before $(TRAIN_END_YEAR)"
-	@echo "• Tuning/validation uses data from $(TRAIN_END_YEAR) to $(TUNE_END_YEAR)"
-	@echo "• Testing uses data from $(TEST_START_YEAR) to $(TEST_END_YEAR)"
-	@echo "• Time-based evaluation uses rolling windows with these ranges"
-
-
-
 .PHONY: help clean all
 
 help:  ## Show this help message
@@ -47,7 +13,7 @@ help:  ## Show this help message
 	@echo '  make lint                        Lint code using ruff'
 	@echo '  make fix                         Fix linting issues using ruff'
 	@echo '  make test                        Run tests using pytest'
-	@echo '  make data                        Fetch raw data from BigQuery'
+	@echo '  make data                        Fetch training data from BigQuery'
 	@echo '  make models                      Train all model candidates'
 	@echo '  make register                    Register all models to scoring service'
 	@echo '  make register_embeddings         Register embeddings model to embeddings service'
@@ -55,7 +21,6 @@ help:  ## Show this help message
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make years                       Show year configuration for model training'
 	@echo '  make evaluate                    Evaluate models over time using config.yaml'
-	@echo '  make evaluate-verbose            Run evaluation with verbose logging'
 	@echo '  make evaluate-dry-run            Show what evaluation would do without running'
 	@echo '  make predictions                 Generate predictions using trained models'
 	@echo '  make embeddings                  Train all embedding models (pca, svd, umap)'
@@ -98,16 +63,11 @@ fix:
 test:
 	uv run -m pytest tests/
 
-## fetch raw data from BigQuery
+## fetch training data from BigQuery
 .PHONY: data
-data: 
-	uv run -m src.data.get_raw_data
-
-.PHONY: create-view
-create-view:
-	uv run -m src.data.create_view
-
-
+data:
+	uv run -m src.pipeline.data --model hurdle
+	uv run -m src.pipeline.data --model complexity
 
 # model types
 LINEAR ?= linear
@@ -118,124 +78,65 @@ LIGHTGBM ?= lightgbm
 LIGHTGBM_LINEAR ?= lightgbm_linear
 
 # set defaults
-HURDLE_MODEL = $(LIGHTGBM)
-COMPLEXITY_MODEL = $(CATBOOST)
-RATING_MODEL ?= $(CATBOOST)
-USERS_RATED_MODEL ?= $(RIDGE)
 
 ## train all model candidates and predict geek rating
 .PHONY: models
 models: hurdle complexity rating users_rated geek_rating
 
-## register models
-.PHONY: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings register
-register: register_complexity register_rating register_users_rated register_hurdle register_embeddings register_text_embeddings
-
 # train individual models
-hurdle: train_hurdle finalize_hurdle score_hurdle
-complexity: train_complexity finalize_complexity score_complexity
-rating: train_rating finalize_rating score_rating
-users_rated: train_users_rated finalize_users_rated score_users_rated
+hurdle: train_hurdle
+complexity: train_complexity score_complexity
+rating: train_rating
+users_rated: train_users_rated
+geek_rating: train_geek_rating
 
 ## train individual models
 # hurdle model
-HURDLE_CANDIDATE ?= $(HURDLE_MODEL)-hurdle
 train_hurdle:
-	uv run -m src.models.hurdle \
-	--experiment $(HURDLE_CANDIDATE) \
-	--model $(HURDLE_MODEL) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+	uv run -m src.pipeline.train \
+	--model hurdle
 
-finalize_hurdle: 
-	uv run -m src.models.finalize_model \
-	--model-type hurdle \
-	--experiment $(HURDLE_CANDIDATE)
+score_hurdle:
+	uv run -m src.pipeline.score \
+	--model hurdle
 
-score_hurdle: 
-	uv run -m src.models.score \
-	--model-type hurdle \
-	--experiment $(HURDLE_CANDIDATE)
+# complexity
+train_complexity: 
+	uv run -m src.pipeline.train \
+	--model complexity
 
-## complexity model
-COMPLEXITY_CANDIDATE ?= $(COMPLEXITY_MODEL)-complexity
-COMPLEXITY_PREDICTIONS ?= models/experiments/predictions/$(COMPLEXITY_CANDIDATE).parquet
-train_complexity:
-	uv run -m src.models.complexity \
-	--model $(COMPLEXITY_MODEL) \
-	--use-sample-weights \
-	--experiment $(COMPLEXITY_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+score_complexity:
+	uv run -m src.pipeline.score \
+	--model complexity \
+	--all-years
 
-finalize_complexity: 
-	uv run -m src.models.finalize_model \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_CANDIDATE)
+# rating
+train_rating: 
+	uv run -m src.pipeline.train \
+	--model rating
 
-score_complexity: 
-	uv run -m src.models.score \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_CANDIDATE)
+# users rated
+# rating
+train_users_rated: 
+	uv run -m src.pipeline.train \
+	--model users_rated
 
-# rating model
-RATING_CANDIDATE ?= $(RATING_MODEL)-rating
-train_rating:
-	uv run -m src.models.rating \
-	--use-sample-weights \
-	--model $(RATING_MODEL) \
-	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
-	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
-	--experiment $(RATING_CANDIDATE) \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
+# geek rating
+train_geek_rating:
+	uv run -m src.pipeline.train \
+	--model geek_rating
 
-finalize_rating: 
-	uv run -m src.models.finalize_model \
-	--model-type rating \
-	--experiment $(RATING_CANDIDATE)
+## finalize
+finalize:
+	uv run -m src.pipeline.finalize
 
-score_rating:
-	uv run -m src.models.score \
-	--model-type rating \
-	--experiment $(RATING_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
+# evaluate over time using config.yaml settings
+.PHONY: evaluate evaluate-dry-run
+evaluate:
+	uv run -m src.pipeline.evaluate
 
-## users rated
-USERS_RATED_CANDIDATE ?= $(USERS_RATED_MODEL)-users_rated
-
-train_users_rated:
-	uv run -m src.models.users_rated \
-	--model $(USERS_RATED_MODEL) \
-	--complexity-experiment $(COMPLEXITY_CANDIDATE) \
-	--local-complexity-path $(COMPLEXITY_PREDICTIONS) \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--min-ratings 0 \
-	--train-end-year $(TRAIN_END_YEAR) \
-	--tune-start-year $(TRAIN_END_YEAR) \
-	--tune-end-year $(TUNE_END_YEAR) \
-	--test-start-year $(TEST_START_YEAR) \
-	--test-end-year $(TEST_END_YEAR)
-
-finalize_users_rated: 
-	uv run -m src.models.finalize_model \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE)
-
-score_users_rated:
-	uv run -m src.models.score \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--complexity-predictions $(COMPLEXITY_PREDICTIONS)
+evaluate-dry-run:  ## Show what evaluation would do without running
+	uv run -m src.pipeline.evaluate --dry-run
 
 ## embeddings models (settings from config.yaml, data from BigQuery)
 .PHONY: embeddings embeddings_pca embeddings_svd embeddings_autoencoder
@@ -266,57 +167,14 @@ register_text_embeddings:
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
 
-# predict geek rating given models
-geek_rating: 
-	uv run -m src.models.geek_rating \
-	--start-year $(TEST_START_YEAR) \
-	--end-year $(TEST_END_YEAR) \
-	--hurdle $(HURDLE_CANDIDATE) \
-	--complexity $(COMPLEXITY_CANDIDATE) \
-	--rating $(RATING_CANDIDATE) \
-	--users-rated $(USERS_RATED_CANDIDATE) \
-	--experiment estimated-geek-rating
 
-# evaluate over time using config.yaml settings
-.PHONY: evaluate evaluate-verbose evaluate-dry-run
-evaluate:
-	uv run python evaluate.py
+### register models (reads from config.yaml)
+.PHONY: register register-dry-run
+register:
+	uv run python register.py
 
-evaluate-verbose:  ## Run evaluation with verbose logging
-	uv run python evaluate.py --verbose
-
-evaluate-dry-run:  ## Show what evaluation would do without running
-	uv run python evaluate.py --dry-run --verbose
-
-### register model candidates
-# register models
-register_complexity:
-	uv run -m scoring_service.register_model \
-	--model-type complexity \
-	--experiment $(COMPLEXITY_CANDIDATE) \
-	--name complexity-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting game complexity"
-
-register_rating:
-	uv run -m scoring_service.register_model \
-	--model-type rating \
-	--experiment $(RATING_CANDIDATE) \
-	--name rating-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting game rating"
-
-register_users_rated:
-	uv run -m scoring_service.register_model \
-	--model-type users_rated \
-	--experiment $(USERS_RATED_CANDIDATE) \
-	--name users_rated-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting users_rated"
-
-register_hurdle:
-	uv run -m scoring_service.register_model \
-	--model-type hurdle \
-	--experiment $(HURDLE_CANDIDATE) \
-	--name hurdle-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) model for predicting whether games will achieve ratings (hurdle)"
+register-dry-run:
+	uv run python register.py --dry-run
 
 EMBEDDINGS_CANDIDATE ?= svd-embeddings
 register_embeddings:
@@ -331,7 +189,7 @@ streamlit dashboard:
 	uv run streamlit run src/streamlit/Home.py
 
 ## view experiments
-experiment_dashboard:
+experiments:
 	uv run streamlit run src/monitor/experiment_dashboard.py
 
 # dashboard to look at predicted geek rating
@@ -392,8 +250,10 @@ docker-training:
 docker-scoring:
 	docker build -f docker/scoring.Dockerfile -t bgg-scoring-service .
 
-start-scoring:
+start-scoring: docker-scoring
+	@docker rm -f bgg-scoring 2>/dev/null || true
 	docker run -d \
+	--name bgg-scoring \
 	-p 8087:8080 \
 	-v $(PWD)/credentials:/app/credentials \
 	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
@@ -401,35 +261,27 @@ start-scoring:
 	bgg-scoring-service
 
 stop-scoring:
-	@containers=$$(docker ps -q --filter ancestor=bgg-scoring-service); \
-	if [ -n "$$containers" ]; then \
-		echo "Stopping scoring service containers: $$containers"; \
-		docker stop $$containers; \
+	@if docker ps -q --filter name=bgg-scoring | grep -q .; then \
+		echo "Stopping scoring service container"; \
+		docker stop bgg-scoring && docker rm bgg-scoring; \
 	else \
-		echo "No running scoring service containers found"; \
+		echo "No running scoring service container found"; \
+		docker rm bgg-scoring 2>/dev/null || true; \
 	fi
 
 # run scoring service locally
 scoring-service:
 	uv run -m scoring_service.score \
-    --service-url http://localhost:8080 \
+    --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
-    --hurdle-model hurdle-v$(CURRENT_YEAR) \
-    --complexity-model complexity-v$(CURRENT_YEAR) \
-    --rating-model rating-v$(CURRENT_YEAR) \
-    --users-rated-model users_rated-v$(CURRENT_YEAR) \
     --download
 
 scoring-service-upload:
 	uv run -m scoring_service.score \
-    --service-url http://localhost:8080 \
+    --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
-    --hurdle-model hurdle-v$(CURRENT_YEAR) \
-    --complexity-model complexity-v$(CURRENT_YEAR) \
-    --rating-model rating-v$(CURRENT_YEAR) \
-    --users-rated-model users_rated-v$(CURRENT_YEAR) \
 	--upload-to-bigquery \
 	--download
 

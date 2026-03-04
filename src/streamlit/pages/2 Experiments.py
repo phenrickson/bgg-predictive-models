@@ -389,6 +389,9 @@ with tab2:
                         f"**Shape:** {display_df.shape[0]} rows, {display_df.shape[1]} columns"
                     )
 
+                    # DEBUG
+                    st.write(f"DEBUG: model_type=`{model_type}`, prediction_col={'prediction' in display_df.columns}, actual_col={'actual' in display_df.columns}")
+
                     # Performance metrics and visualization based on model type
                     if (
                         model_type == "regression"

@@ -1,3 +1,4 @@
+import ast
 import numpy as np
 import pandas as pd
 import re
@@ -136,14 +137,23 @@ class LogTransformer(BaseEstimator, TransformerMixin):
 
     def get_feature_names_out(self, input_features=None):
         """
-        Return the names of the transformed year features.
+        Return feature names after log transformation.
+
+        Parameters
+        ----------
+        input_features : array-like, optional
+            Input feature names. If None, uses the fitted columns.
 
         Returns
         -------
         ndarray
-            Names of the transformed year features.
+            Feature names (same as input since log transform preserves column names).
         """
-        return np.array(["year_published_transformed"])
+        if input_features is not None:
+            return np.asarray(input_features)
+        if self.columns_ is not None:
+            return np.asarray(self.columns_)
+        return np.asarray(self.columns)
 
 
 class YearTransformer(BaseEstimator, TransformerMixin):
@@ -259,17 +269,64 @@ class YearTransformer(BaseEstimator, TransformerMixin):
 
 
 class CorrelationFilter(BaseEstimator, TransformerMixin):
-    def __init__(self, threshold=0.9):
+    """Remove features with correlation above a threshold.
+
+    This transformer identifies and removes features that are highly correlated
+    with other features. When two features have correlation above the threshold,
+    the second one (in column order) is dropped.
+
+    Parameters
+    ----------
+    threshold : float, default=0.95
+        Correlation threshold. Features with absolute correlation above this
+        value will be dropped. Default is 0.95 to remove highly correlated features.
+
+    Attributes
+    ----------
+    to_drop_ : list
+        List of column names that will be dropped during transform.
+    feature_names_in_ : array
+        Names of features seen during fit.
+    feature_names_out_ : array
+        Names of features after dropping correlated ones.
+    """
+
+    def __init__(self, threshold: float = 0.95):
         self.threshold = threshold
         self.to_drop_ = None
+        self.feature_names_in_ = None
+        self.feature_names_out_ = None
 
     def fit(self, X, y=None):
+        """Fit the transformer by identifying correlated features to drop.
+
+        Parameters
+        ----------
+        X : array-like or DataFrame of shape (n_samples, n_features)
+            Training data.
+        y : None
+            Ignored.
+
+        Returns
+        -------
+        self
+        """
+        logger = logging.getLogger(__name__)
+
         # Convert to DataFrame if not already
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
 
+        self.feature_names_in_ = np.array(X.columns)
+
+        # Sample for faster correlation computation on large datasets
+        if len(X) > 10000:
+            X_sample = X.sample(n=10000, random_state=42)
+        else:
+            X_sample = X
+
         # Compute correlation matrix
-        corr_matrix = X.corr().abs()
+        corr_matrix = X_sample.corr().abs()
         upper = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
         upper_corr = corr_matrix.where(upper)
 
@@ -279,9 +336,32 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
             for column in upper_corr.columns
             if any(upper_corr[column] > self.threshold)
         ]
+
+        self.feature_names_out_ = np.array(
+            [col for col in X.columns if col not in self.to_drop_]
+        )
+
+        if len(self.to_drop_) > 0:
+            logger.info(
+                f"CorrelationFilter: dropping {len(self.to_drop_)} features "
+                f"with correlation > {self.threshold}"
+            )
+
         return self
 
     def transform(self, X):
+        """Remove correlated features.
+
+        Parameters
+        ----------
+        X : array-like or DataFrame of shape (n_samples, n_features)
+            Data to transform.
+
+        Returns
+        -------
+        X_transformed : DataFrame
+            Data with correlated features removed.
+        """
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         return X.drop(columns=self.to_drop_, errors="ignore")
@@ -291,7 +371,10 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
         return self
 
     def get_feature_names_out(self, input_features=None):
-        return np.array(self.columns)
+        """Get output feature names."""
+        if self.feature_names_out_ is None:
+            raise ValueError("Transformer has not been fitted yet.")
+        return self.feature_names_out_
 
 
 def bgg_numeric_transformer(numeric_columns=None):
@@ -442,10 +525,12 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         create_family_features: bool = True,
         # Feature selection parameters
         include_base_numeric: bool = True,
-        include_count_features: bool = True,
+        include_count_features: bool = False,
         include_average_weight: bool = False,
         # Column preservation parameters
         preserve_columns: Optional[List[str]] = None,
+        # Embedding features
+        include_description_embeddings: bool = False,
         # Family pattern filters (regex patterns to match against family names)
         family_allow_patterns: Optional[List[str]] = None,
         family_remove_patterns: Optional[List[str]] = None,
@@ -525,12 +610,16 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Column preservation parameters
         self.preserve_columns = preserve_columns or ["year_published"]
 
+        # Embedding features
+        self.include_description_embeddings = include_description_embeddings
+
         # Family pattern filters (use defaults if not provided)
         self.family_allow_patterns = family_allow_patterns
         self.family_remove_patterns = family_remove_patterns
 
         # Fitted attributes (will be populated during fit)
         self.feature_names_ = None
+        self.embedding_columns_ = None
         self.frequent_categories_ = None
         self.frequent_mechanics_ = None
         self.frequent_designers_ = None
@@ -613,6 +702,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "^Game:",
             "^Players: Expansions",
             "^Players: Games with expansions",
+            "^Category: Dized",  # Leakage: tutorials created after game success
         ]
 
         self.FAMILY_ALLOW_PATTERNS = [
@@ -768,9 +858,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             elif isinstance(mechanics, str):
                 # In case mechanics is a string representation of a list
                 try:
-                    return len(eval(mechanics))
-                except (TypeError, SyntaxError, NameError):
-                    # Handle potential errors in eval
+                    return len(ast.literal_eval(mechanics))
+                except (TypeError, SyntaxError, ValueError):
+                    # Handle potential errors in literal_eval
                     return 0
             else:
                 # Log unexpected type for debugging
@@ -804,9 +894,9 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             elif isinstance(categories, str):
                 # In case categories is a string representation of a list
                 try:
-                    return len(eval(categories))
-                except (TypeError, SyntaxError, NameError):
-                    # Handle potential errors in eval
+                    return len(ast.literal_eval(categories))
+                except (TypeError, SyntaxError, ValueError):
+                    # Handle potential errors in literal_eval
                     return 0
             else:
                 # Log unexpected type for debugging
@@ -1018,6 +1108,14 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         self.frequent_publishers_ = None
         self.frequent_families_ = None
 
+        # Detect embedding columns if enabled
+        self.embedding_columns_ = []
+        if self.include_description_embeddings:
+            self.embedding_columns_ = [col for col in X.columns if col.startswith("emb_")]
+            if self.embedding_columns_:
+                logger = logging.getLogger(__name__)
+                logger.info(f"Detected {len(self.embedding_columns_)} embedding columns")
+
         # Fit array features
         if self.create_category_features:
             self.frequent_categories_ = self._fit_array_features(
@@ -1071,12 +1169,13 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
 
         # Base numeric features
         if self.include_base_numeric:
-            if getattr(self, "include_count_features", True):
-                feature_names.extend(["mechanics_count", "categories_count"])
+            if getattr(self, "include_count_features", False):
+                feature_names.extend(
+                    ["mechanics_count", "categories_count", "description_word_count"]
+                )
             feature_names.extend(
                 [
                     "time_per_player",
-                    "description_word_count",
                     "min_age",
                     "min_playtime",
                     "max_playtime",
@@ -1117,6 +1216,10 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             for family in self.frequent_families_:
                 feature_names.append(f"family_{self._safe_column_name(family)}")
 
+        # Embedding features (passthrough)
+        if self.include_description_embeddings and self.embedding_columns_:
+            feature_names.extend(self.embedding_columns_)
+
         self.feature_names_ = feature_names
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
@@ -1150,7 +1253,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         feature_dfs = []
 
         # Create mechanics count if mechanics column exists
-        if getattr(self, "include_count_features", True) and "mechanics" in X_base.columns:
+        if getattr(self, "include_count_features", False) and "mechanics" in X_base.columns:
             mechanics_df = pd.DataFrame(index=X_base.index)
 
             # Use the more robust count_mechanics function
@@ -1183,7 +1286,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             feature_dfs.append(mechanics_df)
 
         # Create categories count if categories column exists
-        if getattr(self, "include_count_features", True) and "categories" in X_base.columns:
+        if getattr(self, "include_count_features", False) and "categories" in X_base.columns:
             categories_df = pd.DataFrame(index=X_base.index)
 
             def count_categories(categories):
@@ -1234,8 +1337,11 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             )
             feature_dfs.append(time_per_player_df)
 
-        # Create description word count feature
-        if "description" in X_base.columns:
+        # Create description word count feature (only if include_count_features is True)
+        if (
+            "description" in X_base.columns
+            and getattr(self, "include_count_features", False)
+        ):
             description_word_count_df = pd.DataFrame(index=X_base.index)
 
             def count_words(description):
@@ -1335,6 +1441,13 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         if self.include_average_weight and "average_weight" in X_base.columns:
             weight_df = pd.DataFrame({"average_weight": X_base["average_weight"]})
             feature_dfs.append(weight_df)
+
+        # Add embedding columns if enabled (passthrough unchanged)
+        if self.include_description_embeddings and self.embedding_columns_:
+            available_emb_cols = [col for col in self.embedding_columns_ if col in X_base.columns]
+            if available_emb_cols:
+                embedding_df = X_base[available_emb_cols].copy()
+                feature_dfs.append(embedding_df)
 
         # Concatenate all feature DataFrames
         if feature_dfs:

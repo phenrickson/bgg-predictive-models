@@ -30,14 +30,14 @@ def submit_scoring_request(
     complexity_model: Optional[str] = None,
     rating_model: Optional[str] = None,
     users_rated_model: Optional[str] = None,
+    geek_rating_model: Optional[str] = None,
     output_path: Optional[str] = None,
-    prior_rating: Optional[float] = None,
-    prior_weight: Optional[float] = None,
+    n_samples: int = 1000,
     upload_to_data_warehouse: bool = True,
     use_change_detection: bool = False,
 ) -> dict:
     """
-    Submit request to scoring service and return response.
+    Submit simulation request to scoring service and return response.
 
     Args:
         service_url: URL of the scoring service
@@ -47,10 +47,11 @@ def submit_scoring_request(
         complexity_model: Optional override for complexity model name
         rating_model: Optional override for rating model name
         users_rated_model: Optional override for users rated model name
+        geek_rating_model: Optional override for geek rating model name
         output_path: Optional override for predictions output path
-        prior_rating: Optional override for prior mean rating
-        prior_weight: Optional override for prior weight
+        n_samples: Number of posterior samples for simulation
         upload_to_data_warehouse: Whether to upload results to data warehouse
+        use_change_detection: Only score games with changed features
 
     Returns:
         Response from scoring service
@@ -58,10 +59,9 @@ def submit_scoring_request(
     logger = setup_logging()
     config = load_config()
 
-    # Get model names and parameters from config
+    # Get model names from config
     if config.scoring:
         model_config = config.scoring.models
-        param_config = config.scoring.parameters
         output_config = config.scoring.output
 
         payload = {
@@ -70,10 +70,11 @@ def submit_scoring_request(
             "rating_model_name": rating_model or model_config.get("rating"),
             "users_rated_model_name": users_rated_model
             or model_config.get("users_rated"),
+            "geek_rating_model_name": geek_rating_model
+            or model_config.get("geek_rating"),
             "start_year": start_year,
             "end_year": end_year,
-            "prior_rating": prior_rating or param_config.get("prior_rating", 5.5),
-            "prior_weight": prior_weight or param_config.get("prior_weight", 2000),
+            "n_samples": n_samples,
             "upload_to_data_warehouse": upload_to_data_warehouse,
             "use_change_detection": use_change_detection,
         }
@@ -89,10 +90,10 @@ def submit_scoring_request(
             "complexity_model_name": complexity_model,
             "rating_model_name": rating_model,
             "users_rated_model_name": users_rated_model,
+            "geek_rating_model_name": geek_rating_model,
             "start_year": start_year,
             "end_year": end_year,
-            "prior_rating": prior_rating or 5.5,
-            "prior_weight": prior_weight or 2000,
+            "n_samples": n_samples,
             "upload_to_data_warehouse": upload_to_data_warehouse,
             "use_change_detection": use_change_detection,
         }
@@ -100,16 +101,16 @@ def submit_scoring_request(
             payload["output_path"] = output_path
 
     try:
-        logger.info(f"Submitting scoring request to {service_url}")
+        logger.info(f"Submitting simulation request to {service_url}")
         response = requests.post(
-            f"{service_url}/predict_games",
+            f"{service_url}/simulate_games",
             json=payload,
-            timeout=600,  # 10-minute timeout
+            timeout=1800,  # 30-minute timeout for simulations
         )
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Error submitting scoring request: {e}")
+        logger.error(f"Error submitting simulation request: {e}")
         raise
 
 
@@ -164,7 +165,7 @@ def main():
     logger = setup_logging()
 
     parser = argparse.ArgumentParser(
-        description="Submit scoring request to BGG Scoring Service"
+        description="Submit simulation request to BGG Scoring Service"
     )
 
     # Model selection arguments (optional now since they can come from config)
@@ -177,6 +178,10 @@ def main():
     parser.add_argument(
         "--users-rated-model",
         help="Override users rated model name from config",
+    )
+    parser.add_argument(
+        "--geek-rating-model",
+        help="Override geek rating model name from config",
     )
 
     # Year range arguments
@@ -211,15 +216,12 @@ def main():
         help="Skip uploading predictions to data warehouse",
     )
 
-    # Prior rating arguments
+    # Simulation arguments
     parser.add_argument(
-        "--prior-rating",
-        type=float,
-        default=5.5,
-        help="Prior mean rating for Bayesian average",
-    )
-    parser.add_argument(
-        "--prior-weight", type=float, default=2000, help="Weight given to prior rating"
+        "--n-samples",
+        type=int,
+        default=1000,
+        help="Number of posterior samples for simulation (default: 1000)",
     )
 
     # Change detection argument
@@ -247,9 +249,9 @@ def main():
             complexity_model=args.complexity_model,
             rating_model=args.rating_model,
             users_rated_model=args.users_rated_model,
+            geek_rating_model=args.geek_rating_model,
             output_path=args.output_path,
-            prior_rating=args.prior_rating,
-            prior_weight=args.prior_weight,
+            n_samples=args.n_samples,
             upload_to_data_warehouse=upload_to_data_warehouse,
             use_change_detection=args.use_change_detection,
         )
@@ -262,18 +264,16 @@ def main():
 
         # Log job details
         logger.info(f"Scoring Job ID: {response['job_id']}")
-        logger.info("Model Details:")
-        for model_type, details in response["model_details"].items():
-            logger.info(f"{model_type.capitalize()} Model:")
-            logger.info(f"  Name: {details['name']}")
-            logger.info(f"  Version: {details['version']}")
-            logger.info(f"  Experiment: {details['experiment']}")
+        logger.info(f"Games scored: {response.get('n_games_scored', 'N/A')}")
+        logger.info(f"N samples: {response.get('n_samples', 'N/A')}")
 
-        logger.info("Scoring Parameters:")
-        for param, value in response["scoring_parameters"].items():
-            logger.info(f"{param}: {value}")
+        if response.get("model_details"):
+            logger.info("Model Details:")
+            for model_type, details in response["model_details"].items():
+                logger.info(f"  {model_type}: {details.get('name', 'N/A')} v{details.get('version', 'N/A')}")
 
-        logger.info(f"Predictions Location: {response['output_location']}")
+        if response.get("output_location"):
+            logger.info(f"Predictions Location: {response['output_location']}")
 
         # Log data warehouse information if available
         if response.get("data_warehouse_job_id"):

@@ -181,8 +181,57 @@ class ModelConfig:
     type: str
     experiment_name: str
     use_sample_weights: bool = False
+    use_embeddings: bool = False
     min_ratings: int = 0
-    predictions_path: Optional[str] = None
+    algorithm_params: Optional[Dict[str, Any]] = None
+    mode: Optional[str] = None  # For geek_rating: "stacking" or "direct"
+    include_predictions: bool = True  # For geek_rating direct mode: include sub-model predictions as features
+
+    def get_algorithm_params(self) -> Dict[str, Any]:
+        """Get algorithm-specific parameters.
+
+        Returns:
+            Dictionary of algorithm parameters, or empty dict if none configured.
+        """
+        return self.algorithm_params if self.algorithm_params is not None else {}
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation-based uncertainty estimation."""
+
+    n_samples: int = 500  # Number of posterior samples
+    geek_rating_mode: str = "bayesian"  # bayesian, stacking, or direct
+    output_dir: str = "models/simulation"
+    save_predictions: bool = True
+    random_state: int = 42
+
+
+@dataclass
+class TrainingYearConfig:
+    """Configuration for training year splits (all years are inclusive)."""
+
+    train_through: int  # Train on data through this year (inclusive)
+    tune_start: int
+    tune_through: int
+    test_start: int
+    test_through: int
+
+
+@dataclass
+class EvalYearConfig:
+    """Configuration for evaluation year range."""
+
+    start: int
+    end: int
+
+
+@dataclass
+class ScoreYearConfig:
+    """Configuration for scoring year range."""
+
+    start: int
+    end: int
 
 
 @dataclass
@@ -190,14 +239,9 @@ class YearConfig:
     """Configuration for year settings."""
 
     current: int
-    train_end: int
-    tune_end: int
-    test_start: int
-    test_end: int
-    eval_start: int
-    eval_end: int
-    score_start: int
-    score_end: int
+    training: TrainingYearConfig
+    eval: EvalYearConfig
+    score: ScoreYearConfig
 
 
 @dataclass
@@ -211,9 +255,11 @@ class Config:
     data_warehouse: DataWarehouseConfig
     predictions: PredictionsDestinationConfig
     ml_project_id: str
+    predictions_dir: str = "models/experiments/predictions"
     scoring: Optional[ScoringConfig] = None
     embeddings: Optional[EmbeddingConfig] = None
     text_embeddings: Optional[TextEmbeddingConfig] = None
+    simulation: Optional[SimulationConfig] = None
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -323,27 +369,47 @@ def load_config(config_path: Optional[str] = None) -> Config:
     bucket_name = ml_project_config.get("bucket_name", "bgg-predictive-models")
 
     # Create years config
+    training_config = TrainingYearConfig(
+        train_through=config["years"]["training"]["train_through"],
+        tune_start=config["years"]["training"]["tune_start"],
+        tune_through=config["years"]["training"]["tune_through"],
+        test_start=config["years"]["training"]["test_start"],
+        test_through=config["years"]["training"]["test_through"],
+    )
+    eval_config = EvalYearConfig(
+        start=config["years"]["eval"]["start"],
+        end=config["years"]["eval"]["end"],
+    )
+    score_config = ScoreYearConfig(
+        start=config["years"]["score"]["start"],
+        end=config["years"]["score"]["end"],
+    )
     years_config = YearConfig(
         current=config["years"]["current"],
-        train_end=config["years"]["train_end"],
-        tune_end=config["years"]["tune_end"],
-        test_start=config["years"]["test_start"],
-        test_end=config["years"]["test_end"],
-        eval_start=config["years"]["eval"]["start"],
-        eval_end=config["years"]["eval"]["end"],
-        score_start=config["years"]["score"]["start"],
-        score_end=config["years"]["score"]["end"],
+        training=training_config,
+        eval=eval_config,
+        score=score_config,
     )
 
-    # Create model configs
+    # Get predictions_dir from models section (not a model itself)
+    models_section = config["models"]
+    predictions_dir = models_section.get("predictions_dir", "models/experiments/predictions")
+
+    # Create model configs (skip non-model entries like predictions_dir)
     model_configs = {}
-    for model_name, model_config in config["models"].items():
+    for model_name, model_config in models_section.items():
+        # Skip non-dict entries (like predictions_dir)
+        if not isinstance(model_config, dict):
+            continue
         model_configs[model_name] = ModelConfig(
             type=model_config["type"],
             experiment_name=model_config["experiment_name"],
             use_sample_weights=model_config.get("use_sample_weights", False),
+            use_embeddings=model_config.get("use_embeddings", False),
             min_ratings=model_config.get("min_ratings", 0),
-            predictions_path=model_config.get("predictions_path"),
+            algorithm_params=model_config.get("algorithm_params"),
+            mode=model_config.get("mode"),
+            include_predictions=model_config.get("include_predictions", True),
         )
 
     # Create scoring config if present
@@ -413,6 +479,18 @@ def load_config(config_path: Optional[str] = None) -> Config:
             upload=te_upload_config,
         )
 
+    # Create simulation config if present
+    simulation_config = None
+    if "simulation" in config:
+        sim = config["simulation"]
+        simulation_config = SimulationConfig(
+            n_samples=sim.get("n_samples", 500),
+            geek_rating_mode=sim.get("geek_rating_mode", "bayesian"),
+            output_dir=sim.get("output_dir", "models/simulation"),
+            save_predictions=sim.get("save_predictions", True),
+            random_state=sim.get("random_state", 42),
+        )
+
     return Config(
         bucket_name=bucket_name,
         default_environment=config.get("default_environment", "dev"),
@@ -421,7 +499,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         data_warehouse=data_warehouse_config,
         predictions=predictions_config,
         ml_project_id=ml_project_id,
+        predictions_dir=predictions_dir,
         scoring=scoring_config,
         embeddings=embeddings_config,
         text_embeddings=text_embeddings_config,
+        simulation=simulation_config,
     )
