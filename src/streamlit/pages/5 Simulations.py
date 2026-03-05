@@ -31,6 +31,13 @@ from src.streamlit.components.simulation_metrics import (
     compute_all_metrics,
 )
 from src.streamlit.components.footer import render_footer
+from src.streamlit.components.simulation_explorer import (
+    call_simulate_samples,
+    call_explain_game,
+    plot_posterior_distributions,
+    plot_explanation,
+    DEFAULT_MODEL_NAMES,
+)
 
 # Optional import for LOESS smoothing
 try:
@@ -65,7 +72,7 @@ if not runs:
 run_names = [r["name"] for r in runs]
 
 # --- Tabs ---
-tab_compare, tab_detail = st.tabs(["Compare Runs", "Run Detail"])
+tab_compare, tab_detail, tab_explorer = st.tabs(["Compare Runs", "Run Detail", "Game Explorer"])
 
 # ============================
 # Tab 1: Compare Runs
@@ -431,6 +438,94 @@ with tab_detail:
         # --- Predictions table ---
         st.subheader("Predictions")
         st.dataframe(filtered.to_pandas(), use_container_width=True)
+
+# ============================
+# Tab 3: Game Explorer
+# ============================
+with tab_explorer:
+
+    @st.fragment
+    def game_explorer():
+        st.header("Game Explorer")
+        st.caption("Simulate posterior distributions for specific games via the scoring service.")
+
+        explorer_cols = st.columns([2, 1])
+        with explorer_cols[0]:
+            game_ids_input = st.text_input(
+                "Game IDs (comma-separated)",
+                value="",
+                placeholder="e.g. 224517, 174430, 167791",
+                key="explorer_game_ids",
+            )
+        with explorer_cols[1]:
+            n_samples = st.slider(
+                "Samples", min_value=100, max_value=2000, value=500, step=100,
+                key="explorer_n_samples",
+            )
+
+        service_url = st.text_input(
+            "Scoring service URL",
+            value="http://localhost:8087",
+            key="explorer_service_url",
+        )
+
+        run_btn = st.button("Run", key="explorer_run", use_container_width=True)
+
+        if game_ids_input.strip():
+            try:
+                game_ids = [int(gid.strip()) for gid in game_ids_input.split(",") if gid.strip()]
+            except ValueError:
+                st.error("Invalid game IDs. Enter comma-separated integers.")
+                game_ids = []
+        else:
+            game_ids = []
+
+        if run_btn and game_ids:
+            with st.spinner(f"Simulating {len(game_ids)} games with {n_samples} samples..."):
+                try:
+                    response = call_simulate_samples(
+                        game_ids=game_ids,
+                        service_url=service_url,
+                        n_samples=n_samples,
+                    )
+                    st.session_state["explorer_sim_results"] = response["games"]
+                    st.session_state["explorer_sim_error"] = None
+                except Exception as e:
+                    st.session_state["explorer_sim_results"] = None
+                    st.session_state["explorer_sim_error"] = str(e)
+
+            explain_results = []
+            for gid in game_ids:
+                with st.spinner(f"Explaining game {gid}..."):
+                    try:
+                        response = call_explain_game(
+                            game_id=gid,
+                            service_url=service_url,
+                        )
+                        explain_results.append(response)
+                    except Exception as e:
+                        st.error(f"Error explaining game {gid}: {e}")
+            st.session_state["explorer_explain_results"] = explain_results
+
+        # Render cached results
+        if st.session_state.get("explorer_sim_error"):
+            st.error(f"Error calling scoring service: {st.session_state['explorer_sim_error']}")
+        if st.session_state.get("explorer_sim_results"):
+            for game in st.session_state["explorer_sim_results"]:
+                fig = plot_posterior_distributions(game)
+                st.plotly_chart(fig, use_container_width=True)
+                # Show explanation for this game if available
+                explain_results = st.session_state.get("explorer_explain_results", [])
+                matching = [r for r in explain_results if r["game_id"] == game["game_id"]]
+                if matching:
+                    fig = plot_explanation(
+                        explanations=matching[0]["explanations"],
+                        game_name=matching[0].get("game_name", str(game["game_id"])),
+                        game_id=matching[0]["game_id"],
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+    game_explorer()
 
 # Footer
 render_footer()

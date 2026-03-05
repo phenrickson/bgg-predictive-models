@@ -143,6 +143,43 @@ class SimulateGamesResponse(BaseModel):
     skipped_reason: Optional[str] = None
 
 
+class SimulateGameSamplesRequest(BaseModel):
+    game_ids: List[int]
+    complexity_model_name: str
+    rating_model_name: str
+    users_rated_model_name: str
+    geek_rating_model_name: str
+    complexity_model_version: Optional[int] = None
+    rating_model_version: Optional[int] = None
+    users_rated_model_version: Optional[int] = None
+    geek_rating_model_version: Optional[int] = None
+    n_samples: int = 500
+    random_state: int = 42
+
+
+class GameSamplesResult(BaseModel):
+    game_id: int
+    game_name: str
+    complexity_samples: List[float]
+    rating_samples: List[float]
+    users_rated_samples: List[float]  # log scale
+    geek_rating_samples: List[float]
+    complexity_point: float
+    rating_point: float
+    users_rated_point: float
+    geek_rating_point: float
+    actual_complexity: Optional[float] = None
+    actual_rating: Optional[float] = None
+    actual_users_rated: Optional[float] = None
+    actual_geek_rating: Optional[float] = None
+
+
+class SimulateGameSamplesResponse(BaseModel):
+    job_id: str
+    n_samples: int
+    games: List[GameSamplesResult]
+
+
 class PredictComplexityRequest(BaseModel):
     complexity_model_name: str
     complexity_model_version: Optional[int] = None
@@ -1258,6 +1295,104 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
     except Exception as e:
         import traceback
         logger.error(f"Error in simulation: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/simulate_game_samples", response_model=SimulateGameSamplesResponse)
+async def simulate_game_samples_endpoint(request: SimulateGameSamplesRequest):
+    """Return raw posterior samples for specific games.
+
+    Runs Bayesian simulation through the model chain and returns the full
+    sample arrays (not just summaries) so callers can plot posterior distributions.
+    """
+    try:
+        import uuid
+
+        job_id = str(uuid.uuid4())
+        logger.info(
+            f"Simulate samples request for {len(request.game_ids)} games, "
+            f"n_samples={request.n_samples}, job_id={job_id}"
+        )
+
+        # Load model pipelines
+        registered_complexity = get_registered_model("complexity")
+        registered_rating = get_registered_model("rating")
+        registered_users_rated = get_registered_model("users_rated")
+        registered_geek_rating = get_registered_model("geek_rating")
+
+        complexity_pipeline, _ = registered_complexity.load_registered_model(
+            request.complexity_model_name, request.complexity_model_version
+        )
+        rating_pipeline, _ = registered_rating.load_registered_model(
+            request.rating_model_name, request.rating_model_version
+        )
+        users_rated_pipeline, _ = registered_users_rated.load_registered_model(
+            request.users_rated_model_name, request.users_rated_model_version
+        )
+        geek_rating_pipeline, _ = registered_geek_rating.load_registered_model(
+            request.geek_rating_model_name, request.geek_rating_model_version
+        )
+
+        # Load game data
+        df_pandas = load_game_data(game_ids=request.game_ids)
+        if len(df_pandas) == 0:
+            raise HTTPException(
+                status_code=404, detail="No games found for the provided game_ids"
+            )
+
+        logger.info(f"Simulating {len(df_pandas)} games with {request.n_samples} samples")
+
+        # Pre-compute Cholesky decompositions
+        cholesky_cache = precompute_cholesky(
+            complexity_pipeline, rating_pipeline, users_rated_pipeline,
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Run batch simulation
+        sim_results = simulate_batch(
+            games=df_pandas,
+            complexity_pipeline=complexity_pipeline,
+            rating_pipeline=rating_pipeline,
+            users_rated_pipeline=users_rated_pipeline,
+            n_samples=request.n_samples,
+            random_state=request.random_state,
+            cholesky_cache=cholesky_cache,
+            geek_rating_mode="direct",
+            geek_rating_pipeline=geek_rating_pipeline,
+        )
+
+        # Build response with raw samples
+        games = []
+        for r in sim_results:
+            games.append(GameSamplesResult(
+                game_id=r.game_id,
+                game_name=r.game_name,
+                complexity_samples=r.complexity_samples.tolist(),
+                rating_samples=r.rating_samples.tolist(),
+                users_rated_samples=r.users_rated_samples.tolist(),
+                geek_rating_samples=r.geek_rating_samples.tolist(),
+                complexity_point=float(np.median(r.complexity_samples)),
+                rating_point=float(np.median(r.rating_samples)),
+                users_rated_point=float(np.median(r.users_rated_samples)),
+                geek_rating_point=float(np.median(r.geek_rating_samples)),
+                actual_complexity=float(r.actual_complexity) if r.actual_complexity is not None else None,
+                actual_rating=float(r.actual_rating) if r.actual_rating is not None else None,
+                actual_users_rated=float(r.actual_users_rated) if r.actual_users_rated is not None else None,
+                actual_geek_rating=float(r.actual_geek_rating) if r.actual_geek_rating is not None else None,
+            ))
+
+        return SimulateGameSamplesResponse(
+            job_id=job_id,
+            n_samples=request.n_samples,
+            games=games,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"Error in simulate_game_samples: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 

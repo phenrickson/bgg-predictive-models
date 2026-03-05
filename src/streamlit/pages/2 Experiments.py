@@ -1,77 +1,18 @@
 """
-Streamlit dashboard for exploring model experiments.
+Streamlit page for exploring local model experiments.
 
-This module provides a comprehensive interface for viewing and analyzing machine learning
-experiments, including metrics, predictions, parameters, and feature importance visualizations.
-
-Key Features:
-- Interactive experiment selection and filtering
-- Real-time metrics visualization and comparison
-- Prediction analysis with regression and classification support
-- Feature importance plots with category-specific breakdowns
-- Experiment metadata and parameter exploration
-- Efficient caching and data loading
-
-The dashboard is organized into tabs:
-1. Metrics Overview: Compare performance metrics across experiments
-2. Predictions: Analyze model predictions with interactive plots
-3. Parameters: View model hyperparameters and configurations
-4. Feature Importance: Explore feature contributions and importance
-5. Experiment Details: Raw experiment data and configurations
-6. Experiment Metadata: Complete experiment metadata
-
-Dependencies:
-- streamlit: Web application framework
-- plotly: Interactive plotting library
-- pandas/polars: Data manipulation
-- sklearn: Machine learning metrics
-- statsmodels: Statistical analysis (optional, for LOESS smoothing)
-
-Usage:
-    Run with: streamlit run src/streamlit/pages/Experiments.py
+Two tabs: Eval Experiments (time-based evaluation) and Finalized Models.
 """
 
-# Standard library imports
 import sys
 import os
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
 
-# Third-party imports
 import streamlit as st
+import plotly.graph_objects as go
 import plotly.express as px
-import plotly.graph_objs as go
-import numpy as np
-import pandas as pd
 import polars as pl
-from dotenv import load_dotenv
-from sklearn.metrics import (
-    mean_squared_error,
-    mean_absolute_error,
-    r2_score,
-    mean_absolute_percentage_error,
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix,
-    roc_auc_score,
-)
-
-# Optional import for LOESS smoothing
-try:
-    import statsmodels.nonparametric.smoothers_lowess as lowess
-
-    HAS_STATSMODELS = True
-except ImportError:
-    HAS_STATSMODELS = False
-
-# Configure logging for debugging
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+import numpy as np
 
 # Add project root to Python path
 project_root = os.path.abspath(
@@ -79,851 +20,555 @@ project_root = os.path.abspath(
 )
 sys.path.insert(0, project_root)
 
-# Local application imports
-from src.utils.experiment_loader import get_experiment_loader
-from src.monitor.experiment_dashboard import (
-    create_metrics_overview,
-    create_performance_by_run_visualization,
-    create_parameters_overview,
-    create_feature_importance_plot,
-    create_category_feature_importance_plots,
-    display_predictions as display_experiment_predictions,
+from src.streamlit.components.experiment_loader import (
+    discover_experiments,
+    load_metrics,
+    load_predictions,
+    load_coefficients,
 )
-from src.models.experiments import ExperimentTracker
 from src.streamlit.components.footer import render_footer
 
-# Constants
-CACHE_TTL = 300  # 5 minutes
-TOP_N_FEATURES_DEFAULT = 40
-TOP_N_FEATURES_PER_CATEGORY_DEFAULT = 25
-MIN_USERS_RATED_FILTER_DEFAULT = 5
+# Optional LOESS
+try:
+    import statsmodels.nonparametric.smoothers_lowess as lowess_mod
 
+    HAS_STATSMODELS = True
+except ImportError:
+    HAS_STATSMODELS = False
 
-# Utility Functions
-def validate_experiment_data(experiment: Dict[str, Any]) -> bool:
-    """Validate experiment data structure."""
-    required_keys = ["full_name", "experiment_name", "metrics"]
-    return all(key in experiment for key in required_keys)
-
-
-def create_hover_text(row: pd.Series) -> str:
-    """Create hover text for prediction plots."""
-    hover_info = f"Predicted: {row['prediction']:.4f}<br>Actual: {row['actual']:.4f}"
-    if "game_id" in row.index:
-        hover_info += f"<br>Game ID: {row['game_id']}"
-    if "name" in row.index:
-        hover_info += f"<br>Name: {row['name']}"
-    return hover_info
-
-
-def abbreviate_feature(feature: str, n: int = 40) -> str:
-    """Abbreviate feature names for display."""
-    if len(str(feature)) > n:
-        return str(feature)[: n - 3] + "..."
-    return str(feature)
-
-
-def determine_model_type(
-    experiment: Dict[str, Any], predictions_df: pd.DataFrame
-) -> str:
-    """Determine model type from experiment metadata or predictions."""
-    try:
-        # Try to get model type from metadata
-        model_type = experiment.get("model_info", {}).get("model_type", "regression")
-        if not model_type:
-            # Fallback to checking if it's a classification task
-            if "threshold" in predictions_df.columns:
-                model_type = "classification"
-            else:
-                model_type = "regression"
-        return model_type
-    except Exception as e:
-        logger.warning(f"Error determining model type: {e}")
-        return "regression"
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Experiments | BGG Models Dashboard", layout="wide")
-st.title("Experiment Tracking")
+st.title("Experiments")
 
 
-# Initialize experiment loader
-@st.cache_resource
-def get_loader():
-    """Get cached experiment loader instance."""
-    return get_experiment_loader()
+# ============================
+# Helper functions
+# ============================
 
 
-loader = get_loader()
-
-# Model Type Selection
-try:
-    with st.spinner("Loading model types..."):
-        model_types = loader.list_model_types()
-
-    if not model_types:
-        st.sidebar.warning("No model types found in GCS experiments bucket.")
-        selected_model_type = None
-    else:
-        selected_model_type = st.sidebar.selectbox("Select Model Type", model_types)
-except Exception as e:
-    st.sidebar.error(f"Error loading model types: {e}")
-    selected_model_type = None
-
-# Cache management
-st.sidebar.divider()
-st.sidebar.header("🔄 Cache Management")
-if st.sidebar.button("🗑️ Clear Cache", help="Clear cached experiment data"):
-    loader.clear_cache()
-    st.cache_data.clear()
-    st.sidebar.success("✅ Cache cleared!")
-    st.sidebar.info("Refresh the page to reload data")
-
-# Only proceed if we have a valid model type selected
-if selected_model_type is None:
-    st.info("Please select a model type from the sidebar to view experiments.")
-    st.stop()
-
-
-# Load experiments using efficient loader
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_experiments_cached(model_type):
-    """Load experiments with caching."""
-    return loader.list_experiments(model_type)
-
-
-with st.spinner(f"Loading experiments for {selected_model_type}..."):
-    experiments = load_experiments_cached(selected_model_type)
-
-# Debug information
-logger.debug(f"Loaded {len(experiments)} experiments for {selected_model_type}")
-if experiments:
-    logger.debug(f"First experiment structure: {list(experiments[0].keys())}")
-    if "metrics" in experiments[0]:
-        logger.debug(f"Metrics structure: {list(experiments[0]['metrics'].keys())}")
-
-# Note: Debug information removed for cleaner UI
-# Debug information is still logged to console for development purposes
-
-# Check if any experiments were loaded
-if not experiments:
-    st.error("No experiments found. Please ensure experiments have been tracked.")
-    st.stop()
-
-# Dashboard Tabs
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    [
-        "Metrics Overview",
-        "Predictions",
-        "Parameters",
-        "Feature Importance",
-        "Experiment Details",
-        "Experiment Metadata",
+def _render_regression_scatter(preds: pl.DataFrame, outcome: str, exp_name: str):
+    """Render predicted vs actual scatter plot for regression."""
+    select_cols = ["prediction", "actual"] + [
+        c for c in ["name", "game_id"] if c in preds.columns
     ]
-)
+    pdf = preds.select(select_cols).to_pandas()
 
-with tab1:
-    st.header("Metrics Overview")
-    selected_dataset = st.selectbox("Select Dataset", ["train", "tune", "test"])
-    metrics_df = create_metrics_overview(experiments, selected_dataset)
-    st.subheader("Metrics Table")
-    st.dataframe(metrics_df)
-
-    st.subheader("Performance by Model Run")
-    if len(metrics_df) > 0:
-        available_metrics = [
-            col for col in metrics_df.columns if col not in ["Experiment", "Timestamp"]
-        ]
-        selected_metrics = st.multiselect(
-            "Select Metrics to Visualize",
-            available_metrics,
-            default=available_metrics[: min(3, len(available_metrics))],
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pdf["prediction"],
+            y=pdf["actual"],
+            mode="markers",
+            marker=dict(size=4, opacity=0.5),
+            text=pdf.get("name"),
+            hovertemplate="<b>%{text}</b><br>Predicted: %{x:.3f}<br>Actual: %{y:.3f}<extra></extra>",
+            showlegend=False,
         )
-        if selected_metrics:
-            performance_fig = create_performance_by_run_visualization(
-                experiments, selected_dataset, selected_metrics
-            )
-            if performance_fig:
-                st.plotly_chart(performance_fig, use_container_width=True)
-
-with tab2:
-    st.header("Model Predictions")
-
-    # Check if experiments exist
-    if not experiments:
-        st.error("No experiments available. Please track some experiments first.")
-        st.stop()
-
-    # Validate experiments list
-    if len(experiments) == 0:
-        st.warning("No experiments found. Have you run any model training?")
-        st.info("To see predictions:")
-        st.info("1. Train a model using the experiment tracking system")
-        st.info("2. Ensure predictions are logged during training")
-        st.stop()
-
-    try:
-        # Select specific experiment
-        selected_experiment = st.selectbox(
-            "Select Experiment",
-            [exp["full_name"] for exp in experiments],
-            key="predictions_experiment",
-        )
-
-        # Find the selected experiment
-        selected_exp = next(
-            (exp for exp in experiments if exp["full_name"] == selected_experiment),
-            None,
-        )
-
-        if selected_exp:
-            # Load all predictions for the selected experiment once
-            @st.cache_data
-            def load_all_predictions_cached(model_type, exp_name):
-                return loader.load_all_predictions(model_type, exp_name)
-
-            try:
-                all_predictions = load_all_predictions_cached(
-                    selected_model_type, selected_exp["experiment_name"]
-                )
-
-                # Dataset selector - now just filters the loaded data
-                available_datasets = list(all_predictions.keys())
-                if not available_datasets:
-                    st.warning("No prediction datasets found for this experiment")
-                    st.stop()
-
-                selected_dataset = st.selectbox(
-                    "Select Dataset", available_datasets, key="predictions_dataset"
-                )
-
-                predictions_df = all_predictions.get(selected_dataset)
-
-                if predictions_df is not None:
-                    # Convert pandas DataFrame to polars for compatibility
-                    display_df = pl.from_pandas(predictions_df)
-
-                    # Determine model type from experiment metadata
-                    model_type = determine_model_type(selected_exp, predictions_df)
-
-                    # Special handling for geek_rating model type
-                    if selected_model_type == "geek_rating":
-                        # Check if 'actual' column exists
-                        if "actual" not in display_df.columns:
-                            st.error("No 'actual' column found in the DataFrame")
-                            st.warning(f"Available columns: {display_df.columns}")
-                        else:
-                            # Replace non-numeric values with 5.5
-                            try:
-                                display_df = display_df.with_columns(
-                                    [
-                                        pl.when(
-                                            ~pl.col("actual")
-                                            .cast(pl.Float64)
-                                            .is_finite()
-                                        )
-                                        .then(pl.lit(5.5))
-                                        .otherwise(pl.col("actual"))
-                                        .alias("actual")
-                                    ]
-                                )
-                                st.success(
-                                    "Set non-numeric 'actual' values to 5.5 for geek_rating model"
-                                )
-                            except Exception as e:
-                                st.error(f"Error replacing null values: {e}")
-
-                    # Add filters if users_rated column exists
-                    if "users_rated" in display_df.columns:
-                        min_users_rated_filter = st.slider(
-                            "Minimum Number of Users Rated (Percentile)",
-                            min_value=0,
-                            max_value=100,
-                            value=5,
-                            step=5,
-                        )
-
-                        # Calculate the actual minimum users_rated based on the percentage
-                        actual_min_users_rated = int(
-                            display_df["users_rated"].quantile(
-                                min_users_rated_filter / 100
-                            )
-                        )
-
-                        # Apply users_rated filter
-                        display_df = display_df.filter(
-                            pl.col("users_rated") >= actual_min_users_rated
-                        )
-
-                        # Check if year_published column exists and add year filter
-                        if "year_published" in display_df.columns:
-                            # Get min and max years
-                            min_year = display_df["year_published"].min()
-                            max_year = display_df["year_published"].max()
-
-                            # Only show year filter if there's a range of years
-                            if min_year != max_year:
-                                year_filter = st.slider(
-                                    "Year Published Range",
-                                    min_value=int(min_year),
-                                    max_value=int(max_year),
-                                    value=(int(min_year), int(max_year)),
-                                )
-
-                                # Apply year filter
-                                display_df = display_df.filter(
-                                    (pl.col("year_published") >= year_filter[0])
-                                    & (pl.col("year_published") <= year_filter[1])
-                                )
-
-                    # Add filter for geek_rating model type to exclude games with actual = 5.5
-                    if selected_model_type == "geek_rating":
-                        filter_5_5 = st.checkbox(
-                            "Filter out games where actual rating = 5.5", value=False
-                        )
-                        if filter_5_5:
-                            display_df = display_df.filter(pl.col("actual") != 5.5)
-                            st.info("Filtered out games where actual rating = 5.5")
-
-                    # Display basic info about the predictions
-                    st.write(
-                        f"**Shape:** {display_df.shape[0]} rows, {display_df.shape[1]} columns"
-                    )
-
-                    # DEBUG
-                    st.write(f"DEBUG: model_type=`{model_type}`, prediction_col={'prediction' in display_df.columns}, actual_col={'actual' in display_df.columns}")
-
-                    # Performance metrics and visualization based on model type
-                    if (
-                        model_type == "regression"
-                        and "prediction" in display_df.columns
-                        and "actual" in display_df.columns
-                    ):
-                        # Convert to pandas for sklearn metrics
-                        df_pandas = display_df.to_pandas()
-
-                        # Calculate metrics
-                        mse = mean_squared_error(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        mae = mean_absolute_error(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        r2 = r2_score(df_pandas["actual"], df_pandas["prediction"])
-                        mape = mean_absolute_percentage_error(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-
-                        # Display metrics
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Mean Squared Error", f"{mse:.4f}")
-                        with col2:
-                            st.metric("Mean Absolute Error", f"{mae:.4f}")
-                        with col3:
-                            st.metric("R² Score", f"{r2:.4f}")
-                        with col4:
-                            st.metric("MAPE", f"{mape:.2f}%")
-
-                        # Prepare hover text with game_id and name if available
-                        hover_text = [
-                            create_hover_text(row) for _, row in df_pandas.iterrows()
-                        ]
-
-                        # Scatter plot of predicted vs actual with hover information
-                        fig = go.Figure()
-
-                        # Add scatter points
-                        fig.add_trace(
-                            go.Scatter(
-                                x=df_pandas["prediction"],
-                                y=df_pandas["actual"],
-                                mode="markers",
-                                marker=dict(
-                                    size=5,
-                                    color="blue",
-                                    opacity=0.7,
-                                    line=dict(width=0.5, color="darkblue"),
-                                ),
-                                text=hover_text,
-                                hoverinfo="text",
-                                hovertemplate="%{text}<extra></extra>",
-                                showlegend=False,
-                            )
-                        )
-
-                        # Add perfect prediction line
-                        fig.add_trace(
-                            go.Scatter(
-                                x=[
-                                    df_pandas["prediction"].min(),
-                                    df_pandas["prediction"].max(),
-                                ],
-                                y=[
-                                    df_pandas["prediction"].min(),
-                                    df_pandas["prediction"].max(),
-                                ],
-                                mode="lines",
-                                name="Perfect Prediction",
-                                line=dict(color="red", dash="dash"),
-                                hoverinfo="none",
-                            )
-                        )
-
-                        # Add LOESS trend line if available
-                        if HAS_STATSMODELS:
-                            try:
-                                # Sort data for LOESS smoothing
-                                sorted_indices = np.argsort(df_pandas["prediction"])
-                                x_sorted = df_pandas["prediction"].iloc[sorted_indices]
-                                y_sorted = df_pandas["actual"].iloc[sorted_indices]
-
-                                # Apply LOESS smoothing
-                                loess_smoothed = lowess.lowess(
-                                    y_sorted, x_sorted, frac=2 / 3, it=5
-                                )
-
-                                # Add LOESS line
-                                fig.add_trace(
-                                    go.Scatter(
-                                        x=loess_smoothed[:, 0],
-                                        y=loess_smoothed[:, 1],
-                                        mode="lines",
-                                        name="LOESS Trend",
-                                        line=dict(color="green", width=2, dash="dot"),
-                                    )
-                                )
-                            except Exception as e:
-                                logger.warning(f"Error adding LOESS trend line: {e}")
-                        else:
-                            st.info("Install statsmodels for LOESS trend line")
-
-                        # Update layout
-                        fig.update_layout(
-                            title="Predicted vs Actual Values",
-                            xaxis_title="Predicted",
-                            yaxis_title="Actual",
-                            hovermode="closest",
-                        )
-
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    elif (
-                        model_type == "classification"
-                        and "prediction" in display_df.columns
-                        and "actual" in display_df.columns
-                    ):
-                        # Convert to pandas for sklearn metrics
-                        df_pandas = display_df.to_pandas()
-
-                        # Calculate metrics
-                        accuracy = accuracy_score(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        precision = precision_score(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        recall = recall_score(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        f1 = f1_score(df_pandas["actual"], df_pandas["prediction"])
-                        roc_auc = roc_auc_score(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-
-                        # Display metrics
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        with col1:
-                            st.metric("Accuracy", f"{accuracy:.2%}")
-                        with col2:
-                            st.metric("Precision", f"{precision:.2%}")
-                        with col3:
-                            st.metric("Recall", f"{recall:.2%}")
-                        with col4:
-                            st.metric("F1 Score", f"{f1:.2%}")
-                        with col5:
-                            st.metric("ROC AUC", f"{roc_auc:.2%}")
-
-                        # Confusion Matrix Visualization
-                        cm = confusion_matrix(
-                            df_pandas["actual"], df_pandas["prediction"]
-                        )
-                        fig = px.imshow(
-                            cm,
-                            labels=dict(x="Predicted", y="Actual", color="Count"),
-                            x=["Negative", "Positive"],
-                            y=["Negative", "Positive"],
-                            title="Confusion Matrix",
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-
-                    # Show the dataframe
-                    st.dataframe(display_df.to_pandas())
-
-                else:
-                    st.warning(
-                        f"No predictions available for {selected_dataset} dataset"
-                    )
-                    st.info("Possible reasons:")
-                    st.info("1. Predictions were not saved during training")
-                    st.info("2. The selected dataset might be empty")
-                    st.info("3. Experiment tracking did not log predictions")
-
-            except Exception as e:
-                st.error(f"Error loading predictions: {e}")
-                st.info("Troubleshooting tips:")
-                st.info("1. Verify the experiment was tracked correctly")
-                st.info("2. Check that prediction files exist in GCS")
-                st.info("3. Ensure the experiment structure is valid")
-                logger.exception("Predictions loading error")
-        else:
-            st.error("Could not find the selected experiment")
-
-    except Exception as e:
-        st.error(f"Error loading predictions: {e}")
-        st.info("Troubleshooting tips:")
-        st.info("1. Verify the experiment was tracked correctly")
-        st.info("2. Check that predictions were logged during training")
-        st.info("3. Ensure the experiment file is not corrupted")
-        logger.exception("Predictions loading error")
-
-with tab3:
-    st.header("Model Parameters")
-    params_df = create_parameters_overview(experiments)
-    st.dataframe(params_df)
-
-with tab4:
-    st.header("Feature Importance")
-
-    # Load all feature importance data for the selected model type (cached)
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
-    def load_all_feature_importance_cached(model_type):
-        """Load all feature importance data with caching."""
-        return loader.load_all_feature_importance(model_type)
-
-    with st.spinner(f"Loading feature importance data for {selected_model_type}..."):
-        all_feature_importance = load_all_feature_importance_cached(selected_model_type)
-
-    # Check if any feature importance data was loaded
-    if not all_feature_importance:
-        st.warning("No feature importance data available for this model type")
-        st.info("This could mean:")
-        st.info("1. Feature importance was not calculated during training")
-        st.info("2. The feature importance files were not saved")
-        st.info(
-            "3. The experiments used model types that don't support feature importance"
-        )
-    else:
-        # Select specific experiment from available ones
-        available_experiments = list(all_feature_importance.keys())
-        experiment_display_names = [
-            exp["full_name"]
-            for exp in experiments
-            if exp["experiment_name"] in available_experiments
-        ]
-
-        if not experiment_display_names:
-            st.warning("No experiments with feature importance data found")
-        else:
-            selected_experiment = st.selectbox(
-                "Select Experiment",
-                experiment_display_names,
-                key="feature_importance_experiment",
-            )
-
-            # Find the selected experiment
-            selected_exp = next(
-                (exp for exp in experiments if exp["full_name"] == selected_experiment),
-                None,
-            )
-
-            # Feature importance configuration for overall plot
-            top_n = st.slider(
-                "Top N Features (Overall)", min_value=5, max_value=250, value=40, step=5
-            )
-
-            if (
-                selected_exp
-                and selected_exp["experiment_name"] in all_feature_importance
-            ):
-                # Get feature importance data from the cached batch load
-                feature_importance_df = all_feature_importance[
-                    selected_exp["experiment_name"]
-                ]
-
-                if feature_importance_df is not None:
-                    # Overall feature importance plot
-                    st.subheader("Overall Feature Importance")
-
-                    # Determine the importance column name
-                    importance_col = None
-                    if "feature_importance" in feature_importance_df.columns:
-                        importance_col = "feature_importance"
-                    elif "coefficient" in feature_importance_df.columns:
-                        importance_col = "coefficient"
-                    elif "abs_feature_importance" in feature_importance_df.columns:
-                        importance_col = "abs_feature_importance"
-                    elif "abs_coefficient" in feature_importance_df.columns:
-                        importance_col = "abs_coefficient"
-
-                    if importance_col:
-                        # Sort by absolute importance and take top N
-                        if importance_col in ["coefficient"]:
-                            # For coefficients, sort by absolute value
-                            sorted_df = feature_importance_df.copy()
-                            sorted_df["abs_importance"] = sorted_df[
-                                importance_col
-                            ].abs()
-                            sorted_df = sorted_df.nlargest(top_n, "abs_importance")
-                        else:
-                            # For feature importance, sort directly
-                            sorted_df = feature_importance_df.nlargest(
-                                top_n, importance_col
-                            )
-
-                        # Create horizontal bar plot
-                        sorted_df["abbreviated_feature"] = sorted_df["feature"].apply(
-                            abbreviate_feature
-                        )
-
-                        # Create the plot
-                        if importance_col == "coefficient":
-                            # For coefficients, use signed values with color scale
-                            fig = px.bar(
-                                sorted_df.sort_values(importance_col),
-                                y="abbreviated_feature",
-                                x=importance_col,
-                                orientation="h",
-                                color=importance_col,
-                                color_continuous_scale="RdBu",
-                                color_continuous_midpoint=0,
-                                title=f"Top {top_n} Features - {selected_exp['experiment_name']} (Coefficients)",
-                            )
-                            # Add zero line
-                            fig.add_vline(
-                                x=0, line_width=2, line_dash="dash", line_color="gray"
-                            )
-                        else:
-                            # For feature importance, use positive values
-                            fig = px.bar(
-                                sorted_df.sort_values(importance_col, ascending=True),
-                                y="abbreviated_feature",
-                                x=importance_col,
-                                orientation="h",
-                                color=importance_col,
-                                color_continuous_scale="Viridis",
-                                title=f"Top {top_n} Features - {selected_exp['experiment_name']} (Feature Importance)",
-                            )
-
-                        # Update layout
-                        fig.update_layout(
-                            height=max(400, len(sorted_df) * 20),
-                            width=800,
-                            yaxis_title="Feature",
-                            xaxis_title=(
-                                "Importance"
-                                if importance_col != "coefficient"
-                                else "Effect"
-                            ),
-                            title_x=0.5,
-                            coloraxis_colorbar=dict(title=""),
-                        )
-
-                        # Add hover text with full feature names
-                        fig.update_traces(
-                            hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>"
-                            + (
-                                f"{importance_col.replace('_', ' ').title()}: %{{x:.4f}}<extra></extra>"
-                            ),
-                            text=sorted_df["feature"],
-                            texttemplate="",
-                            textposition="none",
-                        )
-
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        # Category-specific feature importance plots
-                        st.subheader("Feature Importance by Category")
-
-                        # Configuration for category plots
-                        top_n_per_category = st.slider(
-                            "Top N Features (Per Category)",
-                            min_value=5,
-                            max_value=100,
-                            value=25,
-                            step=5,
-                        )
-
-                        # Define categories to look for
-                        categories = {
-                            "Publisher": "publisher_",
-                            "Designer": "designer_",
-                            "Artist": "artist_",
-                            "Mechanic": "mechanic_",
-                            "Category": "category_",
-                            "Family": "family_",
-                        }
-
-                        category_plots = {}
-
-                        for category_name, prefix in categories.items():
-                            # Filter features for this category
-                            category_features = feature_importance_df[
-                                feature_importance_df["feature"].str.startswith(prefix)
-                            ]
-
-                            if len(category_features) == 0:
-                                continue
-
-                            # Sort and select top N features
-                            if importance_col == "coefficient":
-                                category_features["abs_importance"] = category_features[
-                                    importance_col
-                                ].abs()
-                                category_sorted = category_features.nlargest(
-                                    top_n_per_category, "abs_importance"
-                                )
-                                category_sorted = category_sorted.sort_values(
-                                    importance_col
-                                )
-                            else:
-                                category_sorted = category_features.nlargest(
-                                    top_n_per_category, importance_col
-                                )
-                                category_sorted = category_sorted.sort_values(
-                                    importance_col, ascending=True
-                                )
-
-                            # Abbreviate feature names (remove prefix)
-                            category_sorted["abbreviated_feature"] = category_sorted[
-                                "feature"
-                            ].apply(
-                                lambda x: abbreviate_feature(
-                                    str(x).replace(prefix, ""), 30
-                                )
-                            )
-
-                            # Create plot for this category
-                            if importance_col == "coefficient":
-                                cat_fig = px.bar(
-                                    category_sorted,
-                                    y="abbreviated_feature",
-                                    x=importance_col,
-                                    orientation="h",
-                                    color=importance_col,
-                                    color_continuous_scale="RdBu",
-                                    color_continuous_midpoint=0,
-                                    title=f"Top {min(top_n_per_category, len(category_sorted))} {category_name} Features",
-                                )
-                                cat_fig.add_vline(
-                                    x=0,
-                                    line_width=2,
-                                    line_dash="dash",
-                                    line_color="gray",
-                                )
-                            else:
-                                cat_fig = px.bar(
-                                    category_sorted,
-                                    y="abbreviated_feature",
-                                    x=importance_col,
-                                    orientation="h",
-                                    color=importance_col,
-                                    color_continuous_scale="Viridis",
-                                    title=f"Top {min(top_n_per_category, len(category_sorted))} {category_name} Features",
-                                )
-
-                            cat_fig.update_layout(
-                                height=max(400, len(category_sorted) * 25),
-                                width=800,
-                                yaxis_title="Feature",
-                                xaxis_title=(
-                                    "Importance"
-                                    if importance_col != "coefficient"
-                                    else "Effect"
-                                ),
-                                title_x=0.5,
-                                coloraxis_colorbar=dict(title=""),
-                            )
-
-                            cat_fig.update_traces(
-                                hovertemplate="<b>%{y}</b><br>Full Name: %{text}<br>"
-                                + (
-                                    f"{importance_col.replace('_', ' ').title()}: %{{x:.4f}}<extra></extra>"
-                                ),
-                                text=category_sorted["feature"],
-                                texttemplate="",
-                                textposition="none",
-                            )
-
-                            category_plots[category_name] = cat_fig
-
-                        if category_plots:
-                            # Create tabs for each category
-                            category_names = list(category_plots.keys())
-                            if len(category_names) > 0:
-                                category_tabs = st.tabs(category_names)
-
-                                for i, (category_name, fig) in enumerate(
-                                    category_plots.items()
-                                ):
-                                    with category_tabs[i]:
-                                        st.plotly_chart(fig, use_container_width=True)
-                            else:
-                                st.info(
-                                    "No category-specific features found in this experiment."
-                                )
-                        else:
-                            st.info(
-                                "No category-specific features found in this experiment."
-                            )
-
-                    else:
-                        st.warning(
-                            "Could not determine importance column in feature importance data"
-                        )
-                        st.write(
-                            "Available columns:", list(feature_importance_df.columns)
-                        )
-
-                else:
-                    st.warning(
-                        "No feature importance data available for this experiment"
-                    )
-                    st.info("This could mean:")
-                    st.info("1. Feature importance was not calculated during training")
-                    st.info("2. The feature importance file was not saved")
-                    st.info(
-                        "3. The experiment used a model type that doesn't support feature importance"
-                    )
-
-            else:
-                st.warning("No feature importance data available for this experiment")
-                st.info("This could mean:")
-                st.info("1. Feature importance was not calculated during training")
-                st.info("2. The feature importance file was not saved")
-                st.info(
-                    "3. The experiment used a model type that doesn't support feature importance"
-                )
-
-with tab5:
-    st.header("Experiment Details")
-    selected_experiment = st.selectbox(
-        "Select Experiment",
-        [exp["full_name"] for exp in experiments],
-        key="details_experiment",
     )
-    exp_name = selected_experiment
-    try:
-        with st.spinner("Loading experiment details..."):
-            details = loader.load_experiment_details(selected_model_type, exp_name)
-        st.json(details)
-    except Exception as e:
-        st.error(f"Could not load experiment details: {e}")
 
-with tab6:
-    st.header("Experiment Metadata")
-    for exp in experiments:
-        with st.expander(f"{exp['full_name']}"):
-            st.json(exp)
+    min_val = min(pdf["prediction"].min(), pdf["actual"].min())
+    max_val = max(pdf["prediction"].max(), pdf["actual"].max())
+    fig.add_trace(
+        go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode="lines",
+            line=dict(color="red", dash="dash"),
+            showlegend=False,
+        )
+    )
 
-# Add footer with BGG logo
+    if HAS_STATSMODELS and len(pdf) > 10:
+        try:
+            sorted_idx = np.argsort(pdf["prediction"].values)
+            smoothed = lowess_mod.lowess(
+                pdf["actual"].values[sorted_idx],
+                pdf["prediction"].values[sorted_idx],
+                frac=2 / 3,
+                it=5,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=smoothed[:, 0],
+                    y=smoothed[:, 1],
+                    mode="lines",
+                    line=dict(color="green", width=2, dash="dot"),
+                    name="LOESS",
+                    showlegend=False,
+                )
+            )
+        except Exception:
+            pass
+
+    corr = pdf["prediction"].corr(pdf["actual"])
+    label = outcome.replace("_", " ").title()
+    fig.update_layout(
+        title=f"{label} — {exp_name} (r={corr:.3f})",
+        xaxis_title="Predicted",
+        yaxis_title="Actual",
+        height=500,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_classification_metrics(preds: pl.DataFrame):
+    """Render classification metrics and confusion matrix."""
+    from sklearn.metrics import (
+        accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+        confusion_matrix,
+    )
+
+    pdf = preds.to_pandas()
+    cols = st.columns(4)
+    cols[0].metric(
+        "Accuracy", f"{accuracy_score(pdf['actual'], pdf['prediction']):.2%}"
+    )
+    cols[1].metric(
+        "Precision", f"{precision_score(pdf['actual'], pdf['prediction']):.2%}"
+    )
+    cols[2].metric(
+        "Recall", f"{recall_score(pdf['actual'], pdf['prediction']):.2%}"
+    )
+    cols[3].metric("F1", f"{f1_score(pdf['actual'], pdf['prediction']):.2%}")
+
+    cm = confusion_matrix(pdf["actual"], pdf["prediction"])
+    fig = px.imshow(
+        cm,
+        labels=dict(x="Predicted", y="Actual", color="Count"),
+        x=["Negative", "Positive"],
+        y=["Negative", "Positive"],
+        title="Confusion Matrix",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+FEATURE_CATEGORIES = {
+    "All": None,
+    "Designer": "designer_",
+    "Publisher": "publisher_",
+    "Artist": "artist_",
+    "Mechanic": "mechanic_",
+    "Category": "category_",
+    "Family": "family_",
+    "Embedding": "emb_",
+    "Other": "__other__",
+}
+
+
+def _render_coefficients_by_year(exp_coeffs: list, key_prefix: str, outcome: str = ""):
+    """Render dot plot of coefficients colored by year.
+
+    Args:
+        exp_coeffs: list of (label, coeffs_df) tuples where label is e.g. "2022"
+        key_prefix: unique key prefix for streamlit widgets
+        outcome: outcome name for display in chart title
+    """
+    import pandas as pd
+
+    ctrl_cols = st.columns(2)
+    with ctrl_cols[0]:
+        top_n = st.slider(
+            "Top N features", 10, 100, 40, 5, key=f"coeff_n_{key_prefix}"
+        )
+    with ctrl_cols[1]:
+        category = st.selectbox(
+            "Feature category",
+            list(FEATURE_CATEGORIES.keys()),
+            key=f"coeff_cat_{key_prefix}",
+        )
+
+    # Combine all coefficients with their year label
+    frames = []
+    for label, coeffs in exp_coeffs:
+        pdf = coeffs.to_pandas()
+        if "coefficient" not in pdf.columns:
+            continue
+        pdf["year"] = str(label)
+        frames.append(pdf[["feature", "coefficient", "year"]])
+
+    if not frames:
+        st.info("No coefficient data available.")
+        return
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    # Filter by category and clean up display names
+    prefix = FEATURE_CATEGORIES[category]
+    if prefix == "__other__":
+        known_prefixes = [p for p in FEATURE_CATEGORIES.values() if p and p != "__other__"]
+        combined = combined[~combined["feature"].apply(
+            lambda f: any(f.startswith(p) for p in known_prefixes)
+        )]
+    elif prefix is not None:
+        combined = combined[combined["feature"].str.startswith(prefix)]
+
+    # Clean feature names: strip prefix, replace underscores, title case
+    def _clean_feature(name):
+        if prefix and prefix != "__other__":
+            name = name[len(prefix):]
+        return name.replace("_", " ").strip().title()
+
+    combined["display_name"] = combined["feature"].apply(_clean_feature)
+
+    # Drop zero coefficients (ARD shrinks many to exactly zero)
+    combined = combined[combined["coefficient"] != 0]
+
+    if combined.empty:
+        st.info(f"No coefficients found for category: {category}")
+        return
+
+    # Pick top N features by max absolute coefficient across all years
+    feature_max = (
+        combined.groupby("display_name")["coefficient"]
+        .apply(lambda x: x.abs().max())
+        .nlargest(top_n)
+        .index
+    )
+    plot_df = combined[combined["display_name"].isin(feature_max)]
+
+    # Sort features by mean coefficient: largest positive at top
+    feature_order = (
+        plot_df.groupby("display_name")["coefficient"]
+        .mean()
+        .sort_values(ascending=True)
+        .index.tolist()
+    )
+
+    fig = go.Figure()
+    years = sorted(plot_df["year"].unique())
+    # Use viridis color scale sampled evenly across years
+    from plotly.colors import sample_colorscale
+    # Truncate viridis to avoid dark navy and bright yellow extremes
+    scale_positions = [
+        0.15 + 0.70 * i / max(len(years) - 1, 1) for i in range(len(years))
+    ]
+    year_colors = sample_colorscale("Viridis", scale_positions)
+    for year, color in zip(years, year_colors):
+        year_df = plot_df[plot_df["year"] == year]
+        year_df = year_df.set_index("display_name").reindex(feature_order).reset_index()
+        fig.add_trace(go.Scatter(
+            x=year_df["coefficient"],
+            y=year_df["display_name"],
+            mode="markers",
+            marker=dict(size=8, color=color),
+            name=str(year),
+            hovertemplate="<b>%{y}</b><br>Coefficient: %{x:.4f}<br>Year: %{fullData.name}<extra></extra>",
+            hoverlabel=dict(bgcolor=color, font_color="white"),
+        ))
+
+    fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    outcome_title = outcome.replace("_", " ").title() if outcome else ""
+    title_parts = [f"Top {top_n} Coefficients"]
+    if outcome_title:
+        title_parts.append(outcome_title)
+    title_parts.append(category)
+    fig.update_layout(
+        title=" — ".join(title_parts),
+        height=max(400, len(feature_order) * 22),
+        yaxis=dict(title="", type="category", categoryorder="array", categoryarray=feature_order),
+        xaxis_title="Coefficient",
+        legend_title="Year",
+        hoverlabel=dict(font_size=13),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_coefficients_single(coeffs: pl.DataFrame, key_prefix: str):
+    """Render coefficient bar chart for a single experiment."""
+    top_n = st.slider(
+        "Top N features", 10, 100, 40, 5, key=f"coeff_n_{key_prefix}"
+    )
+
+    pdf = coeffs.to_pandas()
+    if "coefficient" in pdf.columns:
+        pdf["abs_val"] = pdf["coefficient"].abs()
+        plot_df = pdf.nlargest(top_n, "abs_val").sort_values("coefficient")
+        fig = px.bar(
+            plot_df,
+            y="feature",
+            x="coefficient",
+            orientation="h",
+            color="coefficient",
+            color_continuous_scale="RdBu",
+            color_continuous_midpoint=0,
+            title=f"Top {top_n} Coefficients",
+        )
+        fig.add_vline(x=0, line_dash="dash", line_color="gray")
+        fig.update_layout(
+            height=max(400, top_n * 20),
+            yaxis_title="",
+            xaxis_title="Effect",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.write("Unknown coefficient format:", pdf.columns.tolist())
+
+
+# ============================
+# Data loading
+# ============================
+
+
+@st.cache_data(ttl=60)
+def get_experiments():
+    return discover_experiments()
+
+
+experiments = get_experiments()
+
+if not experiments:
+    st.warning(
+        "No experiments found in models/experiments/. Run training first."
+    )
+    st.stop()
+
+# Split into eval and finalized
+eval_exps = [e for e in experiments if e["is_eval"]]
+finalized_exps = [e for e in experiments if e["is_finalized"]]
+
+# --- Tabs ---
+tab_eval, tab_finalized, tab_metadata = st.tabs(["Experiments", "Models", "Metadata"])
+
+# ============================
+# Tab 1: Experiments
+# ============================
+with tab_eval:
+    st.header("Experiments")
+
+    if not eval_exps:
+        st.info("No eval experiments found.")
+    else:
+        eval_outcomes = sorted(set(e["outcome"] for e in eval_exps))
+        filter_cols = st.columns(2)
+        with filter_cols[0]:
+            selected_outcome = st.selectbox(
+                "Outcome", eval_outcomes, key="eval_outcome"
+            )
+        with filter_cols[1]:
+            selected_dataset = st.selectbox(
+                "Dataset", ["test", "tune", "train"], key="eval_dataset"
+            )
+
+        outcome_exps = [e for e in eval_exps if e["outcome"] == selected_outcome]
+
+        # --- Metrics Table ---
+        st.subheader("Metrics")
+        rows = []
+        for exp in outcome_exps:
+            m = load_metrics(exp["path"], selected_dataset)
+            if m:
+                row = {"experiment": exp["name"], "version": exp["version"]}
+                meta = exp["metadata"].get("metadata", {})
+                row["test_year"] = meta.get("test_through", "")
+                # Only include scalar metrics (skip nested dicts like confusion_matrix)
+                for k, v in m.items():
+                    if isinstance(v, (int, float, str, bool)):
+                        # MAPE is not meaningful for count-based outcomes
+                        if k == "mape" and selected_outcome == "users_rated":
+                            continue
+                        row[k] = v
+                rows.append(row)
+
+        if rows:
+            metrics_df = pl.DataFrame(rows)
+            st.dataframe(metrics_df.to_pandas(), use_container_width=True)
+
+            # --- Metrics Over Time ---
+            exclude_cols = {"experiment", "version", "test_year"}
+            # MAPE is not meaningful for count-based outcomes like users_rated
+            if selected_outcome == "users_rated":
+                exclude_cols.add("mape")
+            metric_cols = [
+                c for c in metrics_df.columns
+                if c not in exclude_cols
+                and metrics_df[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+            ]
+            if metric_cols and "test_year" in metrics_df.columns:
+                sorted_df = metrics_df.sort("test_year").to_pandas()
+                melted = sorted_df.melt(
+                    id_vars=["test_year", "experiment", "version"],
+                    value_vars=metric_cols,
+                    var_name="metric",
+                    value_name="value",
+                )
+                fig = px.line(
+                    melted,
+                    x="test_year",
+                    y="value",
+                    facet_col="metric",
+                    facet_col_wrap=3,
+                    facet_col_spacing=0.08,
+                    facet_row_spacing=0.12,
+                    markers=True,
+                    title="Metrics Over Time",
+                    custom_data=["experiment", "version", "metric"],
+                )
+                fig.update_traces(
+                    hovertemplate=(
+                        "<b>%{customdata[2]}</b>: %{y:.4f}<br>"
+                        "Year: %{x}<br>"
+                        "Model: %{customdata[0]} (%{customdata[1]})"
+                        "<extra></extra>"
+                    )
+                )
+                fig.update_yaxes(matches=None, rangemode="tozero", showticklabels=True)
+                fig.update_xaxes(matches=None)
+                fig.update_annotations(font_size=12)
+                n_rows = (len(metric_cols) + 2) // 3
+                fig.update_layout(
+                    xaxis_title="Test Year",
+                    hovermode="closest",
+                    height=350 * n_rows,
+                    margin=dict(t=60, b=40),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info(
+                f"No {selected_dataset} metrics found for {selected_outcome} eval experiments."
+            )
+
+        # --- Predictions Scatter ---
+        st.subheader("Predictions")
+        exp_names = [e["name"] for e in outcome_exps]
+        selected_exp_name = st.selectbox(
+            "Experiment", exp_names, key="eval_exp_select"
+        )
+        selected_exp = next(
+            e for e in outcome_exps if e["name"] == selected_exp_name
+        )
+
+        @st.cache_data
+        def load_preds_cached(path_str, dataset):
+            from pathlib import Path
+
+            return load_predictions(Path(path_str), dataset)
+
+        preds = load_preds_cached(str(selected_exp["path"]), selected_dataset)
+
+        if preds is not None and "prediction" in preds.columns and "actual" in preds.columns:
+            model_task = selected_exp["metadata"].get("metadata", {}).get(
+                "model_task", "regression"
+            )
+            if model_task == "regression":
+                _render_regression_scatter(preds, selected_outcome, selected_exp_name)
+            elif model_task == "classification":
+                _render_classification_metrics(preds)
+
+            # Sort by predicted probability for classification, prediction for regression
+            sort_col = "predicted_proba_class_1" if "predicted_proba_class_1" in preds.columns else "prediction"
+            sorted_preds = preds.sort(sort_col, descending=True)
+            st.caption(f"Showing {len(sorted_preds):,} predictions")
+            st.dataframe(sorted_preds.to_pandas(), use_container_width=True)
+        elif preds is not None:
+            st.info("Predictions loaded but missing prediction column.")
+        else:
+            st.info(f"No {selected_dataset} predictions found.")
+
+        # --- Feature Importance ---
+        st.subheader("Coefficients")
+
+        @st.cache_data
+        def load_coeff_cached(path_str):
+            from pathlib import Path
+            return load_coefficients(Path(path_str))
+
+        exp_coeffs = []
+        for exp in outcome_exps:
+            coeffs = load_coeff_cached(str(exp["path"]))
+            if coeffs is not None:
+                test_year = exp["metadata"].get("metadata", {}).get("test_through", exp["name"])
+                exp_coeffs.append((test_year, coeffs))
+
+        if exp_coeffs:
+            _render_coefficients_by_year(exp_coeffs, f"eval_{selected_outcome}", outcome=selected_outcome)
+        else:
+            st.info("No coefficient data found for these experiments.")
+
+# ============================
+# Tab 2: Models
+# ============================
+with tab_finalized:
+    st.header("Models")
+
+    if not finalized_exps:
+        st.info("No finalized models found.")
+    else:
+        final_outcomes = sorted(set(e["outcome"] for e in finalized_exps))
+        selected_final_outcome = st.selectbox(
+            "Outcome", final_outcomes, key="final_outcome"
+        )
+
+        outcome_finals = [
+            e for e in finalized_exps if e["outcome"] == selected_final_outcome
+        ]
+
+        for exp in outcome_finals:
+            st.subheader(f"{exp['name']} ({exp['version']})")
+
+            # Metrics
+            m = load_metrics(exp["path"], "test")
+            if m:
+                model_task = exp["metadata"].get("metadata", {}).get(
+                    "model_task", "regression"
+                )
+                if model_task == "regression":
+                    cols = st.columns(4)
+                    cols[0].metric("RMSE", f"{m.get('rmse', 0):.4f}")
+                    cols[1].metric("MAE", f"{m.get('mae', 0):.4f}")
+                    cols[2].metric("R²", f"{m.get('r2', 0):.4f}")
+                    cols[3].metric("MAPE", f"{m.get('mape', 0):.4f}")
+                elif model_task == "classification":
+                    cols = st.columns(4)
+                    cols[0].metric("Accuracy", f"{m.get('accuracy', 0):.2%}")
+                    cols[1].metric("F1", f"{m.get('f1', 0):.2%}")
+                    cols[2].metric("AUC", f"{m.get('auc', 0):.2%}")
+                    cols[3].metric("Log Loss", f"{m.get('log_loss', 0):.4f}")
+
+            # Model info summary
+            meta = exp["metadata"].get("metadata", {})
+            info_cols = st.columns(3)
+            info_cols[0].metric("Features", meta.get("feature_count", "?"))
+            info_cols[1].metric(
+                "Train Size", meta.get("data_sizes", {}).get("train", "?")
+            )
+            info_cols[2].metric("Algorithm", meta.get("algorithm", "?"))
+
+            # Coefficients
+            @st.cache_data
+            def load_final_coeff(path_str):
+                from pathlib import Path
+
+                return load_coefficients(Path(path_str))
+
+            coeffs = load_final_coeff(str(exp["path"]))
+            if coeffs is not None:
+                _render_coefficients_single(coeffs, f"final_{exp['name']}")
+
+            # Metadata
+            with st.expander("Metadata"):
+                st.json(exp["metadata"])
+                if exp["model_info"]:
+                    st.json(exp["model_info"])
+
+# ============================
+# Tab 3: Metadata
+# ============================
+with tab_metadata:
+    st.header("Metadata")
+
+    all_exps = eval_exps + finalized_exps
+    if not all_exps:
+        st.info("No experiments found.")
+    else:
+        for exp in all_exps:
+            with st.expander(exp["name"]):
+                st.json(exp["metadata"])
+                if exp["model_info"]:
+                    st.json(exp["model_info"])
+
 render_footer()

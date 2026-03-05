@@ -39,8 +39,8 @@ years:
     test_through: 2024
   # years to run over for year over year evaluation
   eval:
-    start: 2022
-    end: 2023
+    start: 2024
+    end: 2024
   # data to score with trained model
   score:
     start: 2025   # current - 1

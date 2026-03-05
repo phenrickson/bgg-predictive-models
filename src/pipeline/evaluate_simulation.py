@@ -550,11 +550,9 @@ def evaluate_year(
     if save_predictions:
         predictions_dir = Path(output_dir) if output_dir else Path("models/simulation")
 
-        # Determine run name - use provided or derive from mode and date
         effective_run_name = run_name
         if effective_run_name is None:
-            from datetime import date
-            effective_run_name = f"{geek_rating_mode}-{date.today().isoformat()}"
+            effective_run_name = f"{geek_rating_mode}-{n_samples}s"
 
         predictions_dir = predictions_dir / effective_run_name
         predictions_dir.mkdir(parents=True, exist_ok=True)
@@ -819,8 +817,10 @@ Examples:
         if args.geek_rating_experiment:
             experiment_names["geek_rating"] = args.geek_rating_experiment
 
-    # Get run name
+    # Get run name - derive from config if not provided
     run_name = args.run_name
+    if run_name is None:
+        run_name = f"{geek_rating_mode}-{n_samples}s"
 
     logger.info("=" * 60)
     logger.info("SIMULATION EVALUATION")
