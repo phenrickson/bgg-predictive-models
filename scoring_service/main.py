@@ -307,9 +307,10 @@ def load_games_for_main_scoring(
     complexity_model_version: Optional[int] = None,
     rating_model_version: Optional[int] = None,
     users_rated_model_version: Optional[int] = None,
+    geek_rating_model_version: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    Load games that need main predictions (hurdle, rating, users_rated).
+    Load games that need main predictions (hurdle, rating, users_rated, geek_rating).
 
     Returns games that are:
     - In the year range AND
@@ -324,6 +325,7 @@ def load_games_for_main_scoring(
         complexity_model_version: Target complexity model version (rescore if different)
         rating_model_version: Target rating model version (rescore if different)
         users_rated_model_version: Target users_rated model version (rescore if different)
+        geek_rating_model_version: Target geek_rating model version (rescore if different)
 
     Returns:
         DataFrame with game features for scoring
@@ -341,6 +343,7 @@ def load_games_for_main_scoring(
         complexity_model_version=complexity_model_version,
         rating_model_version=rating_model_version,
         users_rated_model_version=users_rated_model_version,
+        geek_rating_model_version=geek_rating_model_version,
     )
     return df.to_pandas()
 
@@ -577,6 +580,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 complexity_model_version=complexity_registration["version"],
                 rating_model_version=rating_registration["version"],
                 users_rated_model_version=users_rated_registration["version"],
+                geek_rating_model_version=geek_rating_registration["version"],
             )
             if len(df_pandas) == 0:
                 logger.info("No games need scoring - all features unchanged")
@@ -1133,6 +1137,7 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
                 complexity_model_version=complexity_reg["version"],
                 rating_model_version=rating_reg["version"],
                 users_rated_model_version=users_rated_reg["version"],
+                geek_rating_model_version=geek_rating_reg["version"],
             )
             if len(df_pandas) == 0:
                 return SimulateGamesResponse(

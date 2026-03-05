@@ -236,6 +236,7 @@ class BGGDataLoader:
         complexity_model_version: Optional[int] = None,
         rating_model_version: Optional[int] = None,
         users_rated_model_version: Optional[int] = None,
+        geek_rating_model_version: Optional[int] = None,
         embeddings_table: Optional[str] = None,
         timeout: int = 300,
     ) -> pl.DataFrame:
@@ -255,6 +256,7 @@ class BGGDataLoader:
             complexity_model_version: Target complexity model version
             rating_model_version: Target rating model version
             users_rated_model_version: Target users_rated model version
+            geek_rating_model_version: Target geek_rating model version
             embeddings_table: Full BigQuery table path for embeddings
             timeout: Timeout in seconds for BigQuery query execution
 
@@ -268,16 +270,19 @@ class BGGDataLoader:
 
         features_table = f"{self.project_id}.{self.dataset}.{self.table}"
 
-        # Build version mismatch conditions
+        # Build version mismatch conditions (use IFNULL for NULL-safe comparison
+        # so games scored before a model existed get flagged for re-scoring)
         version_checks = []
         if hurdle_model_version is not None:
-            version_checks.append(f"lp.hurdle_model_version != {hurdle_model_version}")
+            version_checks.append(f"IFNULL(lp.hurdle_model_version, -1) != {hurdle_model_version}")
         if complexity_model_version is not None:
-            version_checks.append(f"lp.complexity_model_version != {complexity_model_version}")
+            version_checks.append(f"IFNULL(lp.complexity_model_version, -1) != {complexity_model_version}")
         if rating_model_version is not None:
-            version_checks.append(f"lp.rating_model_version != {rating_model_version}")
+            version_checks.append(f"IFNULL(lp.rating_model_version, -1) != {rating_model_version}")
         if users_rated_model_version is not None:
-            version_checks.append(f"lp.users_rated_model_version != {users_rated_model_version}")
+            version_checks.append(f"IFNULL(lp.users_rated_model_version, -1) != {users_rated_model_version}")
+        if geek_rating_model_version is not None:
+            version_checks.append(f"IFNULL(lp.geek_rating_model_version, -1) != {geek_rating_model_version}")
 
         version_condition = ""
         if version_checks:
@@ -301,6 +306,7 @@ class BGGDataLoader:
               complexity_model_version,
               rating_model_version,
               users_rated_model_version,
+              geek_rating_model_version,
               ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) as rn
             FROM `{ml_project_id}.raw.ml_predictions_landing`
           ) lp ON gf.game_id = lp.game_id AND lp.rn = 1

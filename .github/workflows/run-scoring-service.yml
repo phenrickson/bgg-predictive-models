@@ -15,28 +15,20 @@ on:
         description: 'End year for predictions'
         required: false
         default: '2030'
-      output_path:
-        description: 'Cloud storage path for predictions (optional)'
-        required: false
-        default: ''
       n_samples:
         description: 'Number of posterior samples for simulation'
         required: false
         default: '1000'
-      use_change_detection:
-        description: 'Only score games with changed features'
+      max_games:
+        description: 'Maximum games per batch'
         required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+        default: '50000'
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
 
 jobs:
-  setup:
+  score-simulations:
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
 
@@ -44,36 +36,18 @@ jobs:
       contents: read
       id-token: write
 
-    outputs:
-      env_tag: ${{ steps.env-tag.outputs.env_tag }}
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set Environment Tag
-      id: env-tag
+    - name: Set Environment Variables
+      id: env
       run: |
         if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          echo "env_tag=prod" >> $GITHUB_OUTPUT
+          echo "env_name=prod" >> $GITHUB_OUTPUT
         else
-          echo "env_tag=dev" >> $GITHUB_OUTPUT
+          echo "env_name=dev" >> $GITHUB_OUTPUT
         fi
-
-  # Removed get-latest-models job since model names now come from config
-
-  trigger-predictions:
-    needs: [setup]
-    runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
 
     - name: Authenticate to Google Cloud
       id: auth
@@ -84,16 +58,6 @@ jobs:
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Install UV
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-
-    - name: Setup Python with UV
-      run: |
-        uv venv
-        source .venv/bin/activate
-        uv pip install requests google-cloud-storage python-dotenv
-
     - name: Get Service URL
       id: get-url
       run: |
@@ -102,37 +66,99 @@ jobs:
           --format 'value(status.url)')
         echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
 
-    - name: Setup Environment
+    - name: Get ID Token
+      id: id-token
       run: |
-        cat << EOF > .env
-        GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}
-        ENVIRONMENT=${{ needs.setup.outputs.env_tag }}
-        EOF
+        ID_TOKEN=$(gcloud auth print-identity-token)
+        echo "::add-mask::$ID_TOKEN"
+        echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
 
-    - name: Trigger Simulations using score.py
+    - name: Read Model Names from Config
+      id: models
       run: |
-        USE_CHANGE_DETECTION="${{ github.event.inputs.use_change_detection || 'true' }}"
+        pip install pyyaml -q
+        python3 -c "
+        import yaml
+        with open('config.yaml') as f:
+            config = yaml.safe_load(f)
+        models = config['scoring']['models']
+        print(f\"hurdle={models['hurdle']}\")
+        print(f\"complexity={models['complexity']}\")
+        print(f\"rating={models['rating']}\")
+        print(f\"users_rated={models['users_rated']}\")
+        print(f\"geek_rating={models['geek_rating']}\")
+        " >> $GITHUB_OUTPUT
 
-        CHANGE_DETECTION_FLAG=""
-        if [ "$USE_CHANGE_DETECTION" = "true" ]; then
-          CHANGE_DETECTION_FLAG="--use-change-detection"
-        fi
-
-        uv run -m scoring_service.score \
-          --service-url "${{ steps.get-url.outputs.service_url }}" \
-          --start-year ${{ github.event.inputs.start_year || 2024 }} \
-          --end-year ${{ github.event.inputs.end_year || 2029 }} \
-          --n-samples ${{ github.event.inputs.n_samples || 1000 }} \
-          --upload-to-bigquery \
-          $CHANGE_DETECTION_FLAG \
-          ${{ github.event.inputs.output_path != '' && format('--output-path "{0}"', github.event.inputs.output_path) || '' }}
-
-    - name: Log Simulation Metadata
+    - name: Run Simulations (Batched)
+      id: simulate
       run: |
-        echo "Simulation Parameters:"
-        echo "Environment: ${{ needs.setup.outputs.env_tag }}"
-        echo "Start Year: ${{ github.event.inputs.start_year || 2024 }}"
-        echo "End Year: ${{ github.event.inputs.end_year || 2029 }}"
-        echo "N Samples: ${{ github.event.inputs.n_samples || 1000 }}"
-        echo "Output Path: ${{ github.event.inputs.output_path || 'Using environment default' }}"
-        echo "Using model names from config.yaml"
+        START_YEAR="${{ github.event.inputs.start_year || '2025' }}"
+        END_YEAR="${{ github.event.inputs.end_year || '2030' }}"
+        N_SAMPLES="${{ github.event.inputs.n_samples || '1000' }}"
+        MAX_GAMES="${{ github.event.inputs.max_games || '50000' }}"
+
+        TOTAL_GAMES=0
+        BATCH_COUNT=0
+        MAX_BATCHES=10  # Safety limit
+
+        while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
+          BATCH_COUNT=$((BATCH_COUNT + 1))
+          echo "=== Batch $BATCH_COUNT ==="
+
+          RESPONSE=$(curl -X POST "${{ steps.get-url.outputs.service_url }}/simulate_games" \
+            -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"hurdle_model_name\": \"${{ steps.models.outputs.hurdle }}\",
+              \"complexity_model_name\": \"${{ steps.models.outputs.complexity }}\",
+              \"rating_model_name\": \"${{ steps.models.outputs.rating }}\",
+              \"users_rated_model_name\": \"${{ steps.models.outputs.users_rated }}\",
+              \"geek_rating_model_name\": \"${{ steps.models.outputs.geek_rating }}\",
+              \"start_year\": $START_YEAR,
+              \"end_year\": $END_YEAR,
+              \"n_samples\": $N_SAMPLES,
+              \"use_change_detection\": true,
+              \"max_games\": $MAX_GAMES,
+              \"upload_to_data_warehouse\": true
+            }" \
+            -w "\n%{http_code}" \
+            -s \
+            --max-time 1800)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          echo "$BODY" | jq '.'
+          GAMES_SIMULATED=$(echo "$BODY" | jq -r '.games_simulated')
+          TOTAL_GAMES=$((TOTAL_GAMES + GAMES_SIMULATED))
+
+          echo "Batch $BATCH_COUNT: Simulated $GAMES_SIMULATED games (Total: $TOTAL_GAMES)"
+
+          # Stop if no more games to simulate
+          if [ "$GAMES_SIMULATED" -eq 0 ]; then
+            echo "No more games to simulate. Stopping."
+            break
+          fi
+
+          # Brief pause between batches
+          sleep 5
+        done
+
+        echo "total_games=$TOTAL_GAMES" >> $GITHUB_OUTPUT
+        echo "batch_count=$BATCH_COUNT" >> $GITHUB_OUTPUT
+
+    - name: Job Summary
+      run: |
+        echo "## Scoring Service Results" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Models**: ${{ steps.models.outputs.hurdle }}, ${{ steps.models.outputs.complexity }}, ${{ steps.models.outputs.rating }}, ${{ steps.models.outputs.users_rated }}, ${{ steps.models.outputs.geek_rating }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Year Range**: ${{ github.event.inputs.start_year || '2025' }}-${{ github.event.inputs.end_year || '2030' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **N Samples**: ${{ github.event.inputs.n_samples || '1000' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Batches Completed**: ${{ steps.simulate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Total Games Scored**: ${{ steps.simulate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
