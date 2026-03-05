@@ -160,12 +160,13 @@ FEATURE_CATEGORIES = {
 }
 
 
-def _render_coefficients_by_year(exp_coeffs: list, key_prefix: str):
+def _render_coefficients_by_year(exp_coeffs: list, key_prefix: str, outcome: str = ""):
     """Render dot plot of coefficients colored by year.
 
     Args:
         exp_coeffs: list of (label, coeffs_df) tuples where label is e.g. "2022"
         key_prefix: unique key prefix for streamlit widgets
+        outcome: outcome name for display in chart title
     """
     import pandas as pd
 
@@ -240,25 +241,39 @@ def _render_coefficients_by_year(exp_coeffs: list, key_prefix: str):
 
     fig = go.Figure()
     years = sorted(plot_df["year"].unique())
-    for year in years:
+    # Use viridis color scale sampled evenly across years
+    from plotly.colors import sample_colorscale
+    # Truncate viridis to avoid dark navy and bright yellow extremes
+    scale_positions = [
+        0.15 + 0.70 * i / max(len(years) - 1, 1) for i in range(len(years))
+    ]
+    year_colors = sample_colorscale("Viridis", scale_positions)
+    for year, color in zip(years, year_colors):
         year_df = plot_df[plot_df["year"] == year]
         year_df = year_df.set_index("display_name").reindex(feature_order).reset_index()
         fig.add_trace(go.Scatter(
             x=year_df["coefficient"],
             y=year_df["display_name"],
             mode="markers",
-            marker=dict(size=8),
+            marker=dict(size=8, color=color),
             name=str(year),
-            hovertemplate="<b>%{y}</b><br>Coefficient: %{x:.4f}<extra>%{fullData.name}</extra>",
+            hovertemplate="<b>%{y}</b><br>Coefficient: %{x:.4f}<br>Year: %{fullData.name}<extra></extra>",
+            hoverlabel=dict(bgcolor=color, font_color="white"),
         ))
 
     fig.add_vline(x=0, line_dash="dash", line_color="gray")
+    outcome_title = outcome.replace("_", " ").title() if outcome else ""
+    title_parts = [f"Top {top_n} Coefficients"]
+    if outcome_title:
+        title_parts.append(outcome_title)
+    title_parts.append(category)
     fig.update_layout(
-        title=f"Top {top_n} Coefficients — {category}",
+        title=" — ".join(title_parts),
         height=max(400, len(feature_order) * 22),
-        yaxis_title="",
+        yaxis=dict(title="", type="category", categoryorder="array", categoryarray=feature_order),
         xaxis_title="Coefficient",
         legend_title="Year",
+        hoverlabel=dict(font_size=13),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -317,13 +332,13 @@ eval_exps = [e for e in experiments if e["is_eval"]]
 finalized_exps = [e for e in experiments if e["is_finalized"]]
 
 # --- Tabs ---
-tab_eval, tab_finalized = st.tabs(["Eval Experiments", "Finalized Models"])
+tab_eval, tab_finalized, tab_metadata = st.tabs(["Experiments", "Models", "Metadata"])
 
 # ============================
-# Tab 1: Eval Experiments
+# Tab 1: Experiments
 # ============================
 with tab_eval:
-    st.header("Eval Experiments")
+    st.header("Experiments")
 
     if not eval_exps:
         st.info("No eval experiments found.")
@@ -353,12 +368,65 @@ with tab_eval:
                 # Only include scalar metrics (skip nested dicts like confusion_matrix)
                 for k, v in m.items():
                     if isinstance(v, (int, float, str, bool)):
+                        # MAPE is not meaningful for count-based outcomes
+                        if k == "mape" and selected_outcome == "users_rated":
+                            continue
                         row[k] = v
                 rows.append(row)
 
         if rows:
             metrics_df = pl.DataFrame(rows)
             st.dataframe(metrics_df.to_pandas(), use_container_width=True)
+
+            # --- Metrics Over Time ---
+            exclude_cols = {"experiment", "version", "test_year"}
+            # MAPE is not meaningful for count-based outcomes like users_rated
+            if selected_outcome == "users_rated":
+                exclude_cols.add("mape")
+            metric_cols = [
+                c for c in metrics_df.columns
+                if c not in exclude_cols
+                and metrics_df[c].dtype in (pl.Float64, pl.Float32, pl.Int64, pl.Int32)
+            ]
+            if metric_cols and "test_year" in metrics_df.columns:
+                sorted_df = metrics_df.sort("test_year").to_pandas()
+                melted = sorted_df.melt(
+                    id_vars=["test_year", "experiment", "version"],
+                    value_vars=metric_cols,
+                    var_name="metric",
+                    value_name="value",
+                )
+                fig = px.line(
+                    melted,
+                    x="test_year",
+                    y="value",
+                    facet_col="metric",
+                    facet_col_wrap=3,
+                    facet_col_spacing=0.08,
+                    facet_row_spacing=0.12,
+                    markers=True,
+                    title="Metrics Over Time",
+                    custom_data=["experiment", "version", "metric"],
+                )
+                fig.update_traces(
+                    hovertemplate=(
+                        "<b>%{customdata[2]}</b>: %{y:.4f}<br>"
+                        "Year: %{x}<br>"
+                        "Model: %{customdata[0]} (%{customdata[1]})"
+                        "<extra></extra>"
+                    )
+                )
+                fig.update_yaxes(matches=None, rangemode="tozero", showticklabels=True)
+                fig.update_xaxes(matches=None)
+                fig.update_annotations(font_size=12)
+                n_rows = (len(metric_cols) + 2) // 3
+                fig.update_layout(
+                    xaxis_title="Test Year",
+                    hovermode="closest",
+                    height=350 * n_rows,
+                    margin=dict(t=60, b=40),
+                )
+                st.plotly_chart(fig, use_container_width=True)
         else:
             st.info(
                 f"No {selected_dataset} metrics found for {selected_outcome} eval experiments."
@@ -382,38 +450,22 @@ with tab_eval:
 
         preds = load_preds_cached(str(selected_exp["path"]), selected_dataset)
 
-        if (
-            preds is not None
-            and "prediction" in preds.columns
-            and "actual" in preds.columns
-        ):
-            # Users rated percentile filter
-            if "users_rated" in preds.columns:
-                min_pct = st.slider(
-                    "Min users rated (percentile)",
-                    0, 100, 0, 5,
-                    key="eval_pct",
-                )
-                if min_pct > 0:
-                    threshold = preds["users_rated"].quantile(min_pct / 100)
-                    preds = preds.filter(pl.col("users_rated") >= threshold)
-
-            st.caption(f"Showing {len(preds):,} predictions")
-
+        if preds is not None and "prediction" in preds.columns and "actual" in preds.columns:
             model_task = selected_exp["metadata"].get("metadata", {}).get(
                 "model_task", "regression"
             )
-
             if model_task == "regression":
                 _render_regression_scatter(preds, selected_outcome, selected_exp_name)
             elif model_task == "classification":
                 _render_classification_metrics(preds)
 
-            # Raw predictions table
-            with st.expander("Raw Predictions"):
-                st.dataframe(preds.to_pandas(), use_container_width=True)
+            # Sort by predicted probability for classification, prediction for regression
+            sort_col = "predicted_proba_class_1" if "predicted_proba_class_1" in preds.columns else "prediction"
+            sorted_preds = preds.sort(sort_col, descending=True)
+            st.caption(f"Showing {len(sorted_preds):,} predictions")
+            st.dataframe(sorted_preds.to_pandas(), use_container_width=True)
         elif preds is not None:
-            st.info("Predictions loaded but missing prediction/actual columns.")
+            st.info("Predictions loaded but missing prediction column.")
         else:
             st.info(f"No {selected_dataset} predictions found.")
 
@@ -433,23 +485,15 @@ with tab_eval:
                 exp_coeffs.append((test_year, coeffs))
 
         if exp_coeffs:
-            _render_coefficients_by_year(exp_coeffs, f"eval_{selected_outcome}")
+            _render_coefficients_by_year(exp_coeffs, f"eval_{selected_outcome}", outcome=selected_outcome)
         else:
             st.info("No coefficient data found for these experiments.")
 
-        # --- Metadata ---
-        st.subheader("Metadata")
-        for exp in outcome_exps:
-            with st.expander(exp["name"]):
-                st.json(exp["metadata"])
-                if exp["model_info"]:
-                    st.json(exp["model_info"])
-
 # ============================
-# Tab 2: Finalized Models
+# Tab 2: Models
 # ============================
 with tab_finalized:
-    st.header("Finalized Models")
+    st.header("Models")
 
     if not finalized_exps:
         st.info("No finalized models found.")
@@ -507,6 +551,22 @@ with tab_finalized:
 
             # Metadata
             with st.expander("Metadata"):
+                st.json(exp["metadata"])
+                if exp["model_info"]:
+                    st.json(exp["model_info"])
+
+# ============================
+# Tab 3: Metadata
+# ============================
+with tab_metadata:
+    st.header("Metadata")
+
+    all_exps = eval_exps + finalized_exps
+    if not all_exps:
+        st.info("No experiments found.")
+    else:
+        for exp in all_exps:
+            with st.expander(exp["name"]):
                 st.json(exp["metadata"])
                 if exp["model_info"]:
                     st.json(exp["model_info"])
