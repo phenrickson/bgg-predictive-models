@@ -82,6 +82,7 @@ jobs:
           --memory 8Gi \
           --cpu 4 \
           --service-account bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+          --timeout 1800 \
           --set-env-vars ENVIRONMENT=${{ steps.env-tag.outputs.env_tag }},GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
 
     - name: Verify Deployment
