@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.1] - 2026-03-06
+
+### Fixed
+
+- **Complexity Scoring Endpoint**: Fixed `predict_complexity` to load embeddings data
+  - `load_games_for_complexity_scoring` was using `loader.load_data()` (no embeddings) instead of `loader.load_data_with_embeddings()`
+  - Model pipelines expect `emb_0..emb_N` embedding features from training; missing embeddings caused HTTP 500 errors
+  - Also fixed table alias in WHERE clause (`game_id` → `f.game_id`) for the embeddings join query
+
 ## [0.4.0] - 2026-03-04
 
 ### Added
@@ -251,7 +260,11 @@ For detailed migration steps, see [docs/MIGRATION_GCP_PROJECT.md](docs/MIGRATION
 
 ## Version History
 
-### [0.4.0] - Current
+### [0.4.1] - Current
+
+Bugfix for complexity scoring endpoint missing embeddings data.
+
+### [0.4.0]
 
 Prediction explainability, Bayesian simulation, and finalized model registration.
 
