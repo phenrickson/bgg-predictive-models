@@ -453,9 +453,15 @@ def load_games_for_complexity_scoring(
         )
         """
 
-        df = loader.load_data_with_embeddings(where_clause=where_clause)
-        logger.info(f"Found {len(df)} games to score")
-        return df.to_pandas()
+        try:
+            df = loader.load_data_with_embeddings(where_clause=where_clause)
+            logger.info(f"Found {len(df)} games to score")
+            return df.to_pandas()
+        except ValueError as e:
+            if "No data returned" in str(e):
+                logger.info("No games need scoring")
+                return pd.DataFrame()
+            raise
 
 
 app = FastAPI(title="BGG Model Scoring Service")
