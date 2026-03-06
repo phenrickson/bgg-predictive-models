@@ -429,7 +429,7 @@ def load_games_for_complexity_scoring(
             version_condition = f"OR lp.complexity_model_version != {complexity_model_version}"
 
         where_clause = f"""
-        game_id IN (
+        f.game_id IN (
           SELECT gf.game_id
           FROM `bgg-data-warehouse.analytics.games_features` gf
           LEFT JOIN `bgg-data-warehouse.staging.game_features_hash` fh
@@ -453,7 +453,7 @@ def load_games_for_complexity_scoring(
         )
         """
 
-        df = loader.load_data(where_clause=where_clause, preprocessor=None)
+        df = loader.load_data_with_embeddings(where_clause=where_clause)
         logger.info(f"Found {len(df)} games to score")
         return df.to_pandas()
 
