@@ -459,6 +459,77 @@ class ExperimentLoader:
                 predictions_data[dataset] = df
         return predictions_data
 
+    def load_coefficients(
+        self, model_type: str, exp_name: str
+    ) -> Optional[pd.DataFrame]:
+        """Load coefficients.csv for an experiment from GCS.
+
+        Args:
+            model_type: The model type (outcome name, e.g. 'rating').
+            exp_name: The experiment name.
+
+        Returns:
+            DataFrame with columns: feature, coefficient, std, etc. or None if not found.
+        """
+        try:
+            base_path = self._get_experiment_version_path(model_type, exp_name)
+            coeff_path = f"{base_path}/coefficients.csv"
+            blob = self.bucket.blob(coeff_path)
+
+            from io import StringIO
+
+            content = blob.download_as_text()
+            df = pd.read_csv(StringIO(content))
+            logger.debug(f"Loaded coefficients for {model_type}/{exp_name}: {df.shape}")
+            return df
+
+        except google.cloud.exceptions.NotFound:
+            logger.debug(f"No coefficients.csv found for {model_type}/{exp_name}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading coefficients for {model_type}/{exp_name}: {e}")
+            return None
+
+    def load_all_coefficients(
+        self, model_type: str, experiment_names: Optional[List[str]] = None
+    ) -> Dict[str, pd.DataFrame]:
+        """Load coefficients for all experiments of a given model type.
+
+        Args:
+            model_type: The model type (outcome name).
+            experiment_names: Optional list of experiment names. If None, discovers all.
+
+        Returns:
+            Dictionary mapping experiment names to coefficient DataFrames.
+        """
+        if experiment_names is None:
+            prefix = f"models/experiments/{model_type}/"
+            blobs = self.bucket.list_blobs(prefix=prefix, delimiter="/")
+            experiment_names = []
+            for page in blobs.pages:
+                experiment_names.extend(
+                    [p.rstrip("/").split("/")[-1] for p in page.prefixes]
+                )
+
+        results = {}
+
+        def _load_single(exp_name):
+            try:
+                df = self.load_coefficients(model_type, exp_name)
+                return exp_name, df
+            except Exception as e:
+                logger.warning(f"Failed to load coefficients for {exp_name}: {e}")
+                return exp_name, None
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(_load_single, name) for name in experiment_names]
+            for future in as_completed(futures):
+                exp_name, df = future.result()
+                if df is not None:
+                    results[exp_name] = df
+
+        return results
+
     def load_feature_importance(
         self, model_type: str, exp_name: str
     ) -> Optional[pd.DataFrame]:
