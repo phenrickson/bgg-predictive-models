@@ -504,8 +504,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Array feature parameters
         category_min_freq: int = 0,  # Lower default threshold
         mechanic_min_freq: int = 0,  # Lower default threshold
-        designer_min_freq: int = 10,  # Lower default threshold
-        artist_min_freq: int = 10,  # Lower default threshold
+        designer_min_freq: int = 5,  # Lower default threshold
+        artist_min_freq: int = 5,  # Lower default threshold
         publisher_min_freq: int = 5,  # Lower default threshold
         family_min_freq: int = 10,  # Lower default threshold
         max_category_features: int = 500,  # More reasonable default
@@ -631,15 +631,15 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         self.ALLOWED_PUBLISHER_NAMES = {
             "Hasbro",
             "Mayfair Games",
-            "Decision Games",
+            "Decision Games (I)",
             "Multi-Man Publishing",
             "Alderac Entertainment Group",
             "Days of Wonder",
             "Pandasaurus Games",
-            "(web published)",
+            "(Web published)",
             "(Self-Published)",
             "Splotter Spellen",
-            "Asmodee",
+            "asmodee",
             "Ravensburger",
             "Parker Brothers",
             "Pegasus Spiele",
@@ -650,10 +650,11 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "GMT Games",
             "Fantasy Flight Games",
             "Avalon Hill",
+            "The Avalon Hill Game Co",
             "(Unknown)",
             "Eagle-Gryphon Games",
             "Matagot",
-            "Games Workshop Ltd",
+            "Games Workshop Ltd.",
             "Queen Games",
             "Stronghold Games",
             "Steve Jackson Games",
@@ -662,17 +663,17 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "Plaid Hat Games",
             "CMON Global Limited",
             "Gamewright",
-            "WizKids",
+            "WizKids (I)",
             "(Public Domain)",
-            "Mattel, Inc",
+            "Mattel, Inc.",
             "Space Cowboys",
             "Stonemaier Games",
             "Plan B Games",
             "Capstone Games",
             "Chip Theory Games",
             "Ares Games",
-            "Greater Than Games",
-            "Renegade Games",
+            "Greater Than Games, LLC",
+            "Renegade Game Studios",
             "Restoration Games",
             "Osprey Games",
             "Roxley",
@@ -680,7 +681,7 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
             "Awaken Realms",
             "Compass Games",
             "Button Shy",
-            "The Game Crafter",
+            "The Game Crafter, LLC",
             "Cheapass Games",
             "alea",
             "NorthStar Game Studio",
@@ -1048,11 +1049,12 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         return new_df
 
     def _filter_publishers(self, publishers: List[str]) -> List[str]:
-        """Filter publishers to only allowed ones."""
+        """Filter publishers to only allowed ones (case-insensitive)."""
+        allowed_lower = {name.lower() for name in self.ALLOWED_PUBLISHER_NAMES}
         if isinstance(publishers, list):
-            return [p for p in publishers if p in self.ALLOWED_PUBLISHER_NAMES]
+            return [p for p in publishers if p.lower() in allowed_lower]
         elif hasattr(publishers, "__array__"):  # Handle numpy arrays
-            return [p for p in publishers.tolist() if p in self.ALLOWED_PUBLISHER_NAMES]
+            return [p for p in publishers.tolist() if p.lower() in allowed_lower]
         return []
 
     def _filter_families(self, families: List[str]) -> List[str]:
