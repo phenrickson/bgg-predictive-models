@@ -400,6 +400,7 @@ with tab_eval:
                     melted,
                     x="test_year",
                     y="value",
+                    color="version",
                     facet_col="metric",
                     facet_col_wrap=3,
                     facet_col_spacing=0.08,
@@ -434,12 +435,21 @@ with tab_eval:
 
         # --- Predictions Scatter ---
         st.subheader("Predictions")
-        exp_names = [e["name"] for e in outcome_exps]
-        selected_exp_name = st.selectbox(
-            "Experiment", exp_names, key="eval_exp_select"
+        pred_cols = st.columns(2)
+        with pred_cols[0]:
+            exp_names = sorted(set(e["name"] for e in outcome_exps))
+            selected_exp_name = st.selectbox(
+                "Experiment", exp_names, key="eval_exp_select"
+            )
+        matching_versions = sorted(
+            [e["version"] for e in outcome_exps if e["name"] == selected_exp_name]
         )
+        with pred_cols[1]:
+            selected_version = st.selectbox(
+                "Version", matching_versions, index=len(matching_versions) - 1, key="eval_version_select"
+            )
         selected_exp = next(
-            e for e in outcome_exps if e["name"] == selected_exp_name
+            e for e in outcome_exps if e["name"] == selected_exp_name and e["version"] == selected_version
         )
 
         @st.cache_data
@@ -477,8 +487,16 @@ with tab_eval:
             from pathlib import Path
             return load_coefficients(Path(path_str))
 
-        exp_coeffs = []
+        # Use only the latest version per experiment for coefficient plots
+        latest_exps = {}
         for exp in outcome_exps:
+            test_year = exp["metadata"].get("metadata", {}).get("test_through", exp["name"])
+            key = str(test_year)
+            if key not in latest_exps or exp["version"] > latest_exps[key]["version"]:
+                latest_exps[key] = exp
+
+        exp_coeffs = []
+        for exp in latest_exps.values():
             coeffs = load_coeff_cached(str(exp["path"]))
             if coeffs is not None:
                 test_year = exp["metadata"].get("metadata", {}).get("test_through", exp["name"])
@@ -547,7 +565,7 @@ with tab_finalized:
 
             coeffs = load_final_coeff(str(exp["path"]))
             if coeffs is not None:
-                _render_coefficients_single(coeffs, f"final_{exp['name']}")
+                _render_coefficients_single(coeffs, f"final_{exp['name']}_{exp['version']}")
 
             # Metadata
             with st.expander("Metadata"):
