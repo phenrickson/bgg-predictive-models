@@ -504,8 +504,8 @@ class BaseBGGTransformer(BaseEstimator, TransformerMixin):
         # Array feature parameters
         category_min_freq: int = 0,  # Lower default threshold
         mechanic_min_freq: int = 0,  # Lower default threshold
-        designer_min_freq: int = 10,  # Lower default threshold
-        artist_min_freq: int = 10,  # Lower default threshold
+        designer_min_freq: int = 5,  # Lower default threshold
+        artist_min_freq: int = 5,  # Lower default threshold
         publisher_min_freq: int = 5,  # Lower default threshold
         family_min_freq: int = 10,  # Lower default threshold
         max_category_features: int = 500,  # More reasonable default
