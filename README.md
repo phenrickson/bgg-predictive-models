@@ -8,33 +8,46 @@ This project develops predictive models for board game characteristics using Boa
 
 - **Complete ML Pipeline**: From data extraction to model deployment
 - **Multiple Model Types**: Hurdle classification, complexity estimation, rating prediction, and user engagement modeling
-- **Time-Based Evaluation**: Rolling window validation for temporal robustness
+- **Bayesian Uncertainty Estimation**: Posterior sampling with credible intervals via simulation
+- **Model Explainability**: Per-feature contribution breakdowns for predictions
+- **Time-Based Evaluation**: Rolling window validation (2018-2024) for temporal robustness
+- **Game & Text Embeddings**: SVD, PCA, UMAP, and autoencoder embeddings for games; PMI word embeddings for descriptions
 - **Production Deployment**: FastAPI scoring service with model registration and versioning
 - **Interactive Dashboards**: Streamlit-based monitoring and visualization tools
-- **Cloud Integration**: Google Cloud Platform integration for data storage and model deployment
+- **Cloud Integration**: Google Cloud Platform integration for data storage, model deployment, and infrastructure (Terraform)
 
 ## Project Structure
 
 ```
 bgg-predictive-models/
-├── config/              # Configuration files
-├── credentials/         # Credential management
-├── data/               # Data storage and predictions
-├── figures/            # Visualization outputs
-├── models/             # Trained models and experiments
-├── scoring_service/    # Production deployment service
-├── src/                # Primary source code
-│   ├── data/           # Data loading and preparation
-│   ├── features/       # Feature engineering and preprocessing
-│   ├── models/         # Machine learning models
-│   ├── monitor/        # Experiment and prediction monitoring
-│   ├── scripts/        # Utility scripts
-│   ├── utils/          # Utility functions
-│   └── visualizations/ # Data visualization scripts
-├── tests/              # Unit and integration tests
-├── train.py            # Time-based model evaluation script
-├── predict.py          # Prediction generation script
-└── Makefile           # Automated workflow commands
+├── config/                    # Additional configuration files
+├── config.yaml                # Central configuration for years, models, embeddings, scoring
+├── credentials/               # Credential management
+├── data/                      # Data storage and predictions
+├── docker/                    # Dockerfiles (training, scoring, streamlit, embeddings)
+├── docs/                      # Design documents and plans
+├── embeddings_service/        # Game embedding inference service (FastAPI)
+├── figures/                   # Visualization outputs
+├── models/                    # Trained models and experiments
+├── references/                # Reference materials
+├── scoring_service/           # Production scoring service (FastAPI)
+├── scripts/                   # Utility scripts
+├── src/                       # Primary source code
+│   ├── collection/            # User collection modeling
+│   ├── data/                  # Data loading and BigQuery integration
+│   ├── debug/                 # Debugging utilities
+│   ├── features/              # Feature engineering and preprocessing
+│   ├── models/                # ML models (outcomes, embeddings, text embeddings)
+│   ├── monitor/               # Experiment and prediction monitoring dashboards
+│   ├── pipeline/              # Pipeline orchestration (train, evaluate, score, finalize)
+│   ├── streamlit/             # Interactive Streamlit app with multiple pages
+│   ├── utils/                 # Configuration, logging, experiment sync
+│   └── visualizations/        # Data visualization scripts
+├── terraform/                 # Infrastructure as Code (GCP resources)
+├── tests/                     # Unit and integration tests
+├── text_embeddings_service/   # Text embedding inference service
+├── register.py                # Model registration script
+└── Makefile                   # Automated workflow commands
 ```
 
 ## Current Capabilities
@@ -43,25 +56,22 @@ bgg-predictive-models/
 
 - **Data Pipeline**: Automated BGG data extraction and materialized views in BigQuery
 - **Feature Engineering**: Comprehensive preprocessing pipeline with multiple transformer types
-- **Model Training**: Four distinct model types with hyperparameter optimization
+- **Model Training**: Five distinct model types with hyperparameter optimization
   - **Hurdle Model**: Predicts likelihood of games receiving ratings (logistic regression)
-  - **Complexity Model**: Estimates game complexity (CatBoost/Ridge regression)
-  - **Rating Model**: Predicts average game rating (CatBoost/Ridge regression)
-  - **Users Rated Model**: Predicts number of users who will rate the game (LightGBM/Ridge regression)
-- **Geek Rating Model**: Direct regression model using predicted components as features
-- **Time-Based Evaluation**: Rolling window validation across multiple years
-- **Experiment Tracking**: Comprehensive experiment management and versioning
+  - **Complexity Model**: Estimates game complexity (ARD/CatBoost/Ridge regression)
+  - **Rating Model**: Predicts average game rating (ARD/CatBoost/Ridge regression)
+  - **Users Rated Model**: Predicts number of users who will rate the game (ARD/LightGBM/Ridge regression)
+  - **Geek Rating Model**: Direct regression using predicted components and game features (ARD)
+- **Bayesian Simulation**: Posterior sampling with credible intervals for uncertainty estimation
+- **Model Explainability**: Per-feature SHAP-style contribution breakdowns
+- **Time-Based Evaluation**: Rolling window validation across years 2018-2024
+- **Game Embeddings**: PCA, SVD, UMAP, Autoencoder, and VAE for game similarity
+- **Text Embeddings**: PMI-based word embeddings with SIF document aggregation from game descriptions
+- **Experiment Tracking**: Comprehensive experiment management with cloud sync
 - **Model Registration**: Production model registration with validation and versioning
 - **Scoring Service**: FastAPI-based REST API for model inference
-- **Interactive Dashboards**: Real-time monitoring and visualization tools
-- **Cloud Deployment**: Docker containers and Google Cloud Run deployment
-
-### Current Development Focus
-
-- **Model Performance Optimization**: Continuous improvement of prediction accuracy
-- **Feature Engineering**: Advanced feature transformations and selection
-- **Ensemble Methods**: Combining multiple models for improved predictions
-- **Real-time Monitoring**: Enhanced model performance tracking
+- **Interactive Dashboards**: Multi-page Streamlit app for exploration and monitoring
+- **Cloud Deployment**: Docker containers, Google Cloud Run, Terraform-managed infrastructure
 
 ## Quick Start
 
@@ -96,9 +106,6 @@ cp .env.example .env
 ```bash
 # Fetch raw data from BigQuery
 make data
-
-# Create materialized views
-uv run src/data/create_view.py
 ```
 
 #### 2. Model Training
@@ -111,81 +118,134 @@ make hurdle      # Train hurdle classification model
 make complexity  # Train complexity estimation model
 make rating      # Train rating prediction model
 make users_rated # Train users rated prediction model
+make geek_rating # Train geek rating model
 ```
 
-#### 3. Generate Predictions
+#### 3. Model Evaluation
 ```bash
-# Generate predictions for future games (2024-2029)
-make predictions
-
-# Or use the prediction script directly
-uv run predict.py --start-year 2024 --end-year 2029
-```
-
-#### 4. Model Evaluation
-```bash
-# Run time-based evaluation across multiple years
+# Run time-based evaluation across multiple years (2018-2024)
 make evaluate
 
-# View current year configuration
-make years
+# Preview what evaluation would do
+make evaluate-dry-run
 ```
 
-#### 5. Interactive Dashboards
+#### 4. Finalize Models
+
 ```bash
-# Launch experiment monitoring dashboard
-make experiment_dashboard
+# Finalize models on all data for production
+make finalize
+```
 
-# Launch geek rating analysis dashboard
-make geek_rating_dashboard
+#### 5. Register Models
 
-# Launch unsupervised learning dashboard
-make unsupervised_dashboard
+```bash
+# Register models for production use (reads from config.yaml)
+make register
+
+# Preview registration
+make register-dry-run
+```
+
+#### 6. Generate Predictions
+
+```bash
+# Score games using the scoring service
+make start-scoring      # Start scoring service container
+make scoring-service    # Run batch scoring
+make stop-scoring       # Stop scoring service
+```
+
+#### 7. Train Embeddings
+
+```bash
+# Train game embeddings
+make embeddings           # All algorithms (PCA, SVD, Autoencoder)
+make embeddings_pca       # PCA only
+make embeddings_svd       # SVD only
+make embeddings_autoencoder  # Autoencoder only
+
+# Train text embeddings from game descriptions
+make text_embeddings
+```
+
+#### 8. Interactive Dashboards
+
+```bash
+# Launch the main Streamlit app
+make streamlit
+
+# Or launch individual monitoring dashboards
+make experiments              # Experiment comparison dashboard
+make predictions_dashboard    # Geek rating analysis dashboard
+make unsupervised_dashboard   # Unsupervised learning dashboard
 ```
 
 ## Model Architecture
 
-### Prediction Pipeline
+### Model Training
+
+Each model is trained independently, but downstream models use upstream predictions as input features. Complexity is trained first, then scored on all data to produce predictions that become features for rating, users_rated, and geek_rating.
 
 ```mermaid
-flowchart TD
-    A[Raw BGG Data] --> B[Feature Engineering]
-    B --> C[Hurdle Model]
-    B --> D[Complexity Model]
-    D --> H[Predicted Complexity]
-    B --> F[Rating Model]
-    B --> G[Users Rated Model]
-    H --> F
-    H --> G
-    C --> E{Game Likely Rated?}
-    E -->|Yes| I[Apply Rating Predictions]
-    E -->|Yes| J[Apply Users Rated Predictions]
+flowchart LR
+    A[Game Features] --> B[Train Complexity]
+    A --> H[Train Hurdle]
+    B --> C[Score Complexity<br/>on All Data]
+    C --> D[Train Rating<br/>features + predicted complexity]
+    C --> E[Train Users Rated<br/>features + predicted complexity]
+    A --> D
+    A --> E
+    D --> F[Score Rating]
+    E --> G[Score Users Rated]
+    C --> I[Train Geek Rating<br/>features + all sub-model predictions]
     F --> I
-    G --> J
-    I --> K[Predicted Rating]
-    J --> L[Predicted Users Rated]
-    H --> M[Geek Rating Calculation]
-    K --> M
-    L --> M
-    M --> N[Final Predictions]
+    G --> I
+    A --> I
 ```
+
+### Chained Simulation Pipeline
+
+Predictions are generated via chained Bayesian posterior sampling. Each model draws `n_samples` from its posterior, and downstream models condition on those draws, propagating uncertainty through the full chain to produce geek rating simulations.
+
+```mermaid
+flowchart LR
+    A[Game Features] --> B[Complexity<br/>Posterior Samples]
+    B -->|condition on| C[Rating<br/>Posterior Samples]
+    B -->|condition on| D[Users Rated<br/>Posterior Samples]
+    B --> E[Geek Rating<br/>Posterior Samples]
+    C --> E
+    D --> E
+    A --> C
+    A --> D
+    A --> E
+```
+
+1. **Complexity** — sample from posterior using game features
+2. **Rating** — sample conditional on complexity draws + game features
+3. **Users Rated** — sample conditional on complexity draws + game features
+4. **Geek Rating** — sample conditional on all upstream draws + game features
+
+Each game ends up with `n_samples` correlated draws across all outcomes, giving a full posterior distribution over geek rating that reflects uncertainty from every stage of the chain.
 
 ### Model Types and Algorithms
 
 | Model Type | Purpose | Default Algorithm | Features |
 |------------|---------|-------------------|----------|
-| **Hurdle** | Classification of games likely to receive ratings | Logistic Regression | Linear preprocessor, probability output |
-| **Complexity** | Game complexity estimation (1-5 scale) | CatBoost Regressor | Tree-based preprocessor, sample weights |
-| **Rating** | Average rating prediction | CatBoost Regressor | Includes predicted complexity, sample weights |
-| **Users Rated** | Number of users prediction | LightGBM Regressor | Log-transformed target, includes complexity |
+| **Hurdle** | Classification of games likely to receive ratings | Logistic Regression | Embeddings, probability output |
+| **Complexity** | Game complexity estimation (1-5 scale) | ARD Regression | Embeddings, optional sample weights |
+| **Rating** | Average rating prediction | ARD Regression | Includes predicted complexity, embeddings, min 5 ratings |
+| **Users Rated** | Number of users prediction | ARD Regression | Log-transformed target, embeddings |
+| **Geek Rating** | BGG geek rating prediction | ARD Regression | Direct mode using game features + predicted components |
 
 ### Feature Engineering
 
 - **Categorical Encoding**: Target encoding for high-cardinality features
 - **Numerical Transformations**: Log transforms, polynomial features, binning
 - **Temporal Features**: Year-based transformations and era encoding
-- **Text Processing**: Game description and mechanic embeddings
-- **Sample Weighting**: Recency-based weighting for temporal relevance
+- **Game Embeddings**: SVD/PCA/UMAP embeddings of game characteristics
+- **Text Embeddings**: PMI word embeddings from game descriptions
+- **Sample Weighting**: Optional recency-based weighting for temporal relevance
 
 ## Production Deployment
 
@@ -195,8 +255,8 @@ The system uses a two-project GCP architecture:
 
 | Project | Purpose |
 |---------|---------|
-| `bgg-data-warehouse` | Data storage (BigQuery), feature tables, prediction landing |
-| `bgg-predictive-models` | ML models (GCS), experiment tracking, scoring service |
+| `bgg-data-warehouse` | Data storage (BigQuery), feature tables, analytics |
+| `bgg-predictive-models` | ML models (GCS), experiment tracking, scoring service, predictions landing |
 
 ```mermaid
 flowchart TD
@@ -251,31 +311,18 @@ The scoring service generates predictions with these columns:
 | `score_ts` | Timestamp of prediction |
 
 Predictions are stored in:
+
 1. **GCS**: `gs://bgg-predictive-models/{env}/predictions/{job_id}_predictions.parquet`
-2. **BigQuery**: `bgg-data-warehouse.raw.ml_predictions_landing` (partitioned by `score_ts`, clustered by `game_id`)
-
-### Model Registration
-
-```bash
-# Register models for production use
-make register
-
-# Or register individual models
-make register_complexity
-make register_rating
-make register_users_rated
-make register_hurdle
-```
+2. **BigQuery**: `bgg-predictive-models.raw.ml_predictions_landing` (partitioned by `score_ts`, clustered by `game_id`)
 
 ### Scoring Service
 
 ```bash
-# Run scoring service locally
-make scoring-service
-
-# Build and test Docker containers
-make docker-scoring
-make docker-training
+# Run scoring service locally via Docker
+make start-scoring        # Build image and start container
+make scoring-service      # Run batch scoring against local service
+make scoring-service-upload  # Score and upload to BigQuery
+make stop-scoring         # Stop container
 
 # Deploy to Google Cloud Run
 gcloud builds submit --config scoring_service/cloudbuild.yaml
@@ -337,6 +384,37 @@ response = requests.post(
 
 ## Configuration
 
+All model, year, and pipeline settings are managed in `config.yaml`.
+
+### Year Configuration
+
+```yaml
+years:
+  current: 2026
+  training:
+    train_through: 2022  # Train on data through this year
+    tune_start: 2023
+    tune_through: 2023
+    test_start: 2024
+    test_through: 2024
+  eval:
+    start: 2018          # Rolling evaluation start
+    end: 2024            # Rolling evaluation end
+  score:
+    start: 2025          # Prediction range start
+    end: 2030            # Prediction range end
+```
+
+### Model Configuration
+
+Default model types are configured in `config.yaml` under the `models` key. Override at the CLI level:
+
+```bash
+# Example: Use different algorithms via pipeline CLI
+uv run -m src.pipeline.train --model complexity
+uv run -m src.pipeline.train --model rating
+```
+
 ### Environment Variables
 
 Key environment variables (see `.env.example`):
@@ -344,22 +422,7 @@ Key environment variables (see `.env.example`):
 ```bash
 # Google Cloud Configuration
 GCP_PROJECT_ID=your-project-id
-BGG_DATASET=bgg_data_dev
 GCS_BUCKET_NAME=your-bucket-name
-
-# Model Configuration
-CURRENT_YEAR=2025
-```
-
-### Model Parameters
-
-Default model configurations can be customized via command line arguments or the Makefile:
-
-```bash
-# Example: Use different algorithms
-make complexity COMPLEXITY_MODEL=lightgbm
-make rating RATING_MODEL=catboost
-make users_rated USERS_RATED_MODEL=ridge
 ```
 
 ## Development Workflow
@@ -373,40 +436,55 @@ make format
 # Lint code
 make lint
 
+# Fix linting issues
+make fix
+
 # Run tests
-uv run pytest
+make test
 ```
 
 ### Experiment Management
 
 ```bash
-# Upload experiments to cloud storage
-make upload_experiments
+# Upload experiments to Google Cloud Storage
+make upload-experiments
 
 # Download experiments from cloud storage
-make download_experiments
+make download-experiments
 
 # Clean local experiments
-make clean_experiments
+make clean-experiments
 ```
 
-### Time-Based Evaluation
+### Streamlit App
 
-The project uses a sophisticated time-based evaluation system:
+The Streamlit app (`src/streamlit/Home.py`) provides multiple pages:
 
-- **Training Data**: All games published before 2021
-- **Tuning Data**: Games published in 2021
-- **Testing Data**: Games published in 2022
-- **Prediction Target**: Games published 2024-2029
+1. **Predictions**: Explore prediction distributions by year
+2. **Experiments**: Compare model performance across experiments
+3. **Simulations**: Review Bayesian simulation results with credible intervals
+4. **Game Embeddings**: Explore dimensionality reduction (PCA/UMAP/SVD)
+5. **Text Embeddings**: Analyze word embeddings from game descriptions
+6. **Rankings**: View coefficient rankings and feature importance
+
+```bash
+# Launch locally
+make streamlit
+
+# Or via Docker
+make streamlit-build
+make streamlit-run
+make streamlit-stop
+```
 
 ## Monitoring and Visualization
 
 ### Available Dashboards
 
-1. **Experiment Dashboard**: Compare model performance across experiments
-2. **Geek Rating Dashboard**: Analyze predicted vs actual geek ratings
-3. **Unsupervised Dashboard**: Explore clustering and dimensionality reduction
-4. **Predictions Dashboard**: Monitor prediction quality and distributions
+1. **Streamlit App**: Main multi-page application for exploring predictions, experiments, simulations, and embeddings
+2. **Experiments Dashboard**: Compare model performance across experiments (`make experiments`)
+3. **Predictions Dashboard**: Analyze predicted vs actual geek ratings (`make predictions_dashboard`)
+4. **Unsupervised Dashboard**: Explore clustering and dimensionality reduction (`make unsupervised_dashboard`)
 
 ### Key Metrics
 
@@ -414,38 +492,7 @@ The project uses a sophisticated time-based evaluation system:
 - **Regression**: RMSE, MAE, R², Mean Absolute Percentage Error
 - **Temporal Stability**: Performance consistency across time periods
 - **Feature Importance**: Model interpretability metrics
-
-## Advanced Features
-
-### Time-Based Evaluation
-
-```bash
-# Evaluate models across multiple years with custom parameters
-uv run train.py \
-    --start-year 2016 \
-    --end-year 2022 \
-    --model-args \
-        complexity.model=catboost \
-        complexity.use-sample-weights=true \
-        rating.model=ridge \
-        rating.min-ratings=5
-```
-
-### Custom Predictions
-
-```bash
-# Generate predictions with custom parameters
-uv run predict.py \
-    --hurdle linear-hurdle \
-    --complexity catboost-complexity \
-    --rating ridge-rating \
-    --users-rated lightgbm-users_rated \
-    --start-year 2020 \
-    --end-year 2030 \
-    --threshold 0.6 \
-    --prior-rating 5.5 \
-    --prior-weight 2000
-```
+- **Uncertainty**: Credible interval coverage and calibration
 
 ## Contributing
 
