@@ -38,6 +38,41 @@ from src.streamlit.components.simulation_explorer import (
     plot_explanation,
     DEFAULT_MODEL_NAMES,
 )
+import pandas as pd
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_simulate(game_id: int, service_url: str, n_samples: int) -> dict:
+    return call_simulate_samples(
+        game_ids=[game_id], service_url=service_url, n_samples=n_samples
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_explain(game_id: int, service_url: str) -> dict:
+    return call_explain_game(game_id=game_id, service_url=service_url)
+
+
+@st.cache_data(ttl=600)
+def load_game_catalog_from_run(run_path_str: str) -> pd.DataFrame:
+    """Load game_id/name/test_year from a local simulation run's predictions.
+
+    Returns columns: game_id, name, test_year, geek_rating_point (nullable).
+    """
+    from pathlib import Path
+
+    run_path = Path(run_path_str)
+    preds = load_predictions(run_path)
+    if preds is None:
+        return pd.DataFrame(columns=["game_id", "name", "test_year", "geek_rating_point"])
+
+    cols = ["game_id", "name", "test_year"]
+    if "geek_rating_point" in preds.columns:
+        cols.append("geek_rating_point")
+    df = preds.select(cols).unique(subset=["game_id"]).to_pandas()
+    if "geek_rating_point" not in df.columns:
+        df["geek_rating_point"] = pd.NA
+    return df
 
 # Optional import for LOESS smoothing
 try:
@@ -449,17 +484,50 @@ with tab_explorer:
         st.header("Game Explorer")
         st.caption("Simulate posterior distributions for specific games via the scoring service.")
 
+        run_options = {r["name"]: str(r["path"]) for r in runs}
+        explorer_run_name = st.selectbox(
+            "Run to source games from",
+            options=list(run_options.keys()),
+            key="explorer_source_run",
+        )
+        catalog = load_game_catalog_from_run(run_options[explorer_run_name])
+        if catalog.empty:
+            st.warning("No predictions found for the selected run.")
+            return
+
+        max_year = int(catalog["test_year"].max())
+        latest = catalog[catalog["test_year"] == max_year].sort_values(
+            "geek_rating_point", ascending=False, na_position="last"
+        )
+
+        source = st.radio(
+            "Game source",
+            [f"Latest test year ({max_year})", "Search any game in run"],
+            horizontal=True,
+            key="explorer_game_source",
+        )
+
+        if source.startswith("Latest test year"):
+            options = latest
+        else:
+            options = catalog.sort_values("name")
+
+        def _label(row: pd.Series) -> str:
+            year = int(row["test_year"]) if pd.notna(row["test_year"]) else "?"
+            return f"{row['name']} ({year}) — {int(row['game_id'])}"
+
+        label_to_id = {_label(row): int(row["game_id"]) for _, row in options.iterrows()}
+
         explorer_cols = st.columns([2, 1])
         with explorer_cols[0]:
-            game_ids_input = st.text_input(
-                "Game IDs (comma-separated)",
-                value="",
-                placeholder="e.g. 224517, 174430, 167791",
-                key="explorer_game_ids",
+            selected_label = st.selectbox(
+                "Game",
+                options=list(label_to_id.keys()),
+                key="explorer_game_select",
             )
         with explorer_cols[1]:
             n_samples = st.slider(
-                "Samples", min_value=100, max_value=2000, value=500, step=100,
+                "Samples", min_value=100, max_value=500, value=500, step=100,
                 key="explorer_n_samples",
             )
 
@@ -469,43 +537,26 @@ with tab_explorer:
             key="explorer_service_url",
         )
 
-        run_btn = st.button("Run", key="explorer_run", use_container_width=True)
+        game_ids = [label_to_id[selected_label]] if selected_label else []
 
-        if game_ids_input.strip():
+        if game_ids:
+            gid = game_ids[0]
             try:
-                game_ids = [int(gid.strip()) for gid in game_ids_input.split(",") if gid.strip()]
-            except ValueError:
-                st.error("Invalid game IDs. Enter comma-separated integers.")
-                game_ids = []
-        else:
-            game_ids = []
+                with st.spinner(f"Simulating game {gid} ({n_samples} samples)..."):
+                    sim_response = _cached_simulate(gid, service_url, n_samples)
+                st.session_state["explorer_sim_results"] = sim_response["games"]
+                st.session_state["explorer_sim_error"] = None
+            except Exception as e:
+                st.session_state["explorer_sim_results"] = None
+                st.session_state["explorer_sim_error"] = str(e)
 
-        if run_btn and game_ids:
-            with st.spinner(f"Simulating {len(game_ids)} games with {n_samples} samples..."):
-                try:
-                    response = call_simulate_samples(
-                        game_ids=game_ids,
-                        service_url=service_url,
-                        n_samples=n_samples,
-                    )
-                    st.session_state["explorer_sim_results"] = response["games"]
-                    st.session_state["explorer_sim_error"] = None
-                except Exception as e:
-                    st.session_state["explorer_sim_results"] = None
-                    st.session_state["explorer_sim_error"] = str(e)
-
-            explain_results = []
-            for gid in game_ids:
+            try:
                 with st.spinner(f"Explaining game {gid}..."):
-                    try:
-                        response = call_explain_game(
-                            game_id=gid,
-                            service_url=service_url,
-                        )
-                        explain_results.append(response)
-                    except Exception as e:
-                        st.error(f"Error explaining game {gid}: {e}")
-            st.session_state["explorer_explain_results"] = explain_results
+                    explain_response = _cached_explain(gid, service_url)
+                st.session_state["explorer_explain_results"] = [explain_response]
+            except Exception as e:
+                st.session_state["explorer_explain_results"] = []
+                st.error(f"Error explaining game {gid}: {e}")
 
         # Render cached results
         if st.session_state.get("explorer_sim_error"):

@@ -17,11 +17,21 @@ DEFAULT_MODEL_NAMES = {
     "geek_rating": "geek_rating-v2026",
 }
 
+# Sequential blues, light to dark, with geek_rating anchoring the dark end
+# to signal it's the composite built on top of the upstream outcomes.
 OUTCOME_COLORS = {
-    "complexity": "steelblue",
-    "rating": "forestgreen",
-    "users_rated": "darkorange",
-    "geek_rating": "purple",
+    "complexity": "#9ecae1",
+    "rating": "#6baed6",
+    "users_rated": "#3182bd",
+    "geek_rating": "#08519c",
+}
+
+# Desaturated same-hue counterparts used for negative contributions.
+OUTCOME_NEG_COLORS = {
+    "complexity": "#b8c4cc",
+    "rating": "#8fa1ad",
+    "users_rated": "#6b8090",
+    "geek_rating": "#4a5a6b",
 }
 
 OUTCOME_LABELS = {
@@ -30,6 +40,76 @@ OUTCOME_LABELS = {
     "users_rated": "Users Rated (log scale)",
     "geek_rating": "Geek Rating",
 }
+
+_FEATURE_PREFIX_LABELS = {
+    "designer_": "Designer: ",
+    "artist_": "Artist: ",
+    "publisher_": "Publisher: ",
+    "category_": "Category: ",
+    "mechanic_": "Mechanic: ",
+    "family_": "Family: ",
+    "emb_": "Embedding ",
+    "missingindicator_": "Missing: ",
+    "player_count_": "Player count ",
+    "predicted_": "Predicted ",
+    "year_published": "Year published",
+    "min_age": "Min age",
+    "min_playtime": "Min playtime",
+    "max_playtime": "Max playtime",
+}
+
+
+_TRAILING_NOISE = ("_log", "_transformed", "_count")
+
+
+def _prettify_feature(name: str) -> str:
+    """Turn raw feature names into readable labels.
+
+    Keeps the category prefix (Designer/Publisher/etc.), title-cases the
+    remainder, and strips redundant trailing suffixes like `_log`.
+    """
+    for prefix, replacement in _FEATURE_PREFIX_LABELS.items():
+        if name.startswith(prefix):
+            rest = name[len(prefix):]
+            for suffix in _TRAILING_NOISE:
+                if rest.endswith(suffix):
+                    rest = rest[: -len(suffix)]
+                    break
+            rest = rest.replace("_", " ").strip()
+            if rest:
+                return f"{replacement}{rest.title()}"
+            return replacement.rstrip(": ").rstrip()
+    cleaned = name
+    for suffix in _TRAILING_NOISE:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+    return cleaned.replace("_", " ").title()
+
+
+def _format_feature_value(name: str, raw_value, value) -> Optional[str]:
+    """Format the feature's value for display next to the feature name."""
+    v = raw_value if raw_value is not None else value
+    if v is None:
+        return None
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+
+    # Binary indicators: show only present/absent rather than 1.0/0.0
+    binary_prefixes = ("designer_", "artist_", "publisher_", "category_",
+                       "mechanic_", "family_", "missingindicator_", "player_count_")
+    if any(name.startswith(p) for p in binary_prefixes) and fv in (0.0, 1.0):
+        return "yes" if fv == 1.0 else "no"
+
+    if name.startswith("emb_"):
+        return f"{fv:.2f}"
+    if abs(fv) >= 1000:
+        return f"{fv:,.0f}"
+    if abs(fv) >= 10:
+        return f"{fv:.1f}"
+    return f"{fv:.2f}"
 
 
 def call_simulate_samples(
@@ -191,7 +271,12 @@ def call_explain_game(
 
 
 def plot_explanation(explanations: dict, game_name: str, game_id: int) -> go.Figure:
-    """Create a 2x2 waterfall/bar chart showing feature contributions per outcome."""
+    """Create a 2x2 bar chart showing feature contributions per outcome.
+
+    Sign is encoded by direction of the bar; color stays in the outcome's hue
+    family (muted for negative) to avoid red=bad framing. Feature labels are
+    cleaned up and show the feature value alongside the name.
+    """
     outcomes = [
         ("complexity", 1, 1),
         ("rating", 1, 2),
@@ -202,8 +287,8 @@ def plot_explanation(explanations: dict, game_name: str, game_id: int) -> go.Fig
     fig = make_subplots(
         rows=2, cols=2,
         subplot_titles=["Complexity", "Rating", "Users Rated", "Geek Rating"],
-        horizontal_spacing=0.12,
-        vertical_spacing=0.28,
+        horizontal_spacing=0.28,
+        vertical_spacing=0.18,
     )
 
     for outcome, row, col in outcomes:
@@ -211,43 +296,62 @@ def plot_explanation(explanations: dict, game_name: str, game_id: int) -> go.Fig
         if not exp:
             continue
 
-        contributions = exp["contributions"]
-        prediction = exp["prediction"]
-        intercept = exp["intercept"]
-
-        # Sort by absolute contribution descending
         contributions = sorted(
-            contributions, key=lambda c: abs(c.get("contribution", 0)), reverse=True
+            exp["contributions"],
+            key=lambda c: abs(c.get("contribution", 0)),
+            reverse=True,
         )
 
-        features = [c["feature"] for c in contributions]
-        values = [c["contribution"] for c in contributions]
-        colors = ["#e74c3c" if v < 0 else OUTCOME_COLORS[outcome] for v in values]
+        pos_color = OUTCOME_COLORS[outcome]
+        neg_color = OUTCOME_NEG_COLORS[outcome]
 
-        # Reverse for bottom-to-top display (largest at top)
-        features = features[::-1]
+        labels = []
+        values = []
+        colors = []
+        raw_values_display = []
+        raw_names = []
+        for c in contributions:
+            name = c["feature"]
+            contribution = c["contribution"]
+            value_str = _format_feature_value(name, c.get("raw_value"), c.get("value"))
+            pretty = _prettify_feature(name)
+            label = f"{pretty} = {value_str}" if value_str is not None else pretty
+            labels.append(label)
+            values.append(contribution)
+            colors.append(pos_color if contribution >= 0 else neg_color)
+            raw_values_display.append(value_str if value_str is not None else "")
+            raw_names.append(name)
+
+        # Reverse so largest |contribution| is on top
+        labels = labels[::-1]
         values = values[::-1]
         colors = colors[::-1]
+        raw_values_display = raw_values_display[::-1]
+        raw_names = raw_names[::-1]
 
+        customdata = list(zip(raw_names, raw_values_display))
         fig.add_trace(
             go.Bar(
-                y=features,
+                y=labels,
                 x=values,
                 orientation="h",
                 marker_color=colors,
                 showlegend=False,
-                hovertemplate="%{y}: %{x:+.4f}<extra></extra>",
+                customdata=customdata,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "value: %{customdata[1]}<br>"
+                    "contribution: %{x:+.2f}<extra></extra>"
+                ),
             ),
             row=row, col=col,
         )
 
-        # Zero line
-        fig.add_vline(x=0, line_color="white", line_width=0.5, row=row, col=col)
-
+        fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=0.5,
+                      row=row, col=col)
         fig.update_xaxes(title_text="Contribution", row=row, col=col)
-        fig.update_yaxes(tickfont=dict(size=9), row=row, col=col)
+        fig.update_yaxes(tickfont=dict(size=10), automargin=True, row=row, col=col)
 
-    # Update subplot titles with prediction values
     for i, (outcome, row, col) in enumerate(outcomes):
         exp = explanations.get(outcome)
         if not exp:
@@ -265,9 +369,10 @@ def plot_explanation(explanations: dict, game_name: str, game_id: int) -> go.Fig
 
     fig.update_layout(
         title=f"<b>{game_name}</b> (ID: {game_id}) — Feature Contributions",
-        height=700,
+        height=1000,
         showlegend=False,
-        margin=dict(t=100, l=200),
+        margin=dict(t=100, l=60, r=40, b=60),
+        bargap=0.25,
     )
 
     return fig
