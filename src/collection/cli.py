@@ -225,14 +225,22 @@ def show_status(args: argparse.Namespace) -> int:
     else:
         print(f"\nPipeline Status for: {status['username']}")
         print(f"Base path: {status['base_path']}")
-        print(f"\nModel versions: {status['model_versions']}")
-        if status.get('latest_model_version'):
-            print(f"Latest model: v{status['latest_model_version']}")
 
-        print("\nArtifacts:")
-        for name, info in status['artifacts'].items():
-            exists = "✓" if info['exists'] else "✗"
-            print(f"  [{exists}] {name}")
+        collection_mark = "+" if status.get("collection_exists") else "-"
+        print(f"\n  [{collection_mark}] collection/latest.parquet")
+
+        outcomes = status.get("outcomes", {})
+        if outcomes:
+            print("\nOutcomes:")
+            for outcome, info in outcomes.items():
+                latest = info.get("latest_version")
+                versions = info.get("versions", [])
+                version_list = ", ".join(f"v{v}" for v in versions)
+                print(f"  {outcome}:")
+                print(f"    latest version : {f'v{latest}' if latest is not None else 'none'}")
+                print(f"    versions       : [{version_list}]")
+        else:
+            print("\nNo outcome artifacts found.")
 
     return 0
 

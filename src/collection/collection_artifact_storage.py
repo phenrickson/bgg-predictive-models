@@ -1,4 +1,22 @@
-"""GCS storage layer for user collection artifacts (models, predictions, analysis)."""
+"""GCS storage layer for user collection artifacts (models, predictions, analysis).
+
+Path layout per user:
+    gs://{bucket}/{env}/collections/{username}/
+        metadata.json                           # global user metadata, outcome-agnostic
+        collection/latest.parquet               # raw snapshot, outcome-agnostic
+        {outcome}/v{N}/
+            model.pkl
+            threshold.json                      # classification only
+            registration.json
+            splits/train.parquet
+            splits/validation.parquet
+            splits/test.parquet
+            predictions/predictions.parquet
+            predictions/top_recommendations.json
+            analysis/summary_stats.json
+            analysis/feature_importance.parquet
+            analysis/category_affinity.json
+"""
 
 import json
 import logging
@@ -29,15 +47,20 @@ class CollectionArtifactStorage:
     """Handles GCS storage for user collection artifacts.
 
     Stores model pipelines, predictions, and analysis artifacts in GCS buckets
-    organized by username. Each user gets their own prefix in the bucket:
+    organized by username and outcome. Each user+outcome pair gets its own
+    versioned prefix:
 
         gs://{bucket}/{environment}/collections/{username}/
             ├── metadata.json
             ├── collection/latest.parquet
-            ├── splits/{train,validation,test}.parquet
-            ├── models/ownership/v{version}/
-            ├── predictions/latest/
-            └── analysis/
+            ├── {outcome}/v{N}/
+            │   ├── model.pkl
+            │   ├── threshold.json          (classification only)
+            │   ├── registration.json
+            │   ├── splits/{train,validation,test}.parquet
+            │   ├── predictions/{predictions.parquet,top_recommendations.json}
+            │   └── analysis/{summary_stats.json,feature_importance.parquet,category_affinity.json}
+            └── ...
     """
 
     def __init__(
@@ -72,6 +95,8 @@ class CollectionArtifactStorage:
 
         logger.info(f"Initialized artifact storage for user '{username}'")
         logger.info(f"GCS path: gs://{bucket_name}/{self.base_prefix}/")
+
+    # --- Internal path / upload / download helpers ---
 
     def _get_blob_path(self, *parts: str) -> str:
         """Build a blob path from parts."""
@@ -126,7 +151,46 @@ class CollectionArtifactStorage:
             return None
         return pickle.loads(blob.download_as_bytes())
 
-    # --- Collection Operations ---
+    # --- Version helpers ---
+
+    def latest_version(self, outcome: str) -> Optional[int]:
+        """Return the highest version number under {outcome}/, or None if none exist.
+
+        Args:
+            outcome: Outcome name (e.g. "own", "love", "rating")
+
+        Returns:
+            Highest version number found, or None
+        """
+        prefix = self._get_blob_path(outcome, "v")
+        blobs = self.bucket.list_blobs(prefix=prefix)
+
+        versions = []
+        for blob in blobs:
+            # Path relative to base_prefix: outcome/v{N}/...
+            relative = blob.name[len(self.base_prefix) + 1:]  # strip "base_prefix/"
+            parts = relative.split("/")
+            # parts[0] = outcome, parts[1] = "v{N}"
+            if len(parts) >= 2 and parts[1].startswith("v"):
+                try:
+                    versions.append(int(parts[1][1:]))
+                except ValueError:
+                    pass
+
+        return max(versions) if versions else None
+
+    def _next_version(self, outcome: str) -> int:
+        """Return the next version number for a given outcome.
+
+        Args:
+            outcome: Outcome name
+
+        Returns:
+            Next version number (latest + 1, or 1 if no versions exist)
+        """
+        return (self.latest_version(outcome) or 0) + 1
+
+    # --- Collection Operations (outcome-agnostic) ---
 
     def save_collection(self, collection_df: pl.DataFrame) -> str:
         """Save collection snapshot to GCS.
@@ -158,138 +222,167 @@ class CollectionArtifactStorage:
 
     def save_splits(
         self,
+        outcome: str,
         train_df: pl.DataFrame,
         val_df: pl.DataFrame,
         test_df: pl.DataFrame,
-    ) -> Dict[str, str]:
-        """Save train/val/test splits to GCS.
+        version: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Save train/val/test splits to GCS under the given outcome + version.
 
         Args:
+            outcome: Outcome name (e.g. "own", "love", "rating")
             train_df: Training DataFrame
             val_df: Validation DataFrame
             test_df: Test DataFrame
+            version: Version number; auto-incremented via _next_version if None
 
         Returns:
-            Dictionary mapping split names to GCS paths
+            Dictionary with "version" and per-split GCS paths
         """
-        paths = {}
+        if version is None:
+            version = self._next_version(outcome)
+
+        paths: Dict[str, Any] = {"version": version}
         for name, df in [("train", train_df), ("validation", val_df), ("test", test_df)]:
-            blob_path = self._get_blob_path("splits", f"{name}.parquet")
+            blob_path = self._get_blob_path(outcome, f"v{version}", "splits", f"{name}.parquet")
             paths[name] = self._upload_parquet(blob_path, df)
-            logger.info(f"Saved {name} split ({len(df)} rows) to {paths[name]}")
+            logger.info(f"Saved {outcome}/v{version} {name} split ({len(df)} rows) to {paths[name]}")
         return paths
 
-    def load_splits(self) -> Optional[Dict[str, pl.DataFrame]]:
+    def load_splits(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Load splits from GCS.
 
+        Args:
+            outcome: Outcome name
+            version: Version number; defaults to latest for the outcome
+
         Returns:
-            Dictionary with train/validation/test DataFrames or None if not found
+            Dictionary with "version" and train/validation/test DataFrames, or None if not found
         """
-        splits = {}
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                logger.warning(f"No splits found for outcome '{outcome}'")
+                return None
+
+        splits: Dict[str, Any] = {"version": version}
         for name in ["train", "validation", "test"]:
-            blob_path = self._get_blob_path("splits", f"{name}.parquet")
+            blob_path = self._get_blob_path(outcome, f"v{version}", "splits", f"{name}.parquet")
             df = self._download_parquet(blob_path)
             if df is None:
-                logger.warning(f"Split '{name}' not found in GCS")
+                logger.warning(f"Split '{name}' not found for {outcome}/v{version}")
                 return None
             splits[name] = df
-            logger.info(f"Loaded {name} split ({len(df)} rows)")
+            logger.info(f"Loaded {outcome}/v{version} {name} split ({len(df)} rows)")
         return splits
 
     # --- Model Operations ---
 
     def save_model(
         self,
+        outcome: str,
         pipeline: Any,
         metadata: Dict[str, Any],
-        threshold: float,
+        threshold: Optional[float] = None,
         version: Optional[int] = None,
     ) -> str:
         """Save model pipeline and metadata to GCS.
 
         Args:
+            outcome: Outcome name (e.g. "own", "love", "rating")
             pipeline: Trained sklearn pipeline
             metadata: Model metadata (metrics, params, etc.)
-            threshold: Optimal classification threshold
+            threshold: Optimal classification threshold; None for regression outcomes
             version: Model version (auto-incremented if not provided)
 
         Returns:
-            GCS path where model was saved
+            GCS path prefix where model artifacts were saved
         """
-        # Auto-increment version if not provided
         if version is None:
-            existing_versions = self.list_model_versions()
-            version = max([v["version"] for v in existing_versions], default=0) + 1
+            version = self._next_version(outcome)
 
-        version_prefix = self._get_blob_path("models", "ownership", f"v{version}")
+        version_prefix = self._get_blob_path(outcome, f"v{version}")
 
         # Save pipeline
-        pipeline_path = f"{version_prefix}/pipeline.pkl"
+        pipeline_path = f"{version_prefix}/model.pkl"
         self._upload_pickle(pipeline_path, pipeline)
 
-        # Save threshold
-        threshold_path = f"{version_prefix}/threshold.json"
-        self._upload_json(threshold_path, {"threshold": threshold})
+        # Save threshold (classification only)
+        if threshold is not None:
+            threshold_path = f"{version_prefix}/threshold.json"
+            self._upload_json(threshold_path, {"threshold": threshold})
 
-        # Build registration metadata
+        # Build and save registration metadata
         registration = {
             "username": self.username,
+            "outcome": outcome,
             "version": version,
-            "threshold": threshold,
             "created_at": datetime.now().isoformat(),
             **metadata,
         }
+        if threshold is not None:
+            registration["threshold"] = threshold
 
-        # Save registration
         registration_path = f"{version_prefix}/registration.json"
         self._upload_json(registration_path, registration)
 
-        logger.info(f"Saved model v{version} to gs://{self.bucket.name}/{version_prefix}/")
+        logger.info(f"Saved {outcome} model v{version} to gs://{self.bucket.name}/{version_prefix}/")
         return f"gs://{self.bucket.name}/{version_prefix}/"
 
     def load_model(
-        self, version: Optional[int] = None
-    ) -> Tuple[Any, Dict[str, Any], float]:
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Tuple[Any, Dict[str, Any], Optional[float]]:
         """Load model from GCS.
 
         Args:
+            outcome: Outcome name
             version: Model version (latest if not specified)
 
         Returns:
-            Tuple of (pipeline, metadata, threshold)
+            Tuple of (pipeline, metadata, threshold); threshold is None for regression
         """
-        # Get latest version if not specified
         if version is None:
-            versions = self.list_model_versions()
-            if not versions:
-                raise ValueError(f"No models found for user '{self.username}'")
-            version = max(v["version"] for v in versions)
+            version = self.latest_version(outcome)
+            if version is None:
+                raise ValueError(f"No models found for user '{self.username}', outcome '{outcome}'")
 
-        version_prefix = self._get_blob_path("models", "ownership", f"v{version}")
+        version_prefix = self._get_blob_path(outcome, f"v{version}")
 
         # Load pipeline
-        pipeline = self._download_pickle(f"{version_prefix}/pipeline.pkl")
+        pipeline = self._download_pickle(f"{version_prefix}/model.pkl")
         if pipeline is None:
-            raise ValueError(f"Model v{version} not found for user '{self.username}'")
+            raise ValueError(
+                f"Model not found for user '{self.username}', outcome '{outcome}', version {version}"
+            )
 
         # Load metadata
         metadata = self._download_json(f"{version_prefix}/registration.json") or {}
 
-        # Load threshold
-        threshold_data = self._download_json(f"{version_prefix}/threshold.json") or {}
-        threshold = threshold_data.get("threshold", 0.5)
+        # Load threshold (None if not present — regression outcome)
+        threshold_data = self._download_json(f"{version_prefix}/threshold.json")
+        threshold = threshold_data.get("threshold") if threshold_data else None
 
-        logger.info(f"Loaded model v{version} for user '{self.username}'")
+        logger.info(f"Loaded {outcome} model v{version} for user '{self.username}'")
         return pipeline, metadata, threshold
 
-    def list_model_versions(self) -> List[Dict[str, Any]]:
-        """List all model versions for this user.
+    def list_model_versions(self, outcome: str) -> List[Dict[str, Any]]:
+        """List all model versions for a given outcome.
+
+        Args:
+            outcome: Outcome name
 
         Returns:
-            List of version metadata dictionaries
+            List of registration metadata dictionaries, sorted by version
         """
         versions = []
-        prefix = self._get_blob_path("models", "ownership")
+        prefix = self._get_blob_path(outcome)
         blobs = self.bucket.list_blobs(prefix=prefix)
 
         for blob in blobs:
@@ -306,60 +399,98 @@ class CollectionArtifactStorage:
 
     def save_predictions(
         self,
+        outcome: str,
+        version: int,
         predictions_df: pl.DataFrame,
         top_recommendations: List[Dict[str, Any]],
     ) -> Dict[str, str]:
         """Save predictions and recommendations to GCS.
 
         Args:
+            outcome: Outcome name
+            version: Explicit version (predictions belong to a specific model version)
             predictions_df: DataFrame with all game predictions
             top_recommendations: List of top recommended games
 
         Returns:
             Dictionary mapping artifact names to GCS paths
         """
-        paths = {}
+        paths: Dict[str, str] = {}
 
         # Save full predictions
-        pred_path = self._get_blob_path("predictions", "latest", "predictions.parquet")
+        pred_path = self._get_blob_path(outcome, f"v{version}", "predictions", "predictions.parquet")
         paths["predictions"] = self._upload_parquet(pred_path, predictions_df)
-        logger.info(f"Saved predictions ({len(predictions_df)} games)")
+        logger.info(f"Saved {outcome}/v{version} predictions ({len(predictions_df)} games)")
 
         # Save top recommendations
-        rec_path = self._get_blob_path("predictions", "latest", "top_recommendations.json")
+        rec_path = self._get_blob_path(
+            outcome, f"v{version}", "predictions", "top_recommendations.json"
+        )
         rec_data = {
             "username": self.username,
+            "outcome": outcome,
+            "version": version,
             "generated_at": datetime.now().isoformat(),
             "total_games_scored": len(predictions_df),
             "recommendations": top_recommendations,
         }
         paths["recommendations"] = self._upload_json(rec_path, rec_data)
-        logger.info(f"Saved top {len(top_recommendations)} recommendations")
+        logger.info(f"Saved {outcome}/v{version} top {len(top_recommendations)} recommendations")
 
         return paths
 
-    def load_predictions(self) -> Optional[pl.DataFrame]:
-        """Load latest predictions from GCS.
+    def load_predictions(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[pl.DataFrame]:
+        """Load predictions from GCS.
+
+        Args:
+            outcome: Outcome name
+            version: Version number; defaults to latest for the outcome
 
         Returns:
             Predictions DataFrame or None if not found
         """
-        blob_path = self._get_blob_path("predictions", "latest", "predictions.parquet")
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                return None
+
+        blob_path = self._get_blob_path(outcome, f"v{version}", "predictions", "predictions.parquet")
         return self._download_parquet(blob_path)
 
-    def load_recommendations(self) -> Optional[Dict[str, Any]]:
+    def load_recommendations(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Load top recommendations from GCS.
+
+        Args:
+            outcome: Outcome name
+            version: Version number; defaults to latest for the outcome
 
         Returns:
             Recommendations dictionary or None if not found
         """
-        blob_path = self._get_blob_path("predictions", "latest", "top_recommendations.json")
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                return None
+
+        blob_path = self._get_blob_path(
+            outcome, f"v{version}", "predictions", "top_recommendations.json"
+        )
         return self._download_json(blob_path)
 
     # --- Analysis Operations ---
 
     def save_analysis_artifacts(
         self,
+        outcome: str,
+        version: int,
         summary_stats: Dict[str, Any],
         feature_importance: pl.DataFrame,
         category_affinity: Dict[str, Any],
@@ -367,6 +498,8 @@ class CollectionArtifactStorage:
         """Save analysis artifacts to GCS.
 
         Args:
+            outcome: Outcome name
+            version: Explicit version (analysis belongs to a specific model version)
             summary_stats: Collection summary statistics
             feature_importance: Feature importance DataFrame
             category_affinity: Category/mechanic preferences
@@ -374,39 +507,71 @@ class CollectionArtifactStorage:
         Returns:
             Dictionary mapping artifact names to GCS paths
         """
-        paths = {}
+        paths: Dict[str, str] = {}
 
         # Summary stats
-        stats_path = self._get_blob_path("analysis", "summary_stats.json")
+        stats_path = self._get_blob_path(outcome, f"v{version}", "analysis", "summary_stats.json")
         paths["summary_stats"] = self._upload_json(stats_path, summary_stats)
 
         # Feature importance
-        fi_path = self._get_blob_path("analysis", "feature_importance.parquet")
+        fi_path = self._get_blob_path(
+            outcome, f"v{version}", "analysis", "feature_importance.parquet"
+        )
         paths["feature_importance"] = self._upload_parquet(fi_path, feature_importance)
 
         # Category affinity
-        affinity_path = self._get_blob_path("analysis", "category_affinity.json")
+        affinity_path = self._get_blob_path(
+            outcome, f"v{version}", "analysis", "category_affinity.json"
+        )
         paths["category_affinity"] = self._upload_json(affinity_path, category_affinity)
 
-        logger.info(f"Saved analysis artifacts for user '{self.username}'")
+        logger.info(f"Saved {outcome}/v{version} analysis artifacts for user '{self.username}'")
         return paths
 
-    def load_summary_stats(self) -> Optional[Dict[str, Any]]:
+    def load_summary_stats(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Load summary statistics from GCS."""
-        blob_path = self._get_blob_path("analysis", "summary_stats.json")
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                return None
+        blob_path = self._get_blob_path(outcome, f"v{version}", "analysis", "summary_stats.json")
         return self._download_json(blob_path)
 
-    def load_feature_importance(self) -> Optional[pl.DataFrame]:
+    def load_feature_importance(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[pl.DataFrame]:
         """Load feature importance from GCS."""
-        blob_path = self._get_blob_path("analysis", "feature_importance.parquet")
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                return None
+        blob_path = self._get_blob_path(
+            outcome, f"v{version}", "analysis", "feature_importance.parquet"
+        )
         return self._download_parquet(blob_path)
 
-    def load_category_affinity(self) -> Optional[Dict[str, Any]]:
+    def load_category_affinity(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Load category affinity from GCS."""
-        blob_path = self._get_blob_path("analysis", "category_affinity.json")
+        if version is None:
+            version = self.latest_version(outcome)
+            if version is None:
+                return None
+        blob_path = self._get_blob_path(
+            outcome, f"v{version}", "analysis", "category_affinity.json"
+        )
         return self._download_json(blob_path)
 
-    # --- Metadata Operations ---
+    # --- Metadata Operations (outcome-agnostic) ---
 
     def save_user_metadata(self, metadata: Dict[str, Any]) -> str:
         """Save user metadata to GCS.
@@ -431,41 +596,67 @@ class CollectionArtifactStorage:
         blob_path = self._get_blob_path("metadata.json")
         return self._download_json(blob_path)
 
+    # --- Status ---
+
     def get_artifact_status(self) -> Dict[str, Any]:
         """Get status of all artifacts for this user.
 
+        Enumerates top-level subdirectories under the user prefix (excluding
+        "collection" and "metadata.json") and treats each as an outcome.
+        For each outcome, lists its versioned subdirectories.
+
         Returns:
-            Dictionary with artifact existence and metadata
+            Dictionary with per-outcome version info::
+
+                {
+                    "username": str,
+                    "base_path": str,
+                    "collection_exists": bool,
+                    "outcomes": {
+                        "own": {"latest_version": int | None, "versions": [1, 2, ...]},
+                        ...
+                    },
+                }
         """
-        status = {
-            "username": self.username,
-            "base_path": f"gs://{self.bucket.name}/{self.base_prefix}/",
-            "artifacts": {},
-        }
+        base_path = f"gs://{self.bucket.name}/{self.base_prefix}/"
 
-        # Check each artifact type
-        checks = [
-            ("metadata", self._get_blob_path("metadata.json")),
-            ("collection", self._get_blob_path("collection", "latest.parquet")),
-            ("train_split", self._get_blob_path("splits", "train.parquet")),
-            ("validation_split", self._get_blob_path("splits", "validation.parquet")),
-            ("test_split", self._get_blob_path("splits", "test.parquet")),
-            ("predictions", self._get_blob_path("predictions", "latest", "predictions.parquet")),
-            ("recommendations", self._get_blob_path("predictions", "latest", "top_recommendations.json")),
-            ("summary_stats", self._get_blob_path("analysis", "summary_stats.json")),
-        ]
+        # Check whether the raw collection snapshot exists
+        collection_blob = self.bucket.blob(self._get_blob_path("collection", "latest.parquet"))
+        collection_exists = collection_blob.exists()
 
-        for name, path in checks:
-            blob = self.bucket.blob(path)
-            status["artifacts"][name] = {
-                "exists": blob.exists(),
-                "path": f"gs://{self.bucket.name}/{path}",
+        # Discover outcomes by listing all blobs under the user prefix and
+        # picking out the top-level directory names that are not reserved names.
+        reserved = {"collection", "metadata.json"}
+        outcome_versions: Dict[str, set] = {}
+
+        blobs = self.bucket.list_blobs(prefix=self.base_prefix + "/")
+        for blob in blobs:
+            relative = blob.name[len(self.base_prefix) + 1:]  # strip "base_prefix/"
+            parts = relative.split("/")
+            if not parts:
+                continue
+            top = parts[0]
+            if top in reserved or top == "":
+                continue
+            # A valid outcome dir has a v{N} sub-directory
+            if len(parts) >= 2 and parts[1].startswith("v"):
+                try:
+                    ver = int(parts[1][1:])
+                except ValueError:
+                    continue
+                outcome_versions.setdefault(top, set()).add(ver)
+
+        outcomes: Dict[str, Dict[str, Any]] = {}
+        for outcome, ver_set in sorted(outcome_versions.items()):
+            sorted_versions = sorted(ver_set)
+            outcomes[outcome] = {
+                "latest_version": max(sorted_versions),
+                "versions": sorted_versions,
             }
 
-        # Check model versions
-        model_versions = self.list_model_versions()
-        status["model_versions"] = len(model_versions)
-        if model_versions:
-            status["latest_model_version"] = max(v["version"] for v in model_versions)
-
-        return status
+        return {
+            "username": self.username,
+            "base_path": base_path,
+            "collection_exists": collection_exists,
+            "outcomes": outcomes,
+        }
