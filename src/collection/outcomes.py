@@ -22,6 +22,15 @@ import polars as pl
 VALID_OPERATORS = {">", ">=", "<", "<=", "==", "!="}
 VALID_TASKS = {"classification", "regression"}
 
+_OPS = {
+    ">":  lambda c, v: c > v,
+    ">=": lambda c, v: c >= v,
+    "<":  lambda c, v: c < v,
+    "<=": lambda c, v: c <= v,
+    "==": lambda c, v: c == v,
+    "!=": lambda c, v: c != v,
+}
+
 
 @dataclass(frozen=True)
 class DirectColumnRule:
@@ -64,8 +73,6 @@ def _parse_predicate(predicate_str: str) -> tuple[str, float]:
             f"Expected format '<operator> <number>' with operator in {sorted(VALID_OPERATORS)}"
         )
     operator, value_str = match.groups()
-    if operator not in VALID_OPERATORS:
-        raise ValueError(f"Invalid operator {operator!r}. Valid operators: {sorted(VALID_OPERATORS)}")
     return operator, float(value_str)
 
 
@@ -76,8 +83,8 @@ def _parse_label_rule(spec: Any) -> LabelRule:
     if isinstance(spec, dict):
         if "any_of" in spec:
             cols = spec["any_of"]
-            if not isinstance(cols, list) or not all(isinstance(c, str) for c in cols):
-                raise ValueError(f"any_of must be a list of column names, got {cols!r}")
+            if not isinstance(cols, list) or len(cols) == 0 or not all(isinstance(c, str) for c in cols):
+                raise ValueError(f"any_of must be a non-empty list of column names, got {cols!r}")
             return AnyOfRule(columns=list(cols))
         if "column" in spec and "predicate" in spec:
             operator, value = _parse_predicate(spec["predicate"])
@@ -114,15 +121,7 @@ def _apply_require(df: pl.DataFrame, require: str) -> pl.DataFrame:
         raise ValueError(f"Invalid require expression {require!r}")
     column, operator, value_str = match.groups()
     value = float(value_str)
-    ops = {
-        ">": lambda c, v: c > v,
-        ">=": lambda c, v: c >= v,
-        "<": lambda c, v: c < v,
-        "<=": lambda c, v: c <= v,
-        "==": lambda c, v: c == v,
-        "!=": lambda c, v: c != v,
-    }
-    return df.filter(ops[operator](pl.col(column), value))
+    return df.filter(_OPS[operator](pl.col(column), value))
 
 
 def _apply_label_rule(df: pl.DataFrame, rule: LabelRule) -> pl.DataFrame:
@@ -135,19 +134,15 @@ def _apply_label_rule(df: pl.DataFrame, rule: LabelRule) -> pl.DataFrame:
             expr = expr | pl.col(c).cast(pl.Boolean)
         return df.with_columns(expr.alias("label"))
     if isinstance(rule, PredicateRule):
-        ops = {
-            ">": lambda c, v: c > v,
-            ">=": lambda c, v: c >= v,
-            "<": lambda c, v: c < v,
-            "<=": lambda c, v: c <= v,
-            "==": lambda c, v: c == v,
-            "!=": lambda c, v: c != v,
-        }
-        return df.with_columns(ops[rule.operator](pl.col(rule.column), rule.value).alias("label"))
+        return df.with_columns(_OPS[rule.operator](pl.col(rule.column), rule.value).alias("label"))
     raise TypeError(f"Unknown rule type: {type(rule)!r}")
 
 
 def apply_outcome(df: pl.DataFrame, outcome: OutcomeDefinition) -> pl.DataFrame:
-    """Apply the outcome's require filter (if any), then add a label column."""
+    """Apply the outcome's require filter (if any), then add a label column.
+
+    Nulls in source columns propagate into the label column (polars three-valued
+    logic). Callers training on the result should drop null-label rows first.
+    """
     filtered = df if outcome.require is None else _apply_require(df, outcome.require)
     return _apply_label_rule(filtered, outcome.label_rule)
