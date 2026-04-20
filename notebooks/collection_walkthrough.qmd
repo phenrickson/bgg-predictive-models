@@ -1,0 +1,401 @@
+---
+title: "Collection Modules Walkthrough"
+author: Phil Henrickson
+format:
+  html:
+    code-fold: false
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+jupyter: python3
+---
+
+Step-by-step walkthrough of the refactored `src/collection/` modules after the
+collection-modules branch. Each section exercises one piece of the pipeline
+end-to-end against a real user collection, so we can see shapes, distributions,
+and model behaviour at each stage before wiring the full CLI loop.
+
+Run cells top-to-bottom. Set `USERNAME` below to the BGG user you want to walk
+through.
+
+```{python}
+#| tags: [setup]
+USERNAME = "phenrickson"
+```
+
+```{python}
+#| tags: [setup]
+import os
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path so `src.*` imports work when Quarto
+# runs from the notebooks/ directory.
+PROJECT_ROOT = Path().resolve()
+if (PROJECT_ROOT / "src").is_dir():
+    ROOT = PROJECT_ROOT
+else:
+    ROOT = PROJECT_ROOT.parent
+sys.path.insert(0, str(ROOT))
+
+import logging
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+import polars as pl
+import pandas as pd
+import numpy as np
+```
+
+## 1. Load a collection
+
+Fetch the raw collection for `USERNAME` straight from the BGG XML API via
+`BGGCollectionLoader`. This is the outcome-agnostic raw snapshot.
+
+```{python}
+from src.collection.collection_loader import BGGCollectionLoader
+
+loader = BGGCollectionLoader(USERNAME)
+raw_collection = loader.get_collection()
+print(f"rows: {raw_collection.height}")
+print(f"columns ({len(raw_collection.columns)}): {raw_collection.columns}")
+raw_collection.head(5)
+```
+
+### Quick sanity checks
+
+```{python}
+# Status flag counts
+for col in ["owned", "previously_owned", "want", "wishlist", "preordered", "for_trade"]:
+    if col in raw_collection.columns:
+        n = raw_collection.filter(pl.col(col) == True).height
+        print(f"{col}: {n}")
+
+# Rating coverage
+rated = raw_collection.filter(pl.col("user_rating") > 0).height
+print(f"\nrated (user_rating > 0): {rated}")
+print(f"mean rating: {raw_collection.filter(pl.col('user_rating') > 0)['user_rating'].mean():.2f}")
+```
+
+---
+
+## 2. Store a collection
+
+Persist the raw snapshot to BigQuery via `CollectionStorage`. The table is
+created lazily if it doesn't exist.
+
+> **Note:** if `analytics.collections` does not exist yet, `create_table()` needs
+> to run first. Surface any errors here before moving on — the rest of the
+> walkthrough depends on storage round-tripping.
+
+```{python}
+from src.collection.collection_storage import CollectionStorage
+
+bq_storage = CollectionStorage(environment="dev")
+# If the table is missing, uncomment:
+# bq_storage.create_table()
+
+bq_storage.save_collection(USERNAME, raw_collection)
+reloaded = bq_storage.get_latest_collection(USERNAME)
+print(f"round-trip rows: {reloaded.height if reloaded is not None else None}")
+```
+
+---
+
+## 3. Process + split the collection
+
+Run the full data-prep chain: process → apply_outcome → split. Start with the
+`own` outcome as the concrete example. The processor canonicalizes BGG column
+names (e.g. `previously_owned` → `prev_owned`) and joins with the game universe.
+
+```{python}
+from src.utils.config import load_config
+from src.collection.collection_processor import CollectionProcessor
+from src.collection.outcomes import load_outcomes, apply_outcome
+
+project_config = load_config()
+bq_config = project_config.get_bigquery_config()
+
+processor = CollectionProcessor(config=bq_config, environment="dev")
+processed = processor.process(USERNAME)
+print(f"processed: {processed.height} rows, {len(processed.columns)} columns")
+print(f"has prev_owned: {'prev_owned' in processed.columns}")
+processed.head(3)
+```
+
+Load the five outcomes declared in `config.yaml`:
+
+```{python}
+outcomes = load_outcomes(project_config.raw_config)
+for name, outcome in outcomes.items():
+    print(f"{name}: task={outcome.task}, rule={type(outcome.label_rule).__name__}, require={outcome.require}")
+```
+
+Apply one outcome — `own` — to get a labeled dataframe:
+
+```{python}
+labeled_own = apply_outcome(processed, outcomes["own"])
+print(f"labeled rows: {labeled_own.height}")
+print(f"positives (label=True): {labeled_own.filter(pl.col('label') == True).height}")
+print(f"negatives (label=False): {labeled_own.filter(pl.col('label') == False).height}")
+```
+
+### Load the game universe and create a splitter
+
+Negatives are sampled from the full BGG universe, not the user's collection.
+
+```{python}
+from src.data.loader import BGGDataLoader
+from src.collection.collection_split import (
+    CollectionSplitter,
+    ClassificationSplitConfig,
+    RegressionSplitConfig,
+)
+
+universe_loader = BGGDataLoader(bq_config)
+universe_df = universe_loader.load_training_data(min_ratings=25)
+print(f"universe: {universe_df.height} games, {len(universe_df.columns)} columns")
+
+splitter = CollectionSplitter(
+    universe_df=universe_df,
+    classification_config=ClassificationSplitConfig(
+        split_mode="stratified_random",
+        negative_sampling_ratio=5.0,
+        random_seed=42,
+    ),
+    regression_config=RegressionSplitConfig(random_seed=42),
+)
+```
+
+Produce the train/val/test split for `own`:
+
+```{python}
+train_df, val_df, test_df = splitter.split(labeled_own, outcomes["own"])
+print(f"train: {train_df.height}, val: {val_df.height}, test: {test_df.height}")
+print(f"train columns ({len(train_df.columns)}): {train_df.columns[:15]}...")
+```
+
+---
+
+## 4. Examine split distributions across outcomes
+
+Loop every outcome, label it, split it, and report positive rate + split sizes.
+Sanity-check that `stratified_random` preserves the label ratio and that
+`time_based` cuts by year.
+
+```{python}
+def describe_split(name: str, train, val, test, task: str):
+    rows = []
+    for split_name, df in [("train", train), ("val", val), ("test", test)]:
+        if df.height == 0:
+            rows.append({"outcome": name, "split": split_name, "rows": 0})
+            continue
+        row = {"outcome": name, "split": split_name, "rows": df.height}
+        if task == "classification":
+            pos = df.filter(pl.col("label") == True).height
+            row["pos"] = pos
+            row["pos_rate"] = pos / df.height if df.height else 0.0
+        else:  # regression
+            row["label_mean"] = df["label"].mean()
+            row["label_std"] = df["label"].std()
+        if "year_published" in df.columns:
+            row["year_min"] = df["year_published"].min()
+            row["year_max"] = df["year_published"].max()
+        rows.append(row)
+    return rows
+
+all_rows = []
+for name, outcome in outcomes.items():
+    labeled = apply_outcome(processed, outcome)
+    try:
+        tr, va, te = splitter.split(labeled, outcome)
+    except ValueError as e:
+        print(f"skipping {name}: {e}")
+        continue
+    all_rows.extend(describe_split(name, tr, va, te, outcome.task))
+
+pd.DataFrame(all_rows)
+```
+
+### Time-based split
+
+Switch the classification splitter to `time_based` mode and re-split `own` to
+see how the year cutoff carves the positives.
+
+```{python}
+time_splitter = CollectionSplitter(
+    universe_df=universe_df,
+    classification_config=ClassificationSplitConfig(
+        split_mode="time_based",
+        train_through=2022,
+        prediction_window=2,   # val = 2023-2024
+        test_window=2,         # test = 2025-2026
+        negative_sampling_ratio=5.0,
+        min_ratings_for_negatives=0,
+        random_seed=42,
+    ),
+)
+
+own_tb_train, own_tb_val, own_tb_test = time_splitter.split(labeled_own, outcomes["own"])
+
+def year_ranges(df, label_val):
+    d = df.filter(pl.col("label") == label_val)
+    if d.height == 0:
+        return "(empty)"
+    return f"{d['year_published'].min()}-{d['year_published'].max()}, n={d.height}"
+
+print("positives:")
+print(f"  train: {year_ranges(own_tb_train, True)}")
+print(f"  val:   {year_ranges(own_tb_val, True)}")
+print(f"  test:  {year_ranges(own_tb_test, True)}")
+print("negatives:")
+print(f"  train: {year_ranges(own_tb_train, False)}")
+print(f"  val:   {year_ranges(own_tb_val, False)}")
+print(f"  test:  {year_ranges(own_tb_test, False)}")
+```
+
+---
+
+## 5. Build the sklearn pipeline
+
+Train `own` via `CollectionModel`. The returned pipeline is a
+`sklearn.pipeline.Pipeline` with a preprocessor step and a model step.
+
+```{python}
+from src.collection.collection_model import (
+    CollectionModel,
+    ClassificationModelConfig,
+)
+
+model = CollectionModel(
+    username=USERNAME,
+    outcome=outcomes["own"],
+    classification_config=ClassificationModelConfig(
+        model_type="lightgbm",
+        tuning_metric="log_loss",
+        patience=5,
+    ),
+)
+pipeline_obj, best_params = model.train(train_df, val_df)
+print("pipeline steps:", [s[0] for s in pipeline_obj.steps])
+print("best params:", best_params)
+```
+
+---
+
+## 6. Inspect preprocessing
+
+Look at what the preprocessor produces: what columns come out, which get
+transformed, and how many features the model actually trains on.
+
+```{python}
+preprocessor = pipeline_obj.named_steps["preprocessor"]
+print("preprocessor type:", type(preprocessor).__name__)
+
+# Feature names after preprocessing
+try:
+    out_names = preprocessor.get_feature_names_out()
+    print(f"output features: {len(out_names)}")
+    print("first 30:", list(out_names[:30]))
+except Exception as e:
+    print(f"(get_feature_names_out failed: {e})")
+```
+
+### Feature count before vs. after
+
+```{python}
+from src.models.training import select_X_y
+X_train, y_train = select_X_y(train_df, y_column="label")
+print(f"raw training features: {X_train.shape[1]}")
+print(f"post-preprocess features: {len(out_names) if 'out_names' in dir() else '?'}")
+```
+
+---
+
+## 7. Train + evaluate
+
+Training already happened above; evaluate on validation and test. Threshold
+optimization is classification-only.
+
+```{python}
+val_metrics = model.evaluate(pipeline_obj, val_df)
+test_metrics = model.evaluate(pipeline_obj, test_df)
+
+pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
+```
+
+```{python}
+threshold = model.find_threshold(pipeline_obj, val_df)
+print(f"optimized threshold ({model.classification_config.threshold_optimization_metric}): {threshold:.4f}")
+```
+
+---
+
+## 8. Extract model quantities
+
+Pull feature importances (for tree models) or coefficients (for logistic) out
+of the trained pipeline, aligned with the preprocessor's output feature names.
+
+```{python}
+model_step = pipeline_obj.named_steps["model"]
+print("model type:", type(model_step).__name__)
+
+if hasattr(model_step, "feature_importances_"):
+    importance = pd.DataFrame({
+        "feature": out_names,
+        "importance": model_step.feature_importances_,
+    }).sort_values("importance", ascending=False)
+    importance.head(20)
+elif hasattr(model_step, "coef_"):
+    coef = pd.DataFrame({
+        "feature": out_names,
+        "coefficient": model_step.coef_.ravel(),
+    }).sort_values("coefficient", key=lambda c: c.abs(), ascending=False)
+    coef.head(20)
+else:
+    print("no feature_importances_ or coef_ on this model")
+```
+
+---
+
+## 9. Predict the universe
+
+Score all games in the universe for `own`. Classification returns a probability;
+regression returns a value.
+
+```{python}
+X_universe = universe_df.to_pandas()
+proba = pipeline_obj.predict_proba(X_universe)[:, 1]
+preds_df = pl.DataFrame({
+    "game_id": universe_df["game_id"].to_list(),
+    "score": proba,
+})
+print(f"predictions: {preds_df.height} rows")
+preds_df["score"].describe()
+```
+
+### Top 20 unowned games by `own` score
+
+```{python}
+owned_ids = set(
+    raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
+)
+preds_with_name = preds_df.join(
+    universe_df.select(["game_id", "name", "year_published"]),
+    on="game_id",
+    how="left",
+)
+(
+    preds_with_name
+    .filter(~pl.col("game_id").is_in(list(owned_ids)))
+    .sort("score", descending=True)
+    .head(20)
+)
+```
+
+---
+
+## Next
+
+Once the checklist is green, hook the same steps into `CollectionPipeline.run_full_pipeline`
+and make sure the CLI round-trip (`make train-collection USERNAME=... OUTCOME=own`)
+matches what we see here.
