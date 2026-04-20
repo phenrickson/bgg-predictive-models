@@ -22,10 +22,10 @@ RUN pip install uv
 # Copy required files
 COPY pyproject.toml .
 COPY uv.lock .
-COPY scoring_service/main.py .
-COPY scoring_service/cloud_experiment_tracker.py .
-COPY scoring_service/registered_model.py .
-COPY scoring_service/auth.py .
+COPY services/scoring/main.py .
+COPY services/scoring/cloud_experiment_tracker.py .
+COPY services/scoring/registered_model.py .
+COPY services/scoring/auth.py .
 COPY src/ /app/src/
 
 # Copy config files
