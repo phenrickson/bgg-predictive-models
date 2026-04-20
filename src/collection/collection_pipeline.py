@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import polars as pl
 
 from src.collection.collection_loader import BGGCollectionLoader
-from src.collection.collection_integration import CollectionIntegration
+from src.collection.collection_processor import CollectionProcessor
 from src.collection.collection_artifact_storage import (
     CollectionArtifactStorage,
     ArtifactStorageConfig,
@@ -282,11 +282,6 @@ class CollectionPipeline:
         Returns:
             Collection DataFrame with features
         """
-        integration = CollectionIntegration(
-            config=self.bq_config,
-            environment=self.config.storage_config.environment or "dev",
-        )
-
         if refresh:
             # Fetch from BGG API and save to BigQuery
             loader = BGGCollectionLoader(self.username)
@@ -302,10 +297,12 @@ class CollectionPipeline:
             )
             bq_storage.save_collection(self.username, collection_df)
 
-        # Get collection with features
-        return integration.get_collection_with_features(
-            self.username, owned_only=False, games_only=True
+        # Get collection with features (outcome-agnostic; labeling applied downstream)
+        processor = CollectionProcessor(
+            config=self.bq_config,
+            environment=self.config.storage_config.environment or "dev",
         )
+        return processor.process(self.username)
 
     def _load_game_universe(self) -> pl.DataFrame:
         """Load the full game universe for predictions.
