@@ -47,6 +47,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Services Directory Consolidation**: Moved the three service directories under a unified `services/` directory
+  - `scoring_service/` → `services/scoring/`
+  - `embeddings_service/` → `services/game_embeddings/` (renamed)
+  - `text_embeddings_service/` → `services/text_embeddings/`
+  - Python imports updated from `scoring_service.*` / `embeddings_service.*` / `text_embeddings_service.*` to the new `services.*` paths
+  - Dockerfiles, GitHub Actions path triggers, Makefile targets, and cloudbuild.yaml updated to match
+  - No infrastructure changes: same Cloud Run service names, Artifact Registry repos, and image tags
+- **Register Script Location**: Moved top-level `register.py` into `src/pipeline/register.py`
+  - Sits alongside other pipeline orchestration modules (`train.py`, `evaluate.py`, `score.py`, `finalize.py`)
+  - Now invoked via `uv run -m src.pipeline.register` (Makefile and training workflow updated)
+
 ### Added
 
 - **Artifact Registry Cleanup Policy**: Terraform-managed cleanup policies to reduce storage costs
