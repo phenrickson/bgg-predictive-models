@@ -1,1 +1,1 @@
-"""BGG Collection module for loading, processing, storing, and modeling user collections."""
+"""BGG Collection module for loading, processing, and modeling user collections."""
