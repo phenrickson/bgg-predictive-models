@@ -7,19 +7,14 @@ from dotenv import load_dotenv
 import sys
 
 # Add project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
 load_dotenv()
 
 from src.utils.logging import setup_logging  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
-
-# Add scoring_service directory to path for auth module
-scoring_service_path = os.path.dirname(__file__)
-sys.path.insert(0, scoring_service_path)
-
-from auth import get_authenticated_storage_client  # noqa: E402
+from services.scoring.auth import get_authenticated_storage_client  # noqa: E402
 
 
 def submit_scoring_request(
