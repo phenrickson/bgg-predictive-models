@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Collection Module Refactor**: Reorganized `src/collection/` around a new `Outcomes` abstraction
+  - New `src/collection/outcomes.py` defines outcomes declaratively in `config.yaml` under `collections.outcomes` (own, ever_owned, rated, rating, love)
+  - `CollectionProcessor` is outcome-agnostic (canonicalize BGG column names + join with universe); labeling is applied downstream via `apply_outcome`
+  - `CollectionSplitter` dispatches on `outcome.task` with two classification modes (`stratified_random`, `time_based` — the latter reuses `src.models.splitting.time_based_split`) and a regression path without negative sampling
+  - `CollectionModel` dispatches on `outcome.task` with separate classification and regression training + evaluation paths
+  - `CollectionArtifactStorage` paths now include the outcome segment: `{username}/{outcome}/v{N}/` with per-outcome versioning
+  - `CollectionPipeline.run_full_pipeline` loops over outcomes; `--outcome` CLI flag restricts training/refresh to a subset
+  - New `Config.raw_config` field exposes the parsed YAML dict for sections that do not yet have typed dataclass representations
+  - New Makefile targets: `train-collection`, `refresh-collection`, `collection-status` (all take `USERNAME=` and optional `OUTCOME=`)
+  - Deleted `collection_integration.py` (its join logic moved into `collection_processor.py`) and `tests/test_collection_integration.py`
+  - Training side only; serving (`services/collections/`) is a follow-up
+
 ## [0.4.1] - 2026-03-06
 
 ### Fixed
