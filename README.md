@@ -41,13 +41,12 @@ bgg-predictive-models/
 │   ├── features/              # Feature engineering and preprocessing
 │   ├── models/                # ML models (outcomes, embeddings, text embeddings)
 │   ├── monitor/               # Experiment and prediction monitoring dashboards
-│   ├── pipeline/              # Pipeline orchestration (train, evaluate, score, finalize)
+│   ├── pipeline/              # Pipeline orchestration (train, evaluate, score, finalize, register)
 │   ├── streamlit/             # Interactive Streamlit app with multiple pages
 │   ├── utils/                 # Configuration, logging, experiment sync
 │   └── visualizations/        # Data visualization scripts
 ├── terraform/                 # Infrastructure as Code (GCP resources)
 ├── tests/                     # Unit and integration tests
-├── register.py                # Model registration script
 └── Makefile                   # Automated workflow commands
 ```
 

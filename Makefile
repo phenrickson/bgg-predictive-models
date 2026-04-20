@@ -171,10 +171,10 @@ register_text_embeddings:
 ### register models (reads from config.yaml)
 .PHONY: register register-dry-run
 register:
-	uv run python register.py
+	uv run -m src.pipeline.register
 
 register-dry-run:
-	uv run python register.py --dry-run
+	uv run -m src.pipeline.register --dry-run
 
 EMBEDDINGS_CANDIDATE ?= svd-embeddings
 register_embeddings:
