@@ -190,13 +190,20 @@ class CollectionModel:
         }
 
     def find_threshold(self, pipeline: Pipeline, val_df: pl.DataFrame) -> float:
+        """Return the probability threshold that maximises the configured metric on val.
+
+        `find_optimal_threshold` returns a dict including diagnostic scores; we only
+        surface the threshold value here so callers (pipeline, storage, CLI) can
+        treat it as a plain float.
+        """
         if self.outcome.task != "classification":
             raise ValueError("find_threshold is only meaningful for classification outcomes")
         X, y = self._prepare(val_df)
         proba = pipeline.predict_proba(X)[:, 1]
-        return find_optimal_threshold(
+        result = find_optimal_threshold(
             y, proba, metric=self.classification_config.threshold_optimization_metric
         )
+        return float(result["threshold"])
 
     # --- regression path ---
 

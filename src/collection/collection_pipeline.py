@@ -130,7 +130,12 @@ class CollectionPipeline:
         # Step 2: save the processed snapshot (outcome-agnostic)
         self.storage.save_collection(processed)
 
-        # Step 3: load outcomes from config
+        # Step 3: load the game universe (used for negative sampling and prediction).
+        # This is the full BGG game-features dataset, not the user's collection.
+        universe_df = self._load_game_universe()
+        logger.info(f"Loaded game universe: {universe_df.height} games")
+
+        # Step 4: load outcomes from config
         outcomes = load_outcomes(self._project_config.raw_config)
         if outcome_filter:
             missing = set(outcome_filter) - set(outcomes)
@@ -140,9 +145,10 @@ class CollectionPipeline:
         if not outcomes:
             raise ValueError("No outcomes to train")
 
-        # Step 4: shared splitter (universe = processed dataframe)
+        # Step 5: shared splitter. Negatives are sampled from the full universe,
+        # not from the user's collection.
         splitter = CollectionSplitter(
-            universe_df=processed,
+            universe_df=universe_df,
             classification_config=self.config.classification_split_config,
             regression_config=self.config.regression_split_config,
         )
@@ -151,6 +157,7 @@ class CollectionPipeline:
             "username": self.username,
             "started_at": start.isoformat(),
             "collection_rows": processed.height,
+            "universe_rows": universe_df.height,
             "outcomes": {},
         }
 
@@ -179,20 +186,18 @@ class CollectionPipeline:
     ) -> Dict[str, Any]:
         """Regenerate predictions using the latest registered model per outcome.
 
-        Does not retrain. Uses the processed collection snapshot from storage
-        as the prediction universe.
+        Does not retrain. Scores the full BGG game universe so predictions
+        cover games the user does not currently own.
         """
         logger.info(f"Refreshing predictions for user '{self.username}'")
 
-        processed = self._process_collection()
-        if processed is None:
-            raise ValueError(
-                f"No stored collection for user '{self.username}'. "
-                "Run the full pipeline first."
-            )
+        universe_df = self._load_game_universe()
 
         outcomes = load_outcomes(self._project_config.raw_config)
         if outcome_filter:
+            missing = set(outcome_filter) - set(outcomes)
+            if missing:
+                raise ValueError(f"Unknown outcomes requested: {sorted(missing)}")
             outcomes = {k: v for k, v in outcomes.items() if k in outcome_filter}
 
         results: Dict[str, Any] = {}
@@ -203,7 +208,7 @@ class CollectionPipeline:
                     f"No trained model for outcome {name!r}; skipping"
                 )
                 continue
-            results[name] = self._predict_one_outcome(processed, outcome, version)
+            results[name] = self._predict_one_outcome(universe_df, outcome, version)
 
         return results
 
@@ -238,6 +243,13 @@ class CollectionPipeline:
                 "Run with refresh_collection=True."
             )
         return result
+
+    def _load_game_universe(self) -> pl.DataFrame:
+        """Load the full BGG game universe (features only) for negative sampling and prediction."""
+        loader = BGGDataLoader(self.bq_config)
+        return loader.load_training_data(
+            min_ratings=self.config.min_ratings_for_universe
+        )
 
     def _train_one_outcome(
         self,
@@ -297,19 +309,19 @@ class CollectionPipeline:
 
     def _predict_one_outcome(
         self,
-        processed: pl.DataFrame,
+        universe_df: pl.DataFrame,
         outcome: OutcomeDefinition,
         version: int,
     ) -> Dict[str, Any]:
         pipeline_obj, metadata, threshold = self.storage.load_model(
             outcome.name, version=version
         )
-        X = processed.to_pandas()
+        X = universe_df.to_pandas()
         if outcome.task == "classification":
             proba = pipeline_obj.predict_proba(X)[:, 1]
             predictions_df = pl.DataFrame(
                 {
-                    "game_id": processed["game_id"].to_list(),
+                    "game_id": universe_df["game_id"].to_list(),
                     "score": proba,
                 }
             )
@@ -317,7 +329,7 @@ class CollectionPipeline:
             preds = pipeline_obj.predict(X)
             predictions_df = pl.DataFrame(
                 {
-                    "game_id": processed["game_id"].to_list(),
+                    "game_id": universe_df["game_id"].to_list(),
                     "score": preds,
                 }
             )
