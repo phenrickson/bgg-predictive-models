@@ -158,7 +158,9 @@ class CollectionModel:
         X_train, y_train = self._prepare(train_df)
         X_val, y_val = self._prepare(val_df)
 
-        preprocessor = create_preprocessing_pipeline(model_type=cfg.preprocessor_type)
+        preprocessor = create_preprocessing_pipeline(
+            model_type=cfg.preprocessor_type, model_name=cfg.model_type
+        )
         pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
 
         best_pipeline, best_params = tune_model(
@@ -213,7 +215,9 @@ class CollectionModel:
         X_train, y_train = self._prepare(train_df)
         X_val, y_val = self._prepare(val_df)
 
-        preprocessor = create_preprocessing_pipeline(model_type=cfg.preprocessor_type)
+        preprocessor = create_preprocessing_pipeline(
+            model_type=cfg.preprocessor_type, model_name=cfg.model_type
+        )
         pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
 
         best_pipeline, best_params = tune_model(
