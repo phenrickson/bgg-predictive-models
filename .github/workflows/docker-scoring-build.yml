@@ -6,7 +6,7 @@ on:
       - main
       - develop
     paths:
-      - 'scoring_service/**'
+      - 'services/scoring/**'
       - 'docker/scoring.Dockerfile'
       - '.github/workflows/docker-scoring-build.yml'
   workflow_dispatch:
