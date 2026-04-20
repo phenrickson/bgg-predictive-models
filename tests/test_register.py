@@ -113,7 +113,7 @@ class TestModelRegistrationFunctions:
             "uv",
             "run",
             "-m",
-            "scoring_service.register_model",
+            "services.scoring.register_model",
             "--model-type",
             "complexity",
             "--experiment",
@@ -136,7 +136,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "rating" in cmd
         assert "--experiment" in cmd
@@ -152,7 +152,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "users_rated" in cmd
         assert "--experiment" in cmd
@@ -168,7 +168,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "hurdle" in cmd
         assert "--experiment" in cmd
