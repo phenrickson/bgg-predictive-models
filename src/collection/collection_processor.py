@@ -57,10 +57,16 @@ class CollectionProcessor:
             logger.error(f"No collection found for user '{username}'")
             return None
 
-        if self.processor_config.games_only and "subtype" in collection_df.columns:
-            before = len(collection_df)
-            collection_df = collection_df.filter(pl.col("subtype") == "boardgame")
-            logger.info(f"Filtered to boardgames: {before} -> {len(collection_df)}")
+        if self.processor_config.games_only:
+            if "subtype" not in collection_df.columns:
+                logger.warning(
+                    "games_only=True but 'subtype' column missing from collection; "
+                    "returning unfiltered collection"
+                )
+            else:
+                before = len(collection_df)
+                collection_df = collection_df.filter(pl.col("subtype") == "boardgame")
+                logger.info(f"Filtered to boardgames: {before} -> {len(collection_df)}")
 
         logger.info("Loading game universe features from warehouse")
         features_df = self.data_loader.load_data()

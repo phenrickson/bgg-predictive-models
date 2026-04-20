@@ -302,7 +302,13 @@ class CollectionPipeline:
             config=self.bq_config,
             environment=self.config.storage_config.environment or "dev",
         )
-        return processor.process(self.username)
+        result = processor.process(self.username)
+        if result is None:
+            raise ValueError(
+                f"No stored collection for user '{self.username}'. "
+                "Run with refresh=True to fetch from BGG API."
+            )
+        return result
 
     def _load_game_universe(self) -> pl.DataFrame:
         """Load the full game universe for predictions.
