@@ -8,7 +8,7 @@ import sys
 from src.utils.logging import setup_logging
 from src.collection.collection_pipeline import CollectionPipeline, PipelineConfig
 from src.collection.collection_artifact_storage import ArtifactStorageConfig
-from src.collection.collection_split import SplitConfig
+from src.collection.collection_split import ClassificationSplitConfig
 from src.collection.collection_model import ModelConfig
 from src.collection.collection_analyzer import AnalyzerConfig
 
@@ -128,7 +128,7 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
         storage_config=ArtifactStorageConfig(
             environment=args.environment,
         ),
-        split_config=SplitConfig(
+        split_config=ClassificationSplitConfig(
             negative_sampling_ratio=args.negative_ratio,
             negative_sampling_strategy=args.sampling_strategy,
         ),

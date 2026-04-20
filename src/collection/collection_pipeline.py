@@ -13,7 +13,7 @@ from src.collection.collection_artifact_storage import (
     CollectionArtifactStorage,
     ArtifactStorageConfig,
 )
-from src.collection.collection_split import CollectionSplit, SplitConfig
+from src.collection.collection_split import CollectionSplitter, ClassificationSplitConfig
 from src.collection.collection_model import CollectionModel, ModelConfig
 from src.collection.collection_analyzer import CollectionAnalyzer, AnalyzerConfig
 from src.data.loader import BGGDataLoader
@@ -27,7 +27,7 @@ class PipelineConfig:
     """Configuration for the full collection pipeline."""
 
     storage_config: ArtifactStorageConfig = field(default_factory=ArtifactStorageConfig)
-    split_config: SplitConfig = field(default_factory=SplitConfig)
+    split_config: ClassificationSplitConfig = field(default_factory=ClassificationSplitConfig)
     model_config: ModelConfig = field(default_factory=ModelConfig)
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
@@ -123,15 +123,15 @@ class CollectionPipeline:
             }
 
             # Step 3: Create splits
-            logger.info("Step 3: Creating train/val/test splits")
-            splitter = CollectionSplit(
-                collection_df=collection_df,
-                game_universe_df=game_universe_df,
-                config=self.config.split_config,
-            )
-
-            train_df, val_df, test_df = splitter.create_ownership_splits(
-                train_through=self.config.train_through
+            # NOTE: This flow is mid-refactor. The new CollectionSplitter takes a
+            # pre-labeled dataframe and an OutcomeDefinition. The pipeline rewrite
+            # (apply_outcome, loop over outcomes, splitter.split(labeled, outcome))
+            # lands in Task 8 of docs/plans/2026-04-20-collection-modules.md.
+            raise NotImplementedError(
+                "CollectionPipeline.run_full_pipeline is being refactored to loop over "
+                "outcomes. Pipeline rewrite lands in Task 8 of the collection-modules plan. "
+                "Until then, use the module-level APIs (CollectionProcessor, CollectionSplitter, "
+                "CollectionModel) directly."
             )
 
             results["steps"]["splits"] = {
