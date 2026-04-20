@@ -14,7 +14,7 @@ from src.collection.collection_artifact_storage import (
     ArtifactStorageConfig,
 )
 from src.collection.collection_split import CollectionSplitter, ClassificationSplitConfig
-from src.collection.collection_model import CollectionModel, ModelConfig
+from src.collection.collection_model import CollectionModel, ClassificationModelConfig
 from src.collection.collection_analyzer import CollectionAnalyzer, AnalyzerConfig
 from src.data.loader import BGGDataLoader
 from src.utils.config import load_config
@@ -28,7 +28,7 @@ class PipelineConfig:
 
     storage_config: ArtifactStorageConfig = field(default_factory=ArtifactStorageConfig)
     split_config: ClassificationSplitConfig = field(default_factory=ClassificationSplitConfig)
-    model_config: ModelConfig = field(default_factory=ModelConfig)
+    model_config: ClassificationModelConfig = field(default_factory=ClassificationModelConfig)
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
     train_through: Optional[int] = None

@@ -9,7 +9,7 @@ from src.utils.logging import setup_logging
 from src.collection.collection_pipeline import CollectionPipeline, PipelineConfig
 from src.collection.collection_artifact_storage import ArtifactStorageConfig
 from src.collection.collection_split import ClassificationSplitConfig
-from src.collection.collection_model import ModelConfig
+from src.collection.collection_model import ClassificationModelConfig
 from src.collection.collection_analyzer import AnalyzerConfig
 
 
@@ -132,7 +132,7 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
             negative_sampling_ratio=args.negative_ratio,
             negative_sampling_strategy=args.sampling_strategy,
         ),
-        model_config=ModelConfig(
+        model_config=ClassificationModelConfig(
             model_type=args.model_type,
         ),
         analyzer_config=AnalyzerConfig(),
