@@ -18,7 +18,7 @@ sys.path.insert(0, project_root)
 
 from src.utils.config import load_config  # noqa: E402
 from src.models.training import load_data  # noqa: E402
-from text_embeddings_service.registered_model import RegisteredTextEmbeddingModel  # noqa: E402
+from services.text_embeddings.registered_model import RegisteredTextEmbeddingModel  # noqa: E402
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
