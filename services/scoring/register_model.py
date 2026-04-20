@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 import logging
 
 # Add project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
 from src.models.experiments import ExperimentTracker  # noqa: E402
-from scoring_service.registered_model import RegisteredModel  # noqa: E402
+from services.scoring.registered_model import RegisteredModel  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
 # load environment variables
