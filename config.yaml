@@ -172,6 +172,24 @@ collections:
     top_n_categories: 10
     top_n_mechanics: 10
   min_ratings_for_universe: 25
+  outcomes:
+    own:
+      task: classification
+      label_from: owned
+    ever_owned:
+      task: classification
+      label_from: {any_of: [owned, prev_owned]}
+    rated:
+      task: classification
+      label_from: {column: user_rating, predicate: "> 0"}
+    rating:
+      task: regression
+      label_from: user_rating
+      require: "user_rating > 0"
+    love:
+      task: classification
+      label_from: {column: user_rating, predicate: ">= 8"}
+      require: "user_rating > 0"
 
 # Scoring Configuration
 scoring:
