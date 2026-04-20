@@ -1,7 +1,7 @@
 """Configuration management for BGG predictive models."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -260,6 +260,9 @@ class Config:
     embeddings: Optional[EmbeddingConfig] = None
     text_embeddings: Optional[TextEmbeddingConfig] = None
     simulation: Optional[SimulationConfig] = None
+    raw_config: Dict[str, Any] = field(default_factory=dict)
+    """Parsed YAML as a plain dict. Escape hatch for consumers of sections
+    that do not yet have typed dataclass representations (e.g. collections.outcomes)."""
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -504,4 +507,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         embeddings=embeddings_config,
         text_embeddings=text_embeddings_config,
         simulation=simulation_config,
+        raw_config=config,
     )
