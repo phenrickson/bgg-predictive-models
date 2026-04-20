@@ -2,6 +2,10 @@
 
 Outcome-agnostic: produces one unlabeled dataframe per user. Labeling is
 applied downstream via src.collection.outcomes.apply_outcome.
+
+Raw collection columns come from the BGG XML API (see CollectionLoader).
+The processor normalizes those names into a canonical schema used by the
+Outcomes config and the rest of the modeling pipeline.
 """
 
 import logging
@@ -15,6 +19,11 @@ from src.data.loader import BGGDataLoader
 from src.utils.config import BigQueryConfig
 
 logger = logging.getLogger(__name__)
+
+
+BGG_TO_CANONICAL = {
+    "previously_owned": "prev_owned",
+}
 
 
 @dataclass
@@ -57,6 +66,8 @@ class CollectionProcessor:
             logger.error(f"No collection found for user '{username}'")
             return None
 
+        collection_df = self._to_canonical(collection_df)
+
         if self.processor_config.games_only:
             if "subtype" not in collection_df.columns:
                 logger.warning(
@@ -78,3 +89,9 @@ class CollectionProcessor:
             f"Processed {len(joined)} rows × {len(joined.columns)} columns for '{username}'"
         )
         return joined
+
+    @staticmethod
+    def _to_canonical(df: pl.DataFrame) -> pl.DataFrame:
+        """Rename raw BGG column names to the canonical names used downstream."""
+        rename_map = {src: dst for src, dst in BGG_TO_CANONICAL.items() if src in df.columns}
+        return df.rename(rename_map) if rename_map else df
