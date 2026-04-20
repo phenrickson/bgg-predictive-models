@@ -1,9 +1,14 @@
-"""End-to-end pipeline for user collection modeling."""
+"""End-to-end pipeline for user collection modeling.
+
+Loops over outcomes declared in config.yaml (`collections.outcomes`) and trains
+one model per (user, outcome). Per-outcome artifacts (model, splits, predictions,
+analysis) are versioned independently under GCS.
+"""
 
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import polars as pl
 
@@ -13,9 +18,23 @@ from src.collection.collection_artifact_storage import (
     CollectionArtifactStorage,
     ArtifactStorageConfig,
 )
-from src.collection.collection_split import CollectionSplitter, ClassificationSplitConfig
-from src.collection.collection_model import CollectionModel, ClassificationModelConfig
+from src.collection.collection_split import (
+    CollectionSplitter,
+    ClassificationSplitConfig,
+    RegressionSplitConfig,
+)
+from src.collection.collection_model import (
+    CollectionModel,
+    ClassificationModelConfig,
+    RegressionModelConfig,
+)
 from src.collection.collection_analyzer import CollectionAnalyzer, AnalyzerConfig
+from src.collection.collection_storage import CollectionStorage
+from src.collection.outcomes import (
+    OutcomeDefinition,
+    apply_outcome,
+    load_outcomes,
+)
 from src.data.loader import BGGDataLoader
 from src.utils.config import load_config
 
@@ -24,15 +43,26 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineConfig:
-    """Configuration for the full collection pipeline."""
+    """Configuration for the collection pipeline.
+
+    The same split/model configs are applied to every outcome. Per-outcome
+    overrides are not supported yet; add them here when a real need appears.
+    """
 
     storage_config: ArtifactStorageConfig = field(default_factory=ArtifactStorageConfig)
-    split_config: ClassificationSplitConfig = field(default_factory=ClassificationSplitConfig)
-    model_config: ClassificationModelConfig = field(default_factory=ClassificationModelConfig)
+    classification_split_config: ClassificationSplitConfig = field(
+        default_factory=ClassificationSplitConfig
+    )
+    regression_split_config: RegressionSplitConfig = field(
+        default_factory=RegressionSplitConfig
+    )
+    classification_model_config: ClassificationModelConfig = field(
+        default_factory=ClassificationModelConfig
+    )
+    regression_model_config: RegressionModelConfig = field(
+        default_factory=RegressionModelConfig
+    )
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
-
-    train_through: Optional[int] = None
-    """Last year to include in training data (inclusive, for time-based splits)."""
 
     min_ratings_for_universe: int = 25
     """Minimum ratings for games in the universe."""
@@ -41,18 +71,11 @@ class PipelineConfig:
 class CollectionPipeline:
     """End-to-end pipeline for user collection modeling.
 
-    Orchestrates the full workflow:
-    1. Fetch/load user collection
-    2. Join with game features
-    3. Create train/val/test splits
-    4. Train ownership model
-    5. Generate predictions for all games
-    6. Create analysis artifacts
-    7. Save all artifacts to GCS
-
-    Example usage:
-        >>> pipeline = CollectionPipeline("phenrickson")
-        >>> results = pipeline.run_full_pipeline()
+    Workflow:
+    1. Fetch raw collection from BGG (optional) and persist to BQ
+    2. Process once: canonicalize schema + join with game universe
+    3. Load outcomes from config
+    4. For each outcome: apply_outcome -> split -> train -> evaluate -> save
     """
 
     def __init__(
@@ -60,335 +83,250 @@ class CollectionPipeline:
         username: str,
         config: Optional[PipelineConfig] = None,
     ):
-        """Initialize pipeline for a specific user.
-
-        Args:
-            username: BGG username
-            config: Optional pipeline configuration
-        """
         self.username = username
         self.config = config or PipelineConfig()
 
-        # Initialize components
         self.storage = CollectionArtifactStorage(username, self.config.storage_config)
 
-        # Load project config
-        project_config = load_config()
-        self.bq_config = project_config.get_bigquery_config()
+        self._project_config = load_config()
+        self.bq_config = self._project_config.get_bigquery_config()
+        self._environment = self.config.storage_config.environment or "dev"
 
         logger.info(f"Initialized pipeline for user '{username}'")
 
     def run_full_pipeline(
         self,
         refresh_collection: bool = True,
+        outcome_filter: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Run the complete pipeline.
+        """Train models for all outcomes (or a filtered subset) for this user.
 
         Args:
-            refresh_collection: Whether to fetch fresh collection from BGG API
+            refresh_collection: Fetch fresh collection from BGG API before training.
+            outcome_filter: Restrict to these outcome names. If None, trains all.
 
         Returns:
-            Dictionary with pipeline results and artifact locations
+            {
+                "username": str,
+                "started_at": iso,
+                "finished_at": iso,
+                "collection_rows": int,
+                "outcomes": {
+                    "own": {"version": int, "metrics": {...}, "best_params": {...}},
+                    ...
+                },
+            }
         """
         logger.info(f"Starting full pipeline for user '{self.username}'")
-        start_time = datetime.now()
+        start = datetime.now()
 
-        results = {
+        # Step 1: fetch + persist raw collection (optional) + process
+        if refresh_collection:
+            self._fetch_and_persist_collection()
+
+        processed = self._process_collection()
+        logger.info(f"Processed collection: {processed.height} rows")
+
+        # Step 2: save the processed snapshot (outcome-agnostic)
+        self.storage.save_collection(processed)
+
+        # Step 3: load outcomes from config
+        outcomes = load_outcomes(self._project_config.raw_config)
+        if outcome_filter:
+            missing = set(outcome_filter) - set(outcomes)
+            if missing:
+                raise ValueError(f"Unknown outcomes requested: {sorted(missing)}")
+            outcomes = {k: v for k, v in outcomes.items() if k in outcome_filter}
+        if not outcomes:
+            raise ValueError("No outcomes to train")
+
+        # Step 4: shared splitter (universe = processed dataframe)
+        splitter = CollectionSplitter(
+            universe_df=processed,
+            classification_config=self.config.classification_split_config,
+            regression_config=self.config.regression_split_config,
+        )
+
+        results: Dict[str, Any] = {
             "username": self.username,
-            "started_at": start_time.isoformat(),
-            "steps": {},
-            "artifacts": {},
+            "started_at": start.isoformat(),
+            "collection_rows": processed.height,
+            "outcomes": {},
         }
 
-        try:
-            # Step 1: Get collection with features
-            logger.info("Step 1: Loading collection with features")
-            collection_df = self._get_collection_with_features(refresh_collection)
-            results["steps"]["collection"] = {
-                "status": "success",
-                "total_items": len(collection_df),
-                "owned_games": collection_df.filter(pl.col("owned") == True).height,
-            }
-
-            # Save collection
-            collection_path = self.storage.save_collection(collection_df)
-            results["artifacts"]["collection"] = collection_path
-
-            # Step 2: Load game universe
-            logger.info("Step 2: Loading game universe")
-            game_universe_df = self._load_game_universe()
-            results["steps"]["universe"] = {
-                "status": "success",
-                "total_games": len(game_universe_df),
-            }
-
-            # Step 3: Create splits
-            # NOTE: This flow is mid-refactor. The new CollectionSplitter takes a
-            # pre-labeled dataframe and an OutcomeDefinition. The pipeline rewrite
-            # (apply_outcome, loop over outcomes, splitter.split(labeled, outcome))
-            # lands in Task 8 of docs/plans/2026-04-20-collection-modules.md.
-            raise NotImplementedError(
-                "CollectionPipeline.run_full_pipeline is being refactored to loop over "
-                "outcomes. Pipeline rewrite lands in Task 8 of the collection-modules plan. "
-                "Until then, use the module-level APIs (CollectionProcessor, CollectionSplitter, "
-                "CollectionModel) directly."
-            )
-
-            results["steps"]["splits"] = {
-                "status": "success",
-                "train_size": len(train_df),
-                "val_size": len(val_df),
-                "test_size": len(test_df),
-                "train_positive_rate": train_df["target"].mean(),
-            }
-
-            # Save splits
-            split_paths = self.storage.save_splits(train_df, val_df, test_df)
-            results["artifacts"]["splits"] = split_paths
-
-            # Step 4: Train model
-            logger.info("Step 4: Training ownership model")
-            model = CollectionModel(self.username, self.config.model_config)
-            pipeline, best_params = model.train(train_df, val_df)
-
-            # Find optimal threshold
-            threshold = model.find_optimal_threshold(pipeline, val_df)
-
-            # Evaluate on test set
-            metrics = model.evaluate(pipeline, test_df, threshold)
-
-            results["steps"]["training"] = {
-                "status": "success",
-                "model_type": self.config.model_config.model_type,
-                "best_params": best_params,
-                "threshold": threshold,
-                "test_metrics": metrics,
-            }
-
-            # Save model
-            model_metadata = model.get_model_metadata(
-                pipeline, best_params, metrics, threshold
-            )
-            model_path = self.storage.save_model(
-                pipeline, model_metadata, threshold
-            )
-            results["artifacts"]["model"] = model_path
-
-            # Step 5: Generate predictions
-            logger.info("Step 5: Generating predictions for all games")
-            predictions_df = model.predict(pipeline, game_universe_df, threshold)
-
-            # Enrich predictions with game info
-            predictions_df = predictions_df.join(
-                game_universe_df.select([
-                    "game_id", "name", "year_published", "geek_rating",
-                    "complexity", "categories", "mechanics"
-                ]),
-                on="game_id",
-                how="left",
-            )
-
-            # Mark games in collection
-            owned_ids = set(collection_df.filter(pl.col("owned") == True)["game_id"].to_list())
-            wishlist_ids = set(
-                collection_df.filter(
-                    (pl.col("wishlist") == True) if "wishlist" in collection_df.columns
-                    else pl.lit(False)
-                )["game_id"].to_list()
-            )
-
-            predictions_df = predictions_df.with_columns([
-                pl.col("game_id").is_in(list(owned_ids)).alias("in_collection"),
-                pl.when(pl.col("game_id").is_in(list(owned_ids)))
-                .then(pl.lit("owned"))
-                .when(pl.col("game_id").is_in(list(wishlist_ids)))
-                .then(pl.lit("wishlist"))
-                .otherwise(pl.lit("none"))
-                .alias("collection_status"),
-            ])
-
-            results["steps"]["predictions"] = {
-                "status": "success",
-                "total_games_scored": len(predictions_df),
-            }
-
-            # Step 6: Generate analysis artifacts
-            logger.info("Step 6: Generating analysis artifacts")
-            analyzer = CollectionAnalyzer(
-                username=self.username,
-                collection_df=collection_df,
-                predictions_df=predictions_df,
-                game_universe_df=game_universe_df,
-                config=self.config.analyzer_config,
-            )
-            analyzer.set_metrics(metrics)
-
-            summary_stats = analyzer.generate_summary_stats()
-            category_affinity = analyzer.generate_category_affinity()
-            top_recommendations = analyzer.generate_top_recommendations()
-            feature_importance = model.get_feature_importance(pipeline)
-
-            results["steps"]["analysis"] = {
-                "status": "success",
-                "top_recommendations_count": len(top_recommendations),
-            }
-
-            # Save predictions
-            pred_paths = self.storage.save_predictions(predictions_df, top_recommendations)
-            results["artifacts"]["predictions"] = pred_paths
-
-            # Save analysis artifacts
-            if feature_importance is not None:
-                analysis_paths = self.storage.save_analysis_artifacts(
-                    summary_stats, feature_importance, category_affinity
+        for name, outcome in outcomes.items():
+            logger.info(f"--- outcome: {name} ({outcome.task}) ---")
+            try:
+                results["outcomes"][name] = self._train_one_outcome(
+                    processed, outcome, splitter
                 )
-                results["artifacts"]["analysis"] = analysis_paths
+            except Exception as exc:
+                logger.exception(f"Outcome {name!r} failed: {exc}")
+                results["outcomes"][name] = {"error": str(exc)}
 
-            # Save user metadata
-            metadata = {
-                "last_pipeline_run": datetime.now().isoformat(),
-                "collection_size": len(collection_df),
-                "owned_games": collection_df.filter(pl.col("owned") == True).height,
-                "model_version": results["artifacts"].get("model"),
-            }
-            self.storage.save_user_metadata(metadata)
+        finished = datetime.now()
+        results["finished_at"] = finished.isoformat()
+        results["duration_seconds"] = (finished - start).total_seconds()
+        logger.info(
+            f"Pipeline finished for user '{self.username}' "
+            f"in {results['duration_seconds']:.1f}s"
+        )
+        return results
 
-            # Success
-            end_time = datetime.now()
-            results["completed_at"] = end_time.isoformat()
-            results["duration_seconds"] = (end_time - start_time).total_seconds()
-            results["status"] = "success"
+    def refresh_predictions_only(
+        self,
+        outcome_filter: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Regenerate predictions using the latest registered model per outcome.
 
-            logger.info(
-                f"Pipeline completed successfully in {results['duration_seconds']:.1f}s"
+        Does not retrain. Uses the processed collection snapshot from storage
+        as the prediction universe.
+        """
+        logger.info(f"Refreshing predictions for user '{self.username}'")
+
+        processed = self._process_collection()
+        if processed is None:
+            raise ValueError(
+                f"No stored collection for user '{self.username}'. "
+                "Run the full pipeline first."
             )
 
-        except Exception as e:
-            logger.error(f"Pipeline failed: {e}")
-            results["status"] = "failed"
-            results["error"] = str(e)
-            raise
+        outcomes = load_outcomes(self._project_config.raw_config)
+        if outcome_filter:
+            outcomes = {k: v for k, v in outcomes.items() if k in outcome_filter}
+
+        results: Dict[str, Any] = {}
+        for name, outcome in outcomes.items():
+            version = self.storage.latest_version(name)
+            if version is None:
+                logger.warning(
+                    f"No trained model for outcome {name!r}; skipping"
+                )
+                continue
+            results[name] = self._predict_one_outcome(processed, outcome, version)
 
         return results
 
-    def _get_collection_with_features(
-        self, refresh: bool = True
-    ) -> pl.DataFrame:
-        """Get user's collection joined with game features.
+    def get_pipeline_status(self) -> Dict[str, Any]:
+        return self.storage.get_artifact_status()
 
-        Args:
-            refresh: Whether to fetch fresh from BGG API
+    # -----------------------------------------------------------------
+    # Internals
+    # -----------------------------------------------------------------
 
-        Returns:
-            Collection DataFrame with features
-        """
-        if refresh:
-            # Fetch from BGG API and save to BigQuery
-            loader = BGGCollectionLoader(self.username)
-            collection_df = loader.get_collection()
-
-            if collection_df is None:
-                raise ValueError(f"Could not fetch collection for user '{self.username}'")
-
-            # Save to BigQuery storage
-            from src.collection.collection_storage import CollectionStorage
-            bq_storage = CollectionStorage(
-                environment=self.config.storage_config.environment or "dev"
+    def _fetch_and_persist_collection(self) -> None:
+        """Fetch raw collection from BGG and persist to BQ."""
+        loader = BGGCollectionLoader(self.username)
+        raw = loader.get_collection()
+        if raw is None:
+            raise ValueError(
+                f"Could not fetch collection for user '{self.username}'"
             )
-            bq_storage.save_collection(self.username, collection_df)
+        bq_storage = CollectionStorage(environment=self._environment)
+        bq_storage.save_collection(self.username, raw)
+        logger.info(f"Persisted {raw.height} raw collection rows for '{self.username}'")
 
-        # Get collection with features (outcome-agnostic; labeling applied downstream)
+    def _process_collection(self) -> pl.DataFrame:
+        """Load + canonicalize + join collection with game universe."""
         processor = CollectionProcessor(
-            config=self.bq_config,
-            environment=self.config.storage_config.environment or "dev",
+            config=self.bq_config, environment=self._environment
         )
         result = processor.process(self.username)
         if result is None:
             raise ValueError(
                 f"No stored collection for user '{self.username}'. "
-                "Run with refresh=True to fetch from BGG API."
+                "Run with refresh_collection=True."
             )
         return result
 
-    def _load_game_universe(self) -> pl.DataFrame:
-        """Load the full game universe for predictions.
-
-        Returns:
-            DataFrame with all games and features
-        """
-        loader = BGGDataLoader(self.bq_config)
-        return loader.load_training_data(
-            min_ratings=self.config.min_ratings_for_universe
-        )
-
-    def refresh_predictions_only(
+    def _train_one_outcome(
         self,
-        model_version: Optional[int] = None,
-    ) -> Dict[str, str]:
-        """Re-run predictions with existing model.
+        processed: pl.DataFrame,
+        outcome: OutcomeDefinition,
+        splitter: CollectionSplitter,
+    ) -> Dict[str, Any]:
+        labeled = apply_outcome(processed, outcome)
+        train_df, val_df, test_df = splitter.split(labeled, outcome)
 
-        Useful when game universe is updated but model hasn't changed.
+        if train_df.height == 0:
+            raise ValueError(f"Train split is empty for outcome {outcome.name!r}")
 
-        Args:
-            model_version: Model version to use (latest if not specified)
-
-        Returns:
-            Dictionary mapping artifact names to GCS paths
-        """
-        logger.info(f"Refreshing predictions for user '{self.username}'")
-
-        # Load model
-        pipeline, metadata, threshold = self.storage.load_model(model_version)
-        logger.info(f"Loaded model v{metadata.get('version', '?')}")
-
-        # Load game universe
-        game_universe_df = self._load_game_universe()
-
-        # Load collection
-        collection_df = self.storage.load_collection()
-        if collection_df is None:
-            raise ValueError("No collection found in storage. Run full pipeline first.")
-
-        # Generate predictions
-        model = CollectionModel(self.username, self.config.model_config)
-        predictions_df = model.predict(pipeline, game_universe_df, threshold)
-
-        # Enrich and save
-        predictions_df = predictions_df.join(
-            game_universe_df.select([
-                "game_id", "name", "year_published", "geek_rating",
-                "complexity", "categories", "mechanics"
-            ]),
-            on="game_id",
-            how="left",
-        )
-
-        # Mark collection status
-        owned_ids = set(collection_df.filter(pl.col("owned") == True)["game_id"].to_list())
-        predictions_df = predictions_df.with_columns([
-            pl.col("game_id").is_in(list(owned_ids)).alias("in_collection"),
-        ])
-
-        # Generate recommendations
-        analyzer = CollectionAnalyzer(
+        model = CollectionModel(
             username=self.username,
-            collection_df=collection_df,
-            predictions_df=predictions_df,
-            game_universe_df=game_universe_df,
-            config=self.config.analyzer_config,
+            outcome=outcome,
+            classification_config=self.config.classification_model_config,
+            regression_config=self.config.regression_model_config,
         )
-        top_recommendations = analyzer.generate_top_recommendations()
+        pipeline_obj, best_params = model.train(train_df, val_df)
+        metrics = model.evaluate(pipeline_obj, test_df)
 
-        # Save
-        paths = self.storage.save_predictions(predictions_df, top_recommendations)
+        threshold: Optional[float] = None
+        if outcome.task == "classification":
+            threshold = model.find_threshold(pipeline_obj, val_df)
 
-        logger.info("Predictions refreshed successfully")
-        return paths
+        version = self.storage._next_version(outcome.name)
 
-    def get_pipeline_status(self) -> Dict[str, Any]:
-        """Get status of pipeline artifacts.
+        self.storage.save_splits(outcome.name, train_df, val_df, test_df, version=version)
+        metadata = {
+            "task": outcome.task,
+            "best_params": best_params,
+            "metrics": metrics,
+        }
+        self.storage.save_model(
+            outcome.name, pipeline_obj, metadata, threshold=threshold, version=version
+        )
 
-        Returns:
-            Dictionary with artifact existence and metadata
-        """
-        return self.storage.get_artifact_status()
+        logger.info(
+            f"Trained {outcome.name} v{version}: "
+            f"train={train_df.height} val={val_df.height} test={test_df.height}; "
+            f"metrics={metrics}"
+        )
+
+        return {
+            "version": version,
+            "task": outcome.task,
+            "threshold": threshold,
+            "best_params": best_params,
+            "metrics": metrics,
+            "split_sizes": {
+                "train": train_df.height,
+                "val": val_df.height,
+                "test": test_df.height,
+            },
+        }
+
+    def _predict_one_outcome(
+        self,
+        processed: pl.DataFrame,
+        outcome: OutcomeDefinition,
+        version: int,
+    ) -> Dict[str, Any]:
+        pipeline_obj, metadata, threshold = self.storage.load_model(
+            outcome.name, version=version
+        )
+        X = processed.to_pandas()
+        if outcome.task == "classification":
+            proba = pipeline_obj.predict_proba(X)[:, 1]
+            predictions_df = pl.DataFrame(
+                {
+                    "game_id": processed["game_id"].to_list(),
+                    "score": proba,
+                }
+            )
+        else:
+            preds = pipeline_obj.predict(X)
+            predictions_df = pl.DataFrame(
+                {
+                    "game_id": processed["game_id"].to_list(),
+                    "score": preds,
+                }
+            )
+
+        self.storage.save_predictions(
+            outcome.name, version, predictions_df, top_recommendations=[]
+        )
+        logger.info(
+            f"Refreshed predictions for {outcome.name} v{version}: "
+            f"{predictions_df.height} rows"
+        )
+        return {"version": version, "rows": predictions_df.height}
