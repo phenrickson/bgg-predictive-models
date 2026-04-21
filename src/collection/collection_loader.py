@@ -129,6 +129,7 @@ class BGGCollectionLoader:
 
                 # Convert to polars DataFrame
                 df = pl.DataFrame(items)
+                df = self._preprocess(df)
                 logger.info(f"Successfully loaded {len(df)} items from collection")
 
                 return df
@@ -140,6 +141,24 @@ class BGGCollectionLoader:
         except Exception as e:
             logger.error(f"Error retrieving collection for user '{self.username}': {e}")
             return None
+
+    def _preprocess(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Collapse duplicate (game_id) rows before returning.
+
+        BGG lets a user add the same game to their collection multiple times
+        (distinct `collid`s, typically to track separate copies). We key on
+        (username, game_id) downstream, so each game must have one row. Keep
+        the row with the most recent `last_modified`; nulls lose to non-null;
+        ties broken by higher `collection_id` (more recently added).
+        """
+        return (
+            df.sort(
+                ["game_id", "last_modified", "collection_id"],
+                descending=[False, True, True],
+                nulls_last=True,
+            )
+            .unique(subset=["game_id"], keep="first", maintain_order=True)
+        )
 
     def _make_request(self, endpoint: str, params: Dict) -> Optional[requests.Response]:
         """Make HTTP request to BGG API with retry logic.
