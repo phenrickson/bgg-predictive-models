@@ -86,21 +86,31 @@ print(f"mean rating: {raw_collection.filter(pl.col('user_rating') > 0)['user_rat
 
 ## 2. Store a collection
 
-Persist the raw snapshot to BigQuery via `CollectionStorage`. The table is
-created lazily if it doesn't exist.
+Upsert the raw snapshot into `collections.user_collections`. The table is
+managed by Terraform (`terraform/bigquery.tf` + `terraform/schemas/user_collections.json`)
+so the Python code never creates it — if the table is missing, run
+`terraform apply` from the `terraform/` directory.
 
-> **Note:** if `analytics.collections` does not exist yet, `create_table()` needs
-> to run first. Surface any errors here before moving on — the rest of the
-> walkthrough depends on storage round-tripping.
+Each pull MERGEs against the existing state for this user: new games are
+inserted, existing games are updated in place, and games that have disappeared
+from the collection are soft-deleted via `removed_at`. Re-pulling the same
+data is a no-op (idempotent).
 
 ```{python}
 from src.collection.collection_storage import CollectionStorage
 
 bq_storage = CollectionStorage(environment="dev")
-
 bq_storage.save_collection(USERNAME, raw_collection)
+
 reloaded = bq_storage.get_latest_collection(USERNAME)
-print(f"round-trip rows: {reloaded.height if reloaded is not None else None}")
+print(f"active rows: {reloaded.height if reloaded is not None else 0}")
+```
+
+### Inspect lifecycle timestamps
+
+```{python}
+if reloaded is not None:
+    reloaded.select(["game_id", "game_name", "first_seen_at", "updated_at"]).head(5)
 ```
 
 ---
