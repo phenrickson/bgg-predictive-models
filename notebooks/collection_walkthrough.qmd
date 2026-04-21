@@ -7,7 +7,13 @@ format:
     toc: true
     toc-depth: 3
     embed-resources: true
-jupyter: python3
+execute:
+  enabled: true
+jupyter:
+  kernelspec:
+    name: bgg-predictive-models
+    language: python
+    display_name: Python 3 (bgg-predictive-models .venv)
 ---
 
 Step-by-step walkthrough of the refactored `src/collection/` modules after the
@@ -91,8 +97,6 @@ created lazily if it doesn't exist.
 from src.collection.collection_storage import CollectionStorage
 
 bq_storage = CollectionStorage(environment="dev")
-# If the table is missing, uncomment:
-# bq_storage.create_table()
 
 bq_storage.save_collection(USERNAME, raw_collection)
 reloaded = bq_storage.get_latest_collection(USERNAME)

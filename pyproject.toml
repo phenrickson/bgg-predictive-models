@@ -49,7 +49,9 @@ embeddings = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "ipykernel>=6.29.5",
+]
 
 [tool.black]
 line-length = 88
