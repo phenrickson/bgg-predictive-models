@@ -74,6 +74,10 @@ extend-exclude = '''
 # pyproject.toml
 [tool.pytest.ini_options]
 pythonpath = "."
+addopts = "-m 'not integration'"
+markers = [
+    "integration: hits real BigQuery; slow (~3–5 min). Run with `-m integration`.",
+]
 filterwarnings = [
     "error",
     "ignore::UserWarning",

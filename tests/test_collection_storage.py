@@ -12,6 +12,9 @@ import pytest
 from src.collection.collection_storage import CollectionStorage
 
 
+pytestmark = pytest.mark.integration
+
+
 TEST_USER_A = "_test_user_a"
 TEST_USER_B = "_test_user_b"
 
