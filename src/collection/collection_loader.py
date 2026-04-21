@@ -97,7 +97,8 @@ class BGGCollectionLoader:
             # Build parameters for collection request
             params = {
                 "username": self.username,
-                "subtype": "boardgame",  # only retrieve data on boardgames
+                "subtype": "boardgame",  # only retrieve boardgame items
+                "excludesubtype": "boardgameexpansion",  # exclude expansions
                 "stats": "1",  # Include game statistics
             }
 
