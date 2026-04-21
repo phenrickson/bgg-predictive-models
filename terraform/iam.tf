@@ -121,3 +121,23 @@ resource "google_project_iam_member" "terraform_admin_storage" {
   role    = "roles/storage.admin"
   member  = "serviceAccount:${local.terraform_admin_sa}"
 }
+
+# -----------------------------------------------------------------------------
+# Local BigQuery access for CollectionStorage (collections dataset in this project)
+# -----------------------------------------------------------------------------
+
+# Project-level: create BQ jobs (query/load/MERGE). BQ does not offer
+# dataset-scoped job creation, so this is project-wide by necessity.
+resource "google_project_iam_member" "workload_local_bq_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
+
+# Dataset-scoped: read/write rows in the collections dataset.
+resource "google_bigquery_dataset_iam_member" "workload_collections_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.collections.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.workload.email}"
+}
