@@ -58,6 +58,7 @@ class BigQueryConfig:
     credentials_path: Optional[str] = None
     location: str = "US"
     datasets: Optional[Dict[str, str]] = None
+    collections_dataset: str = "collections"
 
     def get_client(self) -> bigquery.Client:
         """Get authenticated BigQuery client using Google Application Default Credentials."""
@@ -295,12 +296,16 @@ class Config:
         return self.predictions
 
     def get_bigquery_config(self) -> BigQueryConfig:
-        """Get BigQuery configuration for data warehouse access."""
+        """Get BigQuery configuration. `project_id` is the data warehouse project
+        (for reads of game features); `collections_dataset` resolves inside
+        `ml_project_id`, which the collection storage reads separately.
+        """
         return BigQueryConfig(
             project_id=self.data_warehouse.project_id,
             dataset=self.data_warehouse.features_dataset,
             table=self.data_warehouse.features_table,
             location=self.data_warehouse.location,
+            collections_dataset="collections",
         )
 
 
