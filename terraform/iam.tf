@@ -141,3 +141,11 @@ resource "google_bigquery_dataset_iam_member" "workload_collections_editor" {
   role       = "roles/bigquery.dataEditor"
   member     = "serviceAccount:${google_service_account.workload.email}"
 }
+
+# Project-level: BigQuery Storage Read API sessions (used by `to_dataframe()`
+# when fetching query results). Required for reads, not just writes.
+resource "google_project_iam_member" "workload_local_bq_read_session" {
+  project = var.project_id
+  role    = "roles/bigquery.readSessionUser"
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
