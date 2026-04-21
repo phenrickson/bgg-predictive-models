@@ -1,0 +1,22 @@
+[
+  {"name": "username", "type": "STRING", "mode": "REQUIRED", "description": "BGG username"},
+  {"name": "game_id", "type": "INTEGER", "mode": "REQUIRED", "description": "BGG game ID"},
+  {"name": "game_name", "type": "STRING", "mode": "NULLABLE", "description": "Game name as returned by BGG collection API"},
+  {"name": "subtype", "type": "STRING", "mode": "NULLABLE", "description": "Always 'boardgame' — filter applied at write"},
+  {"name": "collection_id", "type": "INTEGER", "mode": "NULLABLE", "description": "BGG collection item ID (collid)"},
+  {"name": "owned", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "previously_owned", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "for_trade", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "want", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "want_to_play", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "want_to_buy", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "wishlist", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "wishlist_priority", "type": "INTEGER", "mode": "NULLABLE", "description": "Wishlist priority (1-5)"},
+  {"name": "preordered", "type": "BOOL", "mode": "NULLABLE"},
+  {"name": "user_rating", "type": "FLOAT", "mode": "NULLABLE", "description": "User's rating (BGG 1-10)"},
+  {"name": "user_comment", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "last_modified", "type": "TIMESTAMP", "mode": "NULLABLE", "description": "When BGG's collection item was last modified"},
+  {"name": "first_seen_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Row insert time, never updated"},
+  {"name": "updated_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "Row insert or update time"},
+  {"name": "removed_at", "type": "TIMESTAMP", "mode": "NULLABLE", "description": "Soft-delete marker; NULL if game is currently in user's collection"}
+]
