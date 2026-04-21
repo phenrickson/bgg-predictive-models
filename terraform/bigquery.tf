@@ -554,3 +554,44 @@ resource "google_bigquery_table" "game_coordinates" {
     model_type  = "embeddings"
   }
 }
+
+# =============================================================================
+# Collections Dataset (user collection state)
+# =============================================================================
+
+resource "google_bigquery_dataset" "collections" {
+  dataset_id  = "collections"
+  project     = var.project_id
+  location    = var.location
+  description = "User collection state from BGG, upserted per user"
+
+  labels = {
+    environment = "production"
+    managed_by  = "terraform"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_bigquery_table" "user_collections" {
+  dataset_id          = google_bigquery_dataset.collections.dataset_id
+  table_id            = "user_collections"
+  project             = var.project_id
+  description         = "One row per (username, game_id); soft-deletes via removed_at"
+  deletion_protection = true
+
+  clustering = ["username", "game_id"]
+
+  schema = file("${path.module}/schemas/user_collections.json")
+
+  table_constraints {
+    primary_key {
+      columns = ["username", "game_id"]
+    }
+  }
+
+  labels = {
+    environment = "production"
+    managed_by  = "terraform"
+  }
+}
