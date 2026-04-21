@@ -89,7 +89,7 @@ class CollectionProcessor:
                 logger.info(f"Filtered to boardgames: {before} -> {len(collection_df)}")
 
         logger.info("Loading game universe features from warehouse")
-        features_df = self._load_features()
+        features_df = self.load_features()
 
         logger.info("Joining collection with game features")
         joined = collection_df.join(features_df, on="game_id", how="left", suffix="_features")
@@ -99,7 +99,7 @@ class CollectionProcessor:
         )
         return joined
 
-    def _load_features(self) -> pl.DataFrame:
+    def load_features(self) -> pl.DataFrame:
         """Load the game universe feature set, optionally enriched with
         predicted_complexity and/or description embeddings.
 

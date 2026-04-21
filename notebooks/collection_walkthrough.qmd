@@ -373,14 +373,22 @@ else:
 
 ## 9. Predict the universe
 
-Score all games in the universe for `own`. Classification returns a probability;
-regression returns a value.
+Score all games for `own`. Classification returns a probability; regression
+returns a value.
+
+Use `processor.load_features()` here (not `BGGDataLoader`) so the prediction
+universe matches exactly what the processor fed into training. If you toggled
+`use_predicted_complexity` or `use_embeddings` on the `ProcessorConfig`, this
+universe has those columns too.
 
 ```{python}
-X_universe = universe_df.to_pandas()
+score_universe = processor.load_features()
+print(f"score universe: {score_universe.height} games, {len(score_universe.columns)} columns")
+
+X_universe = score_universe.to_pandas()
 proba = pipeline_obj.predict_proba(X_universe)[:, 1]
 preds_df = pl.DataFrame({
-    "game_id": universe_df["game_id"].to_list(),
+    "game_id": score_universe["game_id"].to_list(),
     "score": proba,
 })
 print(f"predictions: {preds_df.height} rows")
@@ -394,7 +402,7 @@ owned_ids = set(
     raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
 )
 preds_with_name = preds_df.join(
-    universe_df.select(["game_id", "name", "year_published"]),
+    score_universe.select(["game_id", "name", "year_published"]),
     on="game_id",
     how="left",
 )

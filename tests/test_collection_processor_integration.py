@@ -1,4 +1,4 @@
-"""Integration tests for CollectionProcessor._load_features against
+"""Integration tests for CollectionProcessor.load_features against
 real BigQuery.
 
 Requires ADC (gcloud auth application-default login) and
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 
 def _make_processor(processor_config: ProcessorConfig) -> CollectionProcessor:
     """Build a processor without triggering collection-storage init (which
-    would require extra setup). `_load_features` only needs `bq_config` and
+    would require extra setup). `load_features` only needs `bq_config` and
     `processor_config`.
     """
     cfg = load_config()
@@ -36,7 +36,7 @@ def test_load_features_real_bq_base_only():
     proc = _make_processor(
         ProcessorConfig(use_predicted_complexity=False, use_embeddings=False)
     )
-    df = proc._load_features()
+    df = proc.load_features()
 
     assert df.height > 0
     assert "game_id" in df.columns
@@ -50,7 +50,7 @@ def test_load_features_real_bq_with_predicted_complexity():
     proc = _make_processor(
         ProcessorConfig(use_predicted_complexity=True, use_embeddings=False)
     )
-    df = proc._load_features()
+    df = proc.load_features()
 
     assert df.height > 0
     assert "predicted_complexity" in df.columns
@@ -62,7 +62,7 @@ def test_load_features_real_bq_with_embeddings():
     proc = _make_processor(
         ProcessorConfig(use_predicted_complexity=False, use_embeddings=True)
     )
-    df = proc._load_features()
+    df = proc.load_features()
 
     assert df.height > 0
     assert "embedding" not in df.columns

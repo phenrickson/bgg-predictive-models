@@ -1,4 +1,4 @@
-"""Unit tests for CollectionProcessor._load_features SQL assembly and
+"""Unit tests for CollectionProcessor.load_features SQL assembly and
 the embedding-explode helper.
 
 These tests stub out the BigQuery client so they don't touch the network.
@@ -59,14 +59,14 @@ def _make_processor(cfg, processor_config: ProcessorConfig) -> CollectionProcess
     proc.bq_config = cfg
     proc.environment = "dev"
     proc.processor_config = processor_config
-    # storage isn't used by _load_features; leave it unset / None.
+    # storage isn't used by load_features; leave it unset / None.
     proc.storage = None
     return proc
 
 
 def test_load_features_base_only_sql(fake_config):
     proc = _make_processor(fake_config, ProcessorConfig())
-    proc._load_features()
+    proc.load_features()
 
     sql = fake_config._state["last_sql"]
     assert sql is not None
@@ -81,7 +81,7 @@ def test_load_features_with_predicted_complexity_sql(fake_config):
         fake_config,
         ProcessorConfig(use_predicted_complexity=True, use_embeddings=False),
     )
-    proc._load_features()
+    proc.load_features()
 
     sql = fake_config._state["last_sql"]
     assert "bgg_complexity_predictions" in sql
@@ -98,7 +98,7 @@ def test_load_features_with_embeddings_sql(fake_config):
         fake_config,
         ProcessorConfig(use_predicted_complexity=False, use_embeddings=True),
     )
-    proc._load_features()
+    proc.load_features()
 
     sql = fake_config._state["last_sql"]
     assert "bgg_description_embeddings" in sql
@@ -111,7 +111,7 @@ def test_load_features_with_both_sql(fake_config):
         fake_config,
         ProcessorConfig(use_predicted_complexity=True, use_embeddings=True),
     )
-    proc._load_features()
+    proc.load_features()
 
     sql = fake_config._state["last_sql"]
     assert "bgg_complexity_predictions" in sql
