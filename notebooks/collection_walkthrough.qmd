@@ -28,21 +28,23 @@ through.
 #| tags: [setup]
 USERNAME = "phenrickson"
 ```
-
 ```{python}
 #| tags: [setup]
 import os
 import sys
 from pathlib import Path
 
-# Ensure the project root is on sys.path so `src.*` imports work when Quarto
-# runs from the notebooks/ directory.
+# Ensure the project root is on sys.path AND is the working directory so
+# `src.*` imports work and relative paths in .env (e.g.
+# GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json)
+# resolve when Quarto runs from the notebooks/ directory.
 PROJECT_ROOT = Path().resolve()
 if (PROJECT_ROOT / "src").is_dir():
     ROOT = PROJECT_ROOT
 else:
     ROOT = PROJECT_ROOT.parent
 sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)
 
 import logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -110,7 +112,8 @@ print(f"active rows: {reloaded.height if reloaded is not None else 0}")
 
 ```{python}
 if reloaded is not None:
-    reloaded.select(["game_id", "game_name", "first_seen_at", "updated_at"]).head(5)
+    foo = reloaded.select(["game_id", "game_name", "first_seen_at", "updated_at"])
+    print(foo)
 ```
 
 ---
@@ -123,13 +126,20 @@ names (e.g. `previously_owned` → `prev_owned`) and joins with the game univers
 
 ```{python}
 from src.utils.config import load_config
-from src.collection.collection_processor import CollectionProcessor
+from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
 from src.collection.outcomes import load_outcomes, apply_outcome
 
 project_config = load_config()
 bq_config = project_config.get_bigquery_config()
 
-processor = CollectionProcessor(config=bq_config, environment="dev")
+processor = CollectionProcessor(
+    config=bq_config,
+    environment="dev",
+    processor_config=ProcessorConfig(
+        use_predicted_complexity=True,
+        use_embeddings=False,
+    ),
+)
 processed = processor.process(USERNAME)
 print(f"processed: {processed.height} rows, {len(processed.columns)} columns")
 print(f"has prev_owned: {'prev_owned' in processed.columns}")
@@ -155,7 +165,7 @@ print(f"negatives (label=False): {labeled_own.filter(pl.col('label') == False).h
 
 ### Load the game universe and create a splitter
 
-Negatives are sampled from the full BGG universe, not the user's collection.
+Join with universe of BGG games
 
 ```{python}
 from src.data.loader import BGGDataLoader
@@ -166,24 +176,23 @@ from src.collection.collection_split import (
 )
 
 universe_loader = BGGDataLoader(bq_config)
-universe_df = universe_loader.load_training_data(min_ratings=25)
+universe_df = universe_loader.load_training_data(min_ratings=0, end_train_year = 2030)
 print(f"universe: {universe_df.height} games, {len(universe_df.columns)} columns")
+```
 
+Use the collection splitter
+
+```{python}
 splitter = CollectionSplitter(
     universe_df=universe_df,
     classification_config=ClassificationSplitConfig(
         split_mode="stratified_random",
-        negative_sampling_ratio=5.0,
         random_seed=42,
     ),
     regression_config=RegressionSplitConfig(random_seed=42),
 )
-```
-
-Produce the train/val/test split for `own`:
-
-```{python}
 train_df, val_df, test_df = splitter.split(labeled_own, outcomes["own"])
+print("train: ")
 print(f"train: {train_df.height}, val: {val_df.height}, test: {test_df.height}")
 print(f"train columns ({len(train_df.columns)}): {train_df.columns[:15]}...")
 ```
@@ -243,7 +252,6 @@ time_splitter = CollectionSplitter(
         train_through=2022,
         prediction_window=2,   # val = 2023-2024
         test_window=2,         # test = 2025-2026
-        negative_sampling_ratio=5.0,
         min_ratings_for_negatives=0,
         random_seed=42,
     ),

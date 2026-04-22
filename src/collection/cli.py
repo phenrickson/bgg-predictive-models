@@ -85,18 +85,6 @@ Examples:
             "splits switch to time_based mode."
         ),
     )
-    run_parser.add_argument(
-        "--negative-ratio",
-        type=float,
-        default=5.0,
-        help="Ratio of negative to positive samples (default: 5.0)",
-    )
-    run_parser.add_argument(
-        "--sampling-strategy",
-        default="popularity_weighted",
-        choices=["random", "popularity_weighted", "uniform"],
-        help="Negative sampling strategy (default: popularity_weighted)",
-    )
 
     # Predict only
     predict_parser = subparsers.add_parser(
@@ -135,8 +123,6 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
     classification_split = ClassificationSplitConfig(
         split_mode=split_mode,
         train_through=args.train_through,
-        negative_sampling_ratio=args.negative_ratio,
-        negative_sampling_strategy=args.sampling_strategy,
     )
 
     config = PipelineConfig(
