@@ -183,17 +183,27 @@ print(f"universe: {universe_df.height} games, {len(universe_df.columns)} columns
 Use the collection splitter
 
 ```{python}
+# Time-based split: train on everything through 2022, validate on
+# 2023-2024, test on 2025. Anything 2026+ is "upcoming" and gets scored
+# separately from score_universe.
 splitter = CollectionSplitter(
     universe_df=universe_df,
     classification_config=ClassificationSplitConfig(
-        split_mode="stratified_random",
+        split_mode="time_based",
+        train_through=2022,
+        prediction_window=2,  # val = 2023-2024
+        test_window=1,  # test = 2025
         random_seed=42,
     ),
     regression_config=RegressionSplitConfig(random_seed=42),
 )
 train_df, val_df, test_df = splitter.split(labeled_own, outcomes["own"])
-print("train: ")
 print(f"train: {train_df.height}, val: {val_df.height}, test: {test_df.height}")
+for name, d in [("train", train_df), ("val", val_df), ("test", test_df)]:
+    if d.height and "year_published" in d.columns:
+        print(
+            f"  {name}: year range {d['year_published'].min()}-{d['year_published'].max()}"
+        )
 print(f"train columns ({len(train_df.columns)}): {train_df.columns[:15]}...")
 ```
 
@@ -287,21 +297,45 @@ from src.collection.collection_model import (
     CollectionModel,
     ClassificationModelConfig,
 )
+from src.collection.collection_split import downsample_negatives
 
 model = CollectionModel(
     username=USERNAME,
     outcome=outcomes["own"],
     classification_config=ClassificationModelConfig(
-        model_type="lightgbm",
+        # model_type defaults to "logistic"; flip to "lightgbm" or "catboost" to try others.
         tuning_metric="log_loss",
         patience=5,
     ),
 )
-pipeline_obj, best_params = model.train(train_df, val_df)
-print("pipeline steps:", [s[0] for s in pipeline_obj.steps])
-print("best params:", best_params)
+
+# Inspect the unfit pipeline before training.
+unfit_pipeline = model.build_pipeline()
+print(unfit_pipeline)
+
+# Optional: downsample training-set negatives to 5 per positive for class balance.
+# Only touch the training frame — val and test keep the real class distribution
+# so tuning and evaluation stay honest.
+train_down = downsample_negatives(train_df, ratio=100, random_seed=1999)
+print(
+    f"train before: {train_df.height} rows "
+    f"({train_df.filter(pl.col('label') == True).height} pos); "
+    f"train after: {train_down.height} rows "
+    f"({train_down.filter(pl.col('label') == True).height} pos)"
+)
 ```
 
+
+Now fit the pipeline
+
+```{python}
+
+pipeline_obj, best_params = model.train(train_down, val_df)
+print("pipeline steps:", [s[0] for s in pipeline_obj.steps])
+print("best params:", best_params)
+print("done")
+
+```
 ---
 
 ## 6. Inspect preprocessing
@@ -310,44 +344,34 @@ Look at what the preprocessor produces: what columns come out, which get
 transformed, and how many features the model actually trains on.
 
 ```{python}
-preprocessor = pipeline_obj.named_steps["preprocessor"]
-print("preprocessor type:", type(preprocessor).__name__)
-
-# Feature names after preprocessing
-try:
-    out_names = preprocessor.get_feature_names_out()
-    print(f"output features: {len(out_names)}")
-    print("first 30:", list(out_names[:30]))
-except Exception as e:
-    print(f"(get_feature_names_out failed: {e})")
-```
-
-### Feature count before vs. after
-
-```{python}
-from src.models.training import select_X_y
-X_train, y_train = select_X_y(train_df, y_column="label")
-print(f"raw training features: {X_train.shape[1]}")
-print(f"post-preprocess features: {len(out_names) if 'out_names' in dir() else '?'}")
+X_transformed_df = model.transform_features(pipeline_obj, train_down)
+print(f"post-preprocess features: {X_transformed_df.shape[1]}")
+print("first 30:", list(X_transformed_df.columns[:30]))
+X_transformed_df.head()
 ```
 
 ---
 
 ## 7. Train + evaluate
 
-Training already happened above; evaluate on validation and test. Threshold
-optimization is classification-only.
+Training already happened above; evaluate on validation and test.
 
-```{python}
-val_metrics = model.evaluate(pipeline_obj, val_df)
-test_metrics = model.evaluate(pipeline_obj, test_df)
-
-pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
-```
+Classification models pick a decision threshold on val (optimizing the
+configured metric, e.g. F2) and then use that same threshold to report
+test metrics. Evaluating at 0.5 on an imbalanced problem collapses
+precision/recall/F1 to ~0 even when the probability ranking is fine
+(AUC / PR-AUC stay sensible) — always pass the optimized threshold.
 
 ```{python}
 threshold = model.find_threshold(pipeline_obj, val_df)
 print(f"optimized threshold ({model.classification_config.threshold_optimization_metric}): {threshold:.4f}")
+```
+
+```{python}
+val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
+test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
+
+pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
 ```
 
 ---
@@ -358,68 +382,48 @@ Pull feature importances (for tree models) or coefficients (for logistic) out
 of the trained pipeline, aligned with the preprocessor's output feature names.
 
 ```{python}
-model_step = pipeline_obj.named_steps["model"]
-print("model type:", type(model_step).__name__)
-
-if hasattr(model_step, "feature_importances_"):
-    importance = pd.DataFrame({
-        "feature": out_names,
-        "importance": model_step.feature_importances_,
-    }).sort_values("importance", ascending=False)
-    importance.head(20)
-elif hasattr(model_step, "coef_"):
-    coef = pd.DataFrame({
-        "feature": out_names,
-        "coefficient": model_step.coef_.ravel(),
-    }).sort_values("coefficient", key=lambda c: c.abs(), ascending=False)
-    coef.head(20)
-else:
-    print("no feature_importances_ or coef_ on this model")
+importance = model.feature_importance(pipeline_obj, train_down)
+importance.head(20)
 ```
 
 ---
 
-## 9. Predict the universe
+## 9. Top games per split
 
-Score all games for `own`. Classification returns a probability; regression
-returns a value.
-
-Use `processor.load_features()` here (not `BGGDataLoader`) so the prediction
-universe matches exactly what the processor fed into training. If you toggled
-`use_predicted_complexity` or `use_embeddings` on the `ProcessorConfig`, this
-universe has those columns too.
+Rank games by predicted `own` probability within each split. The
+`model.top_games()` call handles scoring, optional exclusion of owned
+games, and sorting — returns a tidy polars DataFrame.
 
 ```{python}
-score_universe = processor.load_features()
-print(f"score universe: {score_universe.height} games, {len(score_universe.columns)} columns")
+owned_ids = raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
 
-X_universe = score_universe.to_pandas()
-proba = pipeline_obj.predict_proba(X_universe)[:, 1]
-preds_df = pl.DataFrame({
-    "game_id": score_universe["game_id"].to_list(),
-    "score": proba,
-})
-print(f"predictions: {preds_df.height} rows")
-preds_df["score"].describe()
+score_universe = processor.load_features()
+upcoming = score_universe.filter(pl.col("year_published") >= 2026)
+print(f"score universe: {score_universe.height}, upcoming (2026+): {upcoming.height}")
 ```
 
-### Top 20 unowned games by `own` score
+### Top 25 unowned games in the (downsampled) training set
 
 ```{python}
-owned_ids = set(
-    raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
-)
-preds_with_name = preds_df.join(
-    score_universe.select(["game_id", "name", "year_published"]),
-    on="game_id",
-    how="left",
-)
-(
-    preds_with_name
-    .filter(~pl.col("game_id").is_in(list(owned_ids)))
-    .sort("score", descending=True)
-    .head(20)
-)
+model.top_games(pipeline_obj, train_down, n=25, exclude_game_ids=owned_ids)
+```
+
+### Top 25 games in the validation set (2023–2024)
+
+```{python}
+model.top_games(pipeline_obj, val_df, n=25)
+```
+
+### Top 25 games in the test set (2025)
+
+```{python}
+model.top_games(pipeline_obj, test_df, n=25)
+```
+
+### Top 25 upcoming games (2026+)
+
+```{python}
+model.top_games(pipeline_obj, upcoming, n=25)
 ```
 
 ---

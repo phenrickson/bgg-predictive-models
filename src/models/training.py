@@ -664,9 +664,19 @@ def tune_model(
     if best_params is None:
         best_params = {}
 
-    # Create new pipeline with fitted preprocessor and best model
-    final_model = current_best_model if current_best_model is not None else base_model
-    tuned_pipeline = Pipeline([("preprocessor", preprocessor), ("model", final_model)])
+    # Refit the Pipeline as a whole on raw training data so the returned
+    # object is a genuinely fitted sklearn Pipeline. During tuning we fit
+    # preprocessor and model separately on already-transformed arrays for
+    # speed; that leaves the Pipeline wrapper itself in an unfit state and
+    # downstream `pipeline.predict(...)` raises NotFittedError. The refit
+    # here is fast relative to the tuning loop and makes the return value
+    # a proper drop-in sklearn Pipeline.
+    final_model_cls = clone(current_best_model) if current_best_model is not None else clone(base_model)
+    tuned_pipeline = Pipeline([
+        ("preprocessor", clone(preprocessor)),
+        ("model", final_model_cls),
+    ])
+    tuned_pipeline.fit(train_X, train_y)
 
     return tuned_pipeline, best_params
 

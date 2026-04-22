@@ -235,3 +235,40 @@ class CollectionSplitter:
         if outcome.task == "regression":
             return self._regression.split(labeled_df)
         raise ValueError(f"Unsupported outcome task: {outcome.task!r}")
+
+
+def downsample_negatives(
+    df: pl.DataFrame,
+    ratio: float,
+    random_seed: int = 42,
+) -> pl.DataFrame:
+    """Downsample the negatives (label=False rows) to a target ratio of
+    negatives-per-positive. Positives are preserved.
+
+    Use this at training time on the training DataFrame only — never on
+    validation or test. The split itself should preserve the real class
+    distribution; downsampling is a training-time class-balance concern.
+
+    Args:
+        df: DataFrame with a boolean `label` column.
+        ratio: Target negatives-per-positive (e.g., 5.0 → 5 negatives per positive).
+        random_seed: Seed for the negative sampling RNG.
+
+    Returns:
+        DataFrame with all positives plus `int(n_positives * ratio)` negatives,
+        or all negatives if the pool is smaller than the target.
+    """
+    if "label" not in df.columns:
+        raise ValueError("downsample_negatives requires a 'label' column")
+    if ratio <= 0:
+        raise ValueError(f"ratio must be > 0, got {ratio!r}")
+
+    positives = df.filter(pl.col("label").cast(pl.Boolean) == True)
+    negatives = df.filter(pl.col("label").cast(pl.Boolean) == False)
+
+    target = int(positives.height * ratio)
+    if target >= negatives.height:
+        return df
+
+    sampled = negatives.sample(n=target, shuffle=True, seed=random_seed)
+    return pl.concat([positives, sampled], how="vertical_relaxed")
