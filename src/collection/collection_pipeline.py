@@ -2,22 +2,21 @@
 
 Loops over outcomes declared in config.yaml (`collections.outcomes`) and trains
 one model per (user, outcome). Per-outcome artifacts (model, splits, predictions,
-analysis) are versioned independently under GCS.
+analysis) are versioned independently on the local filesystem. GCS round-trips
+are handled separately by ``sync_collections``.
 """
 
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import polars as pl
 
 from src.collection.collection_loader import BGGCollectionLoader
 from src.collection.collection_processor import CollectionProcessor
-from src.collection.collection_artifact_storage import (
-    CollectionArtifactStorage,
-    ArtifactStorageConfig,
-)
+from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.collection_split import (
     CollectionSplitter,
     ClassificationSplitConfig,
@@ -49,7 +48,13 @@ class PipelineConfig:
     overrides are not supported yet; add them here when a real need appears.
     """
 
-    storage_config: ArtifactStorageConfig = field(default_factory=ArtifactStorageConfig)
+    local_root: Union[str, Path] = "models/collections"
+    """Root directory for local artifact storage."""
+
+    environment: Optional[str] = None
+    """Environment name (e.g. ``"dev"``, ``"prod"``). Defaults to the
+    environment reported by :func:`src.utils.config.load_config`."""
+
     classification_split_config: ClassificationSplitConfig = field(
         default_factory=ClassificationSplitConfig
     )
@@ -86,11 +91,17 @@ class CollectionPipeline:
         self.username = username
         self.config = config or PipelineConfig()
 
-        self.storage = CollectionArtifactStorage(username, self.config.storage_config)
+        self.storage = CollectionArtifactStorage(
+            username,
+            local_root=self.config.local_root,
+            environment=self.config.environment,
+        )
 
         self._project_config = load_config()
         self.bq_config = self._project_config.get_bigquery_config()
-        self._environment = self.config.storage_config.environment or "dev"
+        self._environment = (
+            self.config.environment or self._project_config.get_environment_prefix()
+        )
 
         logger.info(f"Initialized pipeline for user '{username}'")
 

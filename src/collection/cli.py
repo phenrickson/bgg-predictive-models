@@ -7,7 +7,6 @@ import sys
 
 from src.utils.logging import setup_logging
 from src.collection.collection_pipeline import CollectionPipeline, PipelineConfig
-from src.collection.collection_artifact_storage import ArtifactStorageConfig
 from src.collection.collection_split import ClassificationSplitConfig
 from src.collection.collection_model import ClassificationModelConfig
 from src.collection.collection_analyzer import AnalyzerConfig
@@ -141,7 +140,7 @@ def run_full_pipeline(args: argparse.Namespace) -> int:
     )
 
     config = PipelineConfig(
-        storage_config=ArtifactStorageConfig(environment=args.environment),
+        environment=args.environment,
         classification_split_config=classification_split,
         classification_model_config=ClassificationModelConfig(
             model_type=args.model_type
@@ -196,7 +195,7 @@ def run_predict_only(args: argparse.Namespace) -> int:
     logger.info(f"Refreshing predictions for user '{args.username}'")
 
     config = PipelineConfig(
-        storage_config=ArtifactStorageConfig(environment=args.environment),
+        environment=args.environment,
     )
 
     pipeline = CollectionPipeline(args.username, config)
@@ -224,7 +223,7 @@ def show_status(args: argparse.Namespace) -> int:
 
     storage = CollectionArtifactStorage(
         args.username,
-        ArtifactStorageConfig(environment=args.environment),
+        environment=args.environment,
     )
 
     status = storage.get_artifact_status()
