@@ -15,12 +15,13 @@ from typing import Any, Dict, List, Optional, Union
 import polars as pl
 
 from src.collection.collection_loader import BGGCollectionLoader
-from src.collection.collection_processor import CollectionProcessor
+from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.collection_split import (
-    CollectionSplitter,
     ClassificationSplitConfig,
+    CollectionSplitter,
     RegressionSplitConfig,
+    downsample_negatives,
 )
 from src.collection.collection_model import (
     CollectionModel,
@@ -34,7 +35,6 @@ from src.collection.outcomes import (
     apply_outcome,
     load_outcomes,
 )
-from src.data.loader import BGGDataLoader
 from src.utils.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -69,8 +69,15 @@ class PipelineConfig:
     )
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
-    min_ratings_for_universe: int = 25
-    """Minimum ratings for games in the universe."""
+    processor_config: Optional[ProcessorConfig] = None
+    """Optional ProcessorConfig passed to :class:`CollectionProcessor` for both
+    collection processing and game-universe feature loading. If ``None``, the
+    processor uses its own defaults."""
+
+    downsample_negatives_ratio: Optional[float] = None
+    """If set, apply :func:`downsample_negatives` to the training split of
+    classification outcomes using this negatives-per-positive ratio. Val and
+    test splits are never downsampled. ``None`` disables downsampling."""
 
 
 class CollectionPipeline:
@@ -103,7 +110,26 @@ class CollectionPipeline:
             self.config.environment or self._project_config.get_environment_prefix()
         )
 
+        # Lazily constructed so collection processing and universe loading
+        # share one processor (and therefore one ProcessorConfig).
+        self._processor: Optional[CollectionProcessor] = None
+
         logger.info(f"Initialized pipeline for user '{username}'")
+
+    def _get_processor(self) -> CollectionProcessor:
+        """Return (constructing once) the shared CollectionProcessor.
+
+        Using a single instance guarantees that the collection processing
+        path and the universe-feature-loading path see the same
+        ``ProcessorConfig`` — so features are identical on both sides.
+        """
+        if self._processor is None:
+            self._processor = CollectionProcessor(
+                config=self.bq_config,
+                environment=self._environment,
+                processor_config=self.config.processor_config,
+            )
+        return self._processor
 
     def run_full_pipeline(
         self,
@@ -244,9 +270,7 @@ class CollectionPipeline:
 
     def _process_collection(self) -> pl.DataFrame:
         """Load + canonicalize + join collection with game universe."""
-        processor = CollectionProcessor(
-            config=self.bq_config, environment=self._environment
-        )
+        processor = self._get_processor()
         result = processor.process(self.username)
         if result is None:
             raise ValueError(
@@ -256,11 +280,14 @@ class CollectionPipeline:
         return result
 
     def _load_game_universe(self) -> pl.DataFrame:
-        """Load the full BGG game universe (features only) for negative sampling and prediction."""
-        loader = BGGDataLoader(self.bq_config)
-        return loader.load_training_data(
-            min_ratings=self.config.min_ratings_for_universe
-        )
+        """Full BGG game universe for negative sampling and prediction.
+
+        Uses the same :class:`CollectionProcessor` (and therefore the same
+        ``ProcessorConfig``) as training, so the feature set is identical
+        on both sides of the split.
+        """
+        processor = self._get_processor()
+        return processor.load_features()
 
     def _train_one_outcome(
         self,
@@ -270,6 +297,20 @@ class CollectionPipeline:
     ) -> Dict[str, Any]:
         labeled = apply_outcome(processed, outcome)
         train_df, val_df, test_df = splitter.split(labeled, outcome)
+
+        if (
+            outcome.task == "classification"
+            and self.config.downsample_negatives_ratio is not None
+        ):
+            before = train_df.height
+            train_df = downsample_negatives(
+                train_df,
+                ratio=self.config.downsample_negatives_ratio,
+                random_seed=self.config.classification_split_config.random_seed,
+            )
+            logger.info(
+                f"Downsampled train negatives: {before} -> {train_df.height} rows"
+            )
 
         if train_df.height == 0:
             raise ValueError(f"Train split is empty for outcome {outcome.name!r}")
@@ -281,11 +322,13 @@ class CollectionPipeline:
             regression_config=self.config.regression_model_config,
         )
         pipeline_obj, best_params = model.train(train_df, val_df)
-        metrics = model.evaluate(pipeline_obj, test_df)
 
         threshold: Optional[float] = None
         if outcome.task == "classification":
             threshold = model.find_threshold(pipeline_obj, val_df)
+
+        val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
+        test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
 
         version = self.storage._next_version(outcome.name)
 
@@ -293,7 +336,9 @@ class CollectionPipeline:
         metadata = {
             "task": outcome.task,
             "best_params": best_params,
-            "metrics": metrics,
+            # Backward compat: "metrics" continues to mean test metrics.
+            "metrics": test_metrics,
+            "val_metrics": val_metrics,
         }
         self.storage.save_model(
             outcome.name, pipeline_obj, metadata, threshold=threshold, version=version
@@ -302,7 +347,7 @@ class CollectionPipeline:
         logger.info(
             f"Trained {outcome.name} v{version}: "
             f"train={train_df.height} val={val_df.height} test={test_df.height}; "
-            f"metrics={metrics}"
+            f"val_metrics={val_metrics}; test_metrics={test_metrics}"
         )
 
         return {
@@ -310,7 +355,10 @@ class CollectionPipeline:
             "task": outcome.task,
             "threshold": threshold,
             "best_params": best_params,
-            "metrics": metrics,
+            # Backward compat: "metrics" still points at test metrics.
+            "metrics": test_metrics,
+            "val_metrics": val_metrics,
+            "test_metrics": test_metrics,
             "split_sizes": {
                 "train": train_df.height,
                 "val": val_df.height,
