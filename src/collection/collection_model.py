@@ -238,6 +238,75 @@ class CollectionModel:
             "log_loss": log_loss(y, proba, labels=[0, 1]) if len(set(y)) > 1 else float("nan"),
         }
 
+    def evaluate_stratified(
+        self,
+        pipeline: Pipeline,
+        df: pl.DataFrame,
+        threshold: Optional[float] = None,
+        bins: Sequence[Tuple[Optional[int], Optional[int]]] = (
+            (None, 25),
+            (25, 100),
+            (100, None),
+        ),
+        bin_column: str = "users_rated",
+    ) -> pd.DataFrame:
+        """Evaluate ``df`` stratified by a numeric bin column (default
+        ``users_rated``).
+
+        ``bins`` is a sequence of ``(low, high)`` tuples with inclusive-low,
+        exclusive-high semantics; ``None`` on either side means unbounded.
+        Default bins: <25, 25-99, 100+.
+
+        Returns a pandas DataFrame with one row per bin plus an ``all`` row,
+        and columns for each metric in :meth:`evaluate`.
+        """
+        if self.outcome.task != "classification":
+            raise ValueError(
+                "evaluate_stratified currently supports classification only"
+            )
+        if bin_column not in df.columns:
+            raise ValueError(
+                f"bin_column {bin_column!r} missing from df; "
+                f"available columns start with: {df.columns[:10]}"
+            )
+
+        rows = []
+        for low, high in bins:
+            label = self._bin_label(low, high)
+            subset = df
+            if low is not None:
+                subset = subset.filter(pl.col(bin_column) >= low)
+            if high is not None:
+                subset = subset.filter(pl.col(bin_column) < high)
+            row = {"bin": label, "n_rows": subset.height}
+            if subset.height == 0:
+                rows.append(row)
+                continue
+            metrics = self._evaluate_classification(
+                pipeline, subset, threshold=threshold
+            )
+            row.update(metrics)
+            row["n_pos"] = int(subset.filter(pl.col("label") == True).height)
+            rows.append(row)
+
+        # Overall row for reference.
+        overall = {"bin": "all", "n_rows": df.height}
+        if df.height:
+            overall.update(
+                self._evaluate_classification(pipeline, df, threshold=threshold)
+            )
+            overall["n_pos"] = int(df.filter(pl.col("label") == True).height)
+        rows.append(overall)
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _bin_label(low: Optional[int], high: Optional[int]) -> str:
+        if low is None and high is not None:
+            return f"<{high}"
+        if low is not None and high is None:
+            return f"{low}+"
+        return f"{low}-{high - 1}"
+
     def transform_features(
         self, pipeline: Pipeline, df: pl.DataFrame
     ) -> pd.DataFrame:

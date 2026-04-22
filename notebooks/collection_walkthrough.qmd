@@ -26,7 +26,7 @@ through.
 
 ```{python}
 #| tags: [setup]
-USERNAME = "phenrickson"
+USERNAME = "GOBBluth89"
 ```
 ```{python}
 #| tags: [setup]
@@ -79,9 +79,12 @@ for col in ["owned", "previously_owned", "want", "wishlist", "preordered", "for_
         print(f"{col}: {n}")
 
 # Rating coverage
-rated = raw_collection.filter(pl.col("user_rating") > 0).height
-print(f"\nrated (user_rating > 0): {rated}")
-print(f"mean rating: {raw_collection.filter(pl.col('user_rating') > 0)['user_rating'].mean():.2f}")
+rated_df = raw_collection.filter(pl.col("user_rating") > 0)
+print(f"\nrated (user_rating > 0): {rated_df.height}")
+if rated_df.height > 0:
+    print(f"mean rating: {rated_df['user_rating'].mean():.2f}")
+else:
+    print("mean rating: (no rated games)")
 ```
 
 ---
@@ -374,6 +377,23 @@ test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
 pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
 ```
 
+### Stratified by `users_rated`
+
+Overall metrics can look rosy when the negative pool is dominated by
+obscure games the model rarely needs to separate out. Break val and test
+metrics down by `users_rated` (default buckets: <25, 25–99, 100+) to see
+how the model actually behaves on games people have heard of.
+
+```{python}
+val_stratified = model.evaluate_stratified(pipeline_obj, val_df, threshold=threshold)
+test_stratified = model.evaluate_stratified(pipeline_obj, test_df, threshold=threshold)
+
+print("val stratified:")
+print(val_stratified.round(4))
+print("\ntest stratified:")
+print(test_stratified.round(4))
+```
+
 ---
 
 ## 8. Extract model quantities
@@ -405,6 +425,10 @@ print(f"score universe: {score_universe.height}, upcoming (2026+): {upcoming.hei
 ### Top 25 unowned games in the (downsampled) training set
 
 ```{python}
+pl.Config.set_tbl_cols(-1)
+pl.Config.set_tbl_rows(50)
+pl.Config.set_fmt_str_lengths(200)
+      # show up to 50 rows
 model.top_games(pipeline_obj, train_down, n=25, exclude_game_ids=owned_ids)
 ```
 
@@ -426,7 +450,15 @@ model.top_games(pipeline_obj, test_df, n=25)
 model.top_games(pipeline_obj, upcoming, n=25)
 ```
 
+
+
+```{python}
+
+model.top_games(pipeline_obj, upcoming, n=500).filter(pl.col("name")=='Market Fresh')
+
+```
 ---
+
 
 ## Next
 
