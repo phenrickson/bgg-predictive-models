@@ -26,7 +26,8 @@ through.
 
 ```{python}
 #| tags: [setup]
-USERNAME = "TomBrewstErr"
+# USERNAME = "TomBrewstErr"
+USERNAME = "phenrickson"
 ```
 ```{python}
 #| tags: [setup]
@@ -505,7 +506,215 @@ print(test_stratified.round(4))
 
 ---
 
-## 8. Extract model quantities
+## 8. Candidate runs and comparison
+
+The single `model.tune(...)` flow above is great when you've decided on
+one model. For *experimenting* — comparing logistic vs lightgbm, or
+lightgbm with different feature subsets — there's a separate flow built
+around three pieces:
+
+- **`CollectionCandidate`** — a named experiment spec (model type,
+  tuning strategy, optional feature subset, optional fixed params).
+- **`train_candidate(...)`** — runs one candidate end-to-end and persists
+  every artifact under
+  `{outcome}/{candidate}/v{N}/` via `CollectionArtifactStorage`.
+- **`compare_runs(...)`** — pure read over what's on disk; never trains.
+
+Comparison must happen over the **same val/test splits**, so
+`save_canonical_splits` writes them to `{outcome}/_splits/v{N}/` and each
+candidate run records the splits version it consumed.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+from src.collection.candidates import CollectionCandidate
+from src.collection.candidate_runner import train_candidate
+from src.collection.candidate_comparison import (
+    load_candidate_runs,
+    compare_runs,
+)
+from src.collection.collection_artifact_storage import CollectionArtifactStorage
+
+# Notebook artifacts are throwaway — point storage at a temp dir.
+notebook_artifact_dir = Path(tempfile.mkdtemp(prefix="bgg_candidate_demo_"))
+storage = CollectionArtifactStorage(
+    username=USERNAME,
+    local_root=notebook_artifact_dir,
+    environment="notebook",
+)
+print("artifacts under:", storage.base_dir)
+```
+
+### Persist the canonical splits
+
+Every candidate evaluates on these. Save once, then run any number of
+candidates against them.
+
+```{python}
+splits_paths = storage.save_canonical_splits(
+    outcome="own",
+    train_df=train_df,
+    val_df=val_df,
+    test_df=test_df,
+)
+print("splits version:", splits_paths["version"])
+```
+
+### Define a few candidates
+
+Three deliberately different specs so the comparison frame has something
+to say:
+
+```{python}
+candidates = [
+    CollectionCandidate(
+        name="logistic_default",
+        classification_config=ClassificationModelConfig(
+            model_type="logistic",
+            tuning_metric="log_loss",
+        ),
+        tuning="cv",
+        cv_folds=3,
+        downsample_negatives_ratio=50,
+    ),
+    CollectionCandidate(
+        name="lgbm_default",
+        classification_config=ClassificationModelConfig(
+            model_type="lightgbm",
+            tuning_metric="log_loss",
+        ),
+        tuning="cv",
+        cv_folds=3,
+        downsample_negatives_ratio=50,
+    ),
+    CollectionCandidate(
+        name="lgbm_no_year",
+        classification_config=ClassificationModelConfig(
+            model_type="lightgbm",
+            tuning_metric="log_loss",
+        ),
+        tuning="cv",
+        cv_folds=3,
+        downsample_negatives_ratio=50,
+        # Restrict features. Protected columns (game_id, label,
+        # year_published, users_rated) are kept regardless, but
+        # year_published won't be available to the *model* unless
+        # explicitly listed — feature_columns drives what the
+        # preprocessor sees as model inputs.
+        feature_columns=[c for c in train_df.columns if c not in {"year_published"}],
+        notes="lightgbm with year_published excluded as a feature",
+    ),
+]
+
+for c in candidates:
+    print(f"  {c.name}: {c.classification_config.model_type}, tuning={c.tuning}")
+```
+
+### Train all three
+
+Each call: load splits, slice features, downsample, tune, threshold, eval,
+save artifacts. They write to disjoint paths (`{outcome}/{candidate}/v{N}/`)
+so they're independent — running them sequentially or via a script loop is
+identical.
+
+```{python}
+results = []
+for c in candidates:
+    print(f"\n--- training candidate: {c.name} ---")
+    result = train_candidate(
+        candidate=c,
+        outcome=outcomes["own"],
+        storage=storage,
+    )
+    results.append(result)
+    print(
+        f"v{result.version} → val={result.val_metrics} "
+        f"test={result.test_metrics}"
+    )
+```
+
+### What's on disk
+
+```{python}
+import os
+
+def show_tree(root: Path, prefix: str = "") -> None:
+    for entry in sorted(root.iterdir()):
+        print(f"{prefix}{entry.name}{'/' if entry.is_dir() else ''}")
+        if entry.is_dir():
+            show_tree(entry, prefix + "  ")
+
+show_tree(storage.base_dir / "own")
+```
+
+### Pure-read comparison
+
+`load_candidate_runs` reads only the registration JSONs — no pipelines
+loaded, no models touched.
+
+```{python}
+runs = load_candidate_runs(storage, outcome="own")
+for r in runs:
+    print(
+        f"{r['candidate']} v{r['version']}: "
+        f"val={r['val_metrics']} test={r['metrics']}"
+    )
+```
+
+`compare_runs` returns a tall polars frame:
+
+```{python}
+comparison_df = compare_runs(runs)
+comparison_df
+```
+
+Pivot to a wide view if you want to eyeball metric × split per candidate:
+
+```{python}
+comparison_df.pivot(
+    values="value",
+    index=["candidate", "version"],
+    on=["split", "metric"],
+).sort("candidate")
+```
+
+### Stratified comparison across candidates
+
+The pure comparison only sees the overall metrics that landed in
+`registration.json`. For per-bin behavior (e.g. "which candidate is best
+on games with <25 ratings?") load each pipeline back and run
+`evaluate_stratified` on whichever splits you care about:
+
+```{python}
+import polars as pl
+
+stratified_rows = []
+for c in candidates:
+    pipe, registration, thr = storage.load_candidate_run("own", c.name)
+    # Rebuild a CollectionModel just to reuse its evaluate_stratified helper.
+    cand_model = CollectionModel(
+        username=USERNAME,
+        outcome=outcomes["own"],
+        classification_config=c.classification_config,
+    )
+    val_stratified = cand_model.evaluate_stratified(pipe, val_df, threshold=thr)
+    val_stratified["candidate"] = c.name
+    val_stratified["split"] = "val"
+    stratified_rows.append(val_stratified)
+
+stratified_df = pl.from_pandas(
+    pd.concat(stratified_rows, ignore_index=True)
+)
+stratified_df.select([
+    "candidate", "split", "bin", "n_rows", "n_pos",
+    "precision", "recall", "f1",
+])
+```
+
+---
+
+## 9. Extract model quantities
 
 Pull feature importances (for tree models) or coefficients (for logistic) out
 of the trained pipeline, aligned with the preprocessor's output feature names.
@@ -517,7 +726,7 @@ importance.head(20)
 
 ---
 
-## 9. Top games per split
+## 10. Top games per split
 
 Rank games by predicted `own` probability within each split. The
 `model.top_games()` call handles scoring, optional exclusion of owned

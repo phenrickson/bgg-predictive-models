@@ -10,18 +10,23 @@ Path layout per user::
     {local_root}/{env}/{username}/
         metadata.json                           # global user metadata, outcome-agnostic
         collection/latest.parquet               # raw snapshot, outcome-agnostic
-        {outcome}/v{N}/
+        {outcome}/v{N}/                         # production-winner path (single best model)
             model.pkl
             threshold.json                      # classification only
             registration.json
-            splits/train.parquet
-            splits/validation.parquet
-            splits/test.parquet
-            predictions/predictions.parquet
-            predictions/top_recommendations.json
-            analysis/summary_stats.json
-            analysis/feature_importance.parquet
-            analysis/category_affinity.json
+            splits/{train,validation,test}.parquet
+            predictions/...
+            analysis/...
+        {outcome}/_splits/v{N}/                 # canonical splits shared by candidate runs
+            {train,validation,test}.parquet
+        {outcome}/{candidate}/v{N}/             # per-candidate experiment runs
+            model.pkl
+            threshold.json                      # classification only
+            registration.json                   # candidate spec + metrics + splits_version
+            tuning_results.parquet              # full hyperparameter search trace
+            train_used.parquet                  # actual training frame after downsampling/slicing
+            predictions/...
+            analysis/...
 """
 
 import json
@@ -582,7 +587,8 @@ class CollectionArtifactStorage:
 
     def list_outcomes(self) -> List[str]:
         """Return outcome names (top-level directories under :attr:`base_dir`)
-        that contain at least one ``v{N}`` subdirectory.
+        that contain at least one production ``v{N}`` directory, a candidate
+        run, or canonical splits.
         """
         reserved = {"collection"}
         outcomes: List[str] = []
@@ -591,9 +597,289 @@ class CollectionArtifactStorage:
         for child in self.base_dir.iterdir():
             if not child.is_dir() or child.name in reserved:
                 continue
-            if self._list_versions(child.name):
-                outcomes.append(child.name)
+            outcome = child.name
+            has_production_versions = bool(self._list_versions(outcome))
+            has_candidates = bool(self.list_candidates(outcome))
+            has_splits = bool(self._list_split_versions(outcome))
+            if has_production_versions or has_candidates or has_splits:
+                outcomes.append(outcome)
         return sorted(outcomes)
+
+    # --- Candidate experiment runs ---
+    #
+    # Candidate runs live at ``{outcome}/{candidate}/v{N}/`` and are versioned
+    # independently of the production-winner path at ``{outcome}/v{N}/``.
+    # Splits used by candidate runs live at ``{outcome}/_splits/v{N}/`` so
+    # multiple candidates can share the exact same val/test for honest
+    # comparison.
+
+    _CANDIDATE_RESERVED_NAMES = {"_splits"}
+
+    def _validate_candidate_name(self, candidate: str) -> None:
+        if not candidate or "/" in candidate or candidate.startswith("_") or candidate.startswith("v"):
+            raise ValueError(
+                f"Invalid candidate name {candidate!r}: must be non-empty, "
+                f"cannot start with '_' or 'v', cannot contain '/'."
+            )
+        if candidate in self._CANDIDATE_RESERVED_NAMES:
+            raise ValueError(f"Candidate name {candidate!r} is reserved.")
+
+    def _list_candidate_versions(self, outcome: str, candidate: str) -> List[int]:
+        candidate_dir = self.base_dir / outcome / candidate
+        if not candidate_dir.exists():
+            return []
+        versions: List[int] = []
+        for child in candidate_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                versions.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        versions.sort()
+        return versions
+
+    def latest_candidate_version(self, outcome: str, candidate: str) -> Optional[int]:
+        """Return the highest version number under ``{outcome}/{candidate}/``,
+        or ``None`` if the candidate has no runs.
+        """
+        self._validate_candidate_name(candidate)
+        versions = self._list_candidate_versions(outcome, candidate)
+        return versions[-1] if versions else None
+
+    def _next_candidate_version(self, outcome: str, candidate: str) -> int:
+        return (self.latest_candidate_version(outcome, candidate) or 0) + 1
+
+    def list_candidates(self, outcome: str) -> List[str]:
+        """Return all candidate names that have at least one versioned run for
+        ``outcome``. The reserved ``_splits`` directory is excluded.
+        """
+        outcome_dir = self.base_dir / outcome
+        if not outcome_dir.exists():
+            return []
+        candidates: List[str] = []
+        for child in outcome_dir.iterdir():
+            if not child.is_dir():
+                continue
+            name = child.name
+            if name in self._CANDIDATE_RESERVED_NAMES or name.startswith("v"):
+                continue
+            if self._list_candidate_versions(outcome, name):
+                candidates.append(name)
+        return sorted(candidates)
+
+    # --- Canonical splits (shared across candidates) ---
+
+    def _list_split_versions(self, outcome: str) -> List[int]:
+        splits_dir = self.base_dir / outcome / "_splits"
+        if not splits_dir.exists():
+            return []
+        versions: List[int] = []
+        for child in splits_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                versions.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        versions.sort()
+        return versions
+
+    def latest_canonical_splits_version(self, outcome: str) -> Optional[int]:
+        versions = self._list_split_versions(outcome)
+        return versions[-1] if versions else None
+
+    def save_canonical_splits(
+        self,
+        outcome: str,
+        train_df: pl.DataFrame,
+        val_df: pl.DataFrame,
+        test_df: pl.DataFrame,
+        version: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Save splits under ``{outcome}/_splits/v{version}/``. These are the
+        canonical splits that candidate runs reference by version. Auto-
+        increments if ``version`` is ``None``.
+        """
+        if version is None:
+            version = (self.latest_canonical_splits_version(outcome) or 0) + 1
+
+        paths: Dict[str, Any] = {"version": version}
+        for name, df in [("train", train_df), ("validation", val_df), ("test", test_df)]:
+            rel = Path(outcome) / "_splits" / f"v{version}" / f"{name}.parquet"
+            paths[name] = self._upload_parquet(rel, df)
+            logger.info(
+                f"Saved {outcome}/_splits/v{version} {name} ({len(df)} rows)"
+            )
+        return paths
+
+    def load_canonical_splits(
+        self,
+        outcome: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Load canonical splits. Defaults to the latest version. Returns
+        ``None`` if no splits exist."""
+        if version is None:
+            version = self.latest_canonical_splits_version(outcome)
+            if version is None:
+                return None
+        result: Dict[str, Any] = {"version": version}
+        for name in ["train", "validation", "test"]:
+            rel = Path(outcome) / "_splits" / f"v{version}" / f"{name}.parquet"
+            df = self._download_parquet(rel)
+            if df is None:
+                logger.warning(
+                    f"Canonical split {name!r} missing for {outcome}/_splits/v{version}"
+                )
+                return None
+            result[name] = df
+        return result
+
+    # --- Candidate model save/load ---
+
+    def save_candidate_run(
+        self,
+        outcome: str,
+        candidate: str,
+        pipeline: Any,
+        registration: Dict[str, Any],
+        tuning_results: Optional[pl.DataFrame] = None,
+        train_used: Optional[pl.DataFrame] = None,
+        threshold: Optional[float] = None,
+        version: Optional[int] = None,
+    ) -> str:
+        """Persist all artifacts for one candidate run.
+
+        ``registration`` should already contain the candidate spec, metrics,
+        params, and ``splits_version``. ``tuning_results`` is the per-config
+        hyperparameter search trace returned by
+        :meth:`~CollectionModel.tune` / :meth:`~CollectionModel.tune_cv`.
+        ``train_used`` is the actual training frame after downsampling or
+        feature-slicing (different from the canonical training split).
+
+        Returns the absolute path to the version directory.
+        """
+        self._validate_candidate_name(candidate)
+
+        if version is None:
+            version = self._next_candidate_version(outcome, candidate)
+
+        version_rel = Path(outcome) / candidate / f"v{version}"
+
+        self._upload_pickle(version_rel / "model.pkl", pipeline)
+
+        if threshold is not None:
+            self._upload_json(
+                version_rel / "threshold.json", {"threshold": threshold}
+            )
+
+        full_registration = {
+            "username": self.username,
+            "outcome": outcome,
+            "candidate": candidate,
+            "version": version,
+            "created_at": datetime.now().isoformat(),
+            **registration,
+        }
+        if threshold is not None:
+            full_registration["threshold"] = threshold
+        self._upload_json(version_rel / "registration.json", full_registration)
+
+        if tuning_results is not None:
+            self._upload_parquet(
+                version_rel / "tuning_results.parquet", tuning_results
+            )
+
+        if train_used is not None:
+            self._upload_parquet(version_rel / "train_used.parquet", train_used)
+
+        version_dir = self.base_dir / version_rel
+        logger.info(
+            f"Saved candidate run {outcome}/{candidate} v{version} to {version_dir}/"
+        )
+        return f"{version_dir}/"
+
+    def load_candidate_run(
+        self,
+        outcome: str,
+        candidate: str,
+        version: Optional[int] = None,
+    ) -> Tuple[Any, Dict[str, Any], Optional[float]]:
+        """Load a candidate run's pipeline, registration, and threshold.
+
+        Defaults to the latest version. Raises ``ValueError`` if no run exists.
+        """
+        self._validate_candidate_name(candidate)
+        if version is None:
+            version = self.latest_candidate_version(outcome, candidate)
+            if version is None:
+                raise ValueError(
+                    f"No runs for candidate {candidate!r} on outcome {outcome!r}"
+                )
+        version_rel = Path(outcome) / candidate / f"v{version}"
+
+        pipeline = self._download_pickle(version_rel / "model.pkl")
+        if pipeline is None:
+            raise ValueError(
+                f"Pipeline missing at {version_rel} for user {self.username!r}"
+            )
+        registration = self._download_json(version_rel / "registration.json") or {}
+        threshold_data = self._download_json(version_rel / "threshold.json")
+        threshold = threshold_data.get("threshold") if threshold_data else None
+        return pipeline, registration, threshold
+
+    def load_candidate_registration(
+        self,
+        outcome: str,
+        candidate: str,
+        version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Load just the registration (no pipeline). Cheap; useful for
+        comparison loops that only need metrics + spec."""
+        self._validate_candidate_name(candidate)
+        if version is None:
+            version = self.latest_candidate_version(outcome, candidate)
+            if version is None:
+                return None
+        return self._download_json(
+            Path(outcome) / candidate / f"v{version}" / "registration.json"
+        )
+
+    def load_candidate_tuning_results(
+        self,
+        outcome: str,
+        candidate: str,
+        version: Optional[int] = None,
+    ) -> Optional[pl.DataFrame]:
+        """Load the per-config tuning trace, or ``None`` if missing."""
+        self._validate_candidate_name(candidate)
+        if version is None:
+            version = self.latest_candidate_version(outcome, candidate)
+            if version is None:
+                return None
+        return self._download_parquet(
+            Path(outcome) / candidate / f"v{version}" / "tuning_results.parquet"
+        )
+
+    def list_candidate_runs(
+        self, outcome: str, candidate: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Return registration dicts for one candidate (all versions) or every
+        candidate under an outcome (all versions). Sorted by candidate, version.
+        """
+        candidates = (
+            [candidate] if candidate is not None else self.list_candidates(outcome)
+        )
+        runs: List[Dict[str, Any]] = []
+        for cand in candidates:
+            for v in self._list_candidate_versions(outcome, cand):
+                reg = self.load_candidate_registration(outcome, cand, version=v)
+                if reg is not None:
+                    runs.append(reg)
+        return sorted(
+            runs, key=lambda r: (r.get("candidate", ""), r.get("version", 0))
+        )
 
     def get_artifact_status(self) -> Dict[str, Any]:
         """Get status of all artifacts for this user.
