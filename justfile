@@ -75,3 +75,26 @@ sweep outcome="own":
     train_status=$?
     just compare {{outcome}}
     exit $train_status
+
+# Sweep across a list of users. Skips users who already have at least
+# one trained candidate for the outcome. Continue-on-error.
+#   just users-sweep "alice bob carol"
+users-sweep users outcome="own":
+    #!/usr/bin/env bash
+    shopt -s nullglob
+    failed=()
+    for u in {{users}}; do
+        candidate_dirs=({{local_root}}/{{environment}}/$u/{{outcome}}/*/v*)
+        if [ ${#candidate_dirs[@]} -gt 0 ]; then
+            echo "skip $u (already processed)"
+            continue
+        fi
+        echo "===== $u ====="
+        if ! just username=$u sweep {{outcome}}; then
+            failed+=("$u")
+        fi
+    done
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "FAILED: ${failed[@]}" >&2
+        exit 1
+    fi
