@@ -320,9 +320,7 @@ print(unfit_pipeline)
 # Optional: downsample training-set negatives to 5 per positive for class balance.
 # Only touch the training frame — val and test keep the real class distribution
 # so tuning and evaluation stay honest.
-train_down = downsample_negatives(
-    train_df, protect_min_ratings=25, ratio=50, random_seed=1999
-)
+train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=50)
 
 print(
     f"train before: {train_df.height} rows "
@@ -389,8 +387,8 @@ If you already know the hyperparameters you want, skip tuning entirely
 and call `train()` with a params dict (same key shape as `best_params`):
 
 ```{python}
-pipeline_manual = model.train(train_down, params=best_params)
-print("manual pipeline:", [s[0] for s in pipeline_manual.steps])
+# pipeline_manual = model.train(train_down, params=best_params)
+# print("manual pipeline:", [s[0] for s in pipeline_manual.steps])
 ```
 
 ---
@@ -431,68 +429,34 @@ test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
 pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
 ```
 
+### Inspecting predictions
+
+Before slicing metrics, just look at the predictions: append `proba` and
+`pred` to the validation frame and sort.
+
+```{python}
+val_preds = model.predict_with_labels(pipeline_obj, val_df, threshold=threshold)
+val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
+    "proba", descending=True
+).head(20)
+```
+
+Misclassified positives (model said no, ground truth said yes) — usually
+the most informative slice for diagnosing what the model misses:
+
+```{python}
+val_preds.filter((pl.col("label") == True) & (pl.col("pred") == 0)).select(
+    "game_id", "name", "users_rated", "proba"
+).sort("proba", descending=True).head(20)
+```
+
 ### Stratified by `users_rated`
 
 Overall metrics can look rosy when the negative pool is dominated by
 obscure games the model rarely needs to separate out. Break val and test
 metrics down by `users_rated` (default buckets: <25, 25–99, 100+) to see
-how the model actually behaves on games people have heard of.
-
-```{python}
-
-val_df
-
-
-val_df.select(pl.col('name', 'users_rated')).sort(pl.col('users_rated'), descending = False).filter(pl.col('users_rated') <=25)
-
-```
-
-```{python}
-from typing import Optional, Sequence, Tuple
-import polars as pl
-
-df = val_df
-bin_column = "users_rated"
-bins: Sequence[Tuple[Optional[int], Optional[int]]] = (
-    (None, 25),
-    (25, 100),
-    (100, None),
-)
-
-rows = []
-for low, high in bins:
-    label = model._bin_label(low, high)
-    subset = df
-    if low is not None:
-        subset = subset.filter(pl.col(bin_column) >= low)
-    if high is not None:
-        subset = subset.filter(pl.col(bin_column) < high)
-
-    print(f"\nbin={label}  low={low} high={high}  subset.height={subset.height}")
-
-    row = {"bin": label, "n_rows": subset.height}
-    subset.head(5)
-    if subset.height == 0:
-        print("  skipping: empty")
-        rows.append(row)
-        continue
-
-    # # peek at what _prepare is about to hand to _evaluate_classification
-    # X, y = model._prepare(subset)
-    # print(f"  X type={type(X).__name__}  shape={getattr(X, 'shape', None)}")
-    # print(f"  y type={type(y).__name__}  shape={getattr(y, 'shape', 'scalar')}  value={y!r}")
-
-    # metrics = model._evaluate_classification(pipeline_obj, subset, threshold=threshold)
-    # row.update(metrics)
-    # row["n_pos"] = int(subset.filter(pl.col("label") == True).height)
-    # rows.append(row)
-    # print(f"  metrics={metrics}")
-
-import pandas as pd
-pd.DataFrame(rows)
-
-
-```
+how the model actually behaves on games people have heard of. NaN in
+`roc_auc` / `pr_auc` / `log_loss` means a bin had only one class.
 
 ```{python}
 val_stratified = model.evaluate_stratified(pipeline_obj, val_df, threshold=threshold)
@@ -574,8 +538,7 @@ candidates = [
             model_type="logistic",
             tuning_metric="log_loss",
         ),
-        tuning="cv",
-        cv_folds=3,
+        tuning="holdout",
         downsample_negatives_ratio=50,
     ),
     CollectionCandidate(
@@ -584,26 +547,8 @@ candidates = [
             model_type="lightgbm",
             tuning_metric="log_loss",
         ),
-        tuning="cv",
-        cv_folds=3,
+        tuning="holdout",
         downsample_negatives_ratio=50,
-    ),
-    CollectionCandidate(
-        name="lgbm_no_year",
-        classification_config=ClassificationModelConfig(
-            model_type="lightgbm",
-            tuning_metric="log_loss",
-        ),
-        tuning="cv",
-        cv_folds=3,
-        downsample_negatives_ratio=50,
-        # Restrict features. Protected columns (game_id, label,
-        # year_published, users_rated) are kept regardless, but
-        # year_published won't be available to the *model* unless
-        # explicitly listed — feature_columns drives what the
-        # preprocessor sees as model inputs.
-        feature_columns=[c for c in train_df.columns if c not in {"year_published"}],
-        notes="lightgbm with year_published excluded as a feature",
     ),
 ]
 
@@ -611,7 +556,7 @@ for c in candidates:
     print(f"  {c.name}: {c.classification_config.model_type}, tuning={c.tuning}")
 ```
 
-### Train all three
+### Train candidates
 
 Each call: load splits, slice features, downsample, tune, threshold, eval,
 save artifacts. They write to disjoint paths (`{outcome}/{candidate}/v{N}/`)
@@ -767,16 +712,6 @@ model.top_games(pipeline_obj, test_df, n=25)
 ```{python}
 model.top_games(pipeline_obj, upcoming, n=25)
 ```
-
-
-
-```{python}
-
-model.top_games(pipeline_obj, upcoming, n=500).filter(pl.col("name")=='Market Fresh')
-
-```
----
-
 
 ## Next
 

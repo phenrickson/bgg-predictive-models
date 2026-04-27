@@ -242,7 +242,7 @@ def downsample_negatives(
     ratio: float,
     protect_min_ratings: int = 25,
     rating_column: str = "users_rated",
-    random_seed: int = 42,
+    random_seed: int = 1999,
 ) -> pl.DataFrame:
     """Downsample the negatives (label=False rows) to a target ratio of
     negatives-per-positive. Positives are preserved.

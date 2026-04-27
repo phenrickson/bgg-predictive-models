@@ -239,6 +239,35 @@ class CollectionModel:
             return self._evaluate_regression(pipeline, df)
         raise ValueError(f"Unsupported task: {self.outcome.task!r}")
 
+    def predict_with_labels(
+        self,
+        pipeline: Pipeline,
+        df: pl.DataFrame,
+        threshold: Optional[float] = None,
+    ) -> pl.DataFrame:
+        """Return ``df`` with prediction columns appended.
+
+        Classification: appends ``proba`` (P(label=1)) and ``pred`` (hard
+        prediction at ``threshold``, default 0.5).
+        Regression: appends ``pred`` (predicted value); ``threshold`` ignored.
+
+        Useful for inspecting predictions row-by-row alongside the true
+        label — sort by ``proba``, group by any column you like, find
+        misclassifications, etc.
+        """
+        X, _ = self._prepare(df)
+        if self.outcome.task == "classification":
+            proba = pipeline.predict_proba(X)[:, 1]
+            t = 0.5 if threshold is None else float(threshold)
+            return df.with_columns([
+                pl.Series("proba", proba),
+                pl.Series("pred", (proba >= t).astype(int)),
+            ])
+        if self.outcome.task == "regression":
+            pred = pipeline.predict(X)
+            return df.with_columns(pl.Series("pred", pred))
+        raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+
     # --- classification path ---
 
     def _tune_classification(
