@@ -190,6 +190,47 @@ collections:
       task: classification
       label_from: {column: user_rating, predicate: ">= 8"}
       require: "user_rating > 0"
+  candidates:
+    - name: logistic_default
+      tuning: cv
+      cv_folds: 5
+      downsample_negatives_ratio: 50
+      downsample_protect_min_ratings: 25
+      notes: "Logistic regression baseline, CV-tuned"
+      classification_config:
+        model_type: logistic
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+    - name: lgbm_default
+      tuning: cv
+      cv_folds: 5
+      downsample_negatives_ratio: 50
+      downsample_protect_min_ratings: 25
+      notes: "LightGBM baseline, CV-tuned"
+      classification_config:
+        model_type: lightgbm
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+    - name: lgbm_no_year
+      tuning: cv
+      cv_folds: 5
+      downsample_negatives_ratio: 50
+      downsample_protect_min_ratings: 25
+      notes: "LightGBM with year_published excluded as a feature"
+      classification_config:
+        model_type: lightgbm
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+      feature_columns:
+        - users_rated
+        - average_rating
+        - bayesaverage
+        - num_weights
+        - average_weight
+        - min_players
+        - max_players
+        - min_age
+        - playing_time
 
 # Scoring Configuration
 scoring:

@@ -184,7 +184,7 @@ class CollectionArtifactStorage:
         versions = self._list_versions(outcome)
         return versions[-1] if versions else None
 
-    def _next_version(self, outcome: str) -> int:
+    def next_version(self, outcome: str) -> int:
         """Return the next version number for a given outcome.
 
         Args:
@@ -238,13 +238,13 @@ class CollectionArtifactStorage:
             train_df: Training DataFrame
             val_df: Validation DataFrame
             test_df: Test DataFrame
-            version: Version number; auto-incremented via ``_next_version`` if ``None``.
+            version: Version number; auto-incremented via ``next_version`` if ``None``.
 
         Returns:
             Dictionary with ``"version"`` and per-split local paths.
         """
         if version is None:
-            version = self._next_version(outcome)
+            version = self.next_version(outcome)
 
         paths: Dict[str, Any] = {"version": version}
         for name, df in [("train", train_df), ("validation", val_df), ("test", test_df)]:
@@ -310,7 +310,7 @@ class CollectionArtifactStorage:
             Local path (as string) to the version directory where artifacts were saved.
         """
         if version is None:
-            version = self._next_version(outcome)
+            version = self.next_version(outcome)
 
         version_rel = Path(outcome) / f"v{version}"
 

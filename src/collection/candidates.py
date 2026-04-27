@@ -129,3 +129,37 @@ class CollectionCandidate:
                 **kwargs["regression_config"]
             )
         return cls(**kwargs)
+
+
+def load_candidates(config: Dict[str, Any]) -> Dict[str, CollectionCandidate]:
+    """Parse ``collections.candidates`` from config into a name-keyed registry.
+
+    Mirrors :func:`src.collection.outcomes.load_outcomes`. Each list entry is
+    re-hydrated via :meth:`CollectionCandidate.from_dict`. Duplicate names raise.
+
+    Returns:
+        ``{candidate.name: CollectionCandidate}``. Empty dict if the config
+        section is absent — candidates are optional.
+
+    Raises:
+        ValueError: if ``collections.candidates`` is not a list, or if any
+            entry produces a duplicate name.
+    """
+    section = config.get("collections", {}).get("candidates", [])
+    if not section:
+        return {}
+    if not isinstance(section, list):
+        raise ValueError(
+            f"config.collections.candidates must be a list, got {type(section).__name__}"
+        )
+    out: Dict[str, CollectionCandidate] = {}
+    for entry in section:
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Each candidate entry must be a mapping, got {type(entry).__name__}"
+            )
+        candidate = CollectionCandidate.from_dict(entry)
+        if candidate.name in out:
+            raise ValueError(f"Duplicate candidate name in config: {candidate.name!r}")
+        out[candidate.name] = candidate
+    return out

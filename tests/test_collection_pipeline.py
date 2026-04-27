@@ -68,7 +68,7 @@ def patched_pipeline_env(tmp_path, monkeypatch):
         "src.collection.collection_pipeline.CollectionArtifactStorage"
     ) as mock_storage_cls:
         storage_instance = MagicMock()
-        storage_instance._next_version.return_value = 1
+        storage_instance.next_version.return_value = 1
         mock_storage_cls.return_value = storage_instance
         yield {
             "load_config": mock_load_config,

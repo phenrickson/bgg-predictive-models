@@ -337,7 +337,7 @@ class CollectionPipeline:
         val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
         test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
 
-        version = self.storage._next_version(outcome.name)
+        version = self.storage.next_version(outcome.name)
 
         self.storage.save_splits(outcome.name, train_df, val_df, test_df, version=version)
         metadata = {
