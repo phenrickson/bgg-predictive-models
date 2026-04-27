@@ -1,8 +1,8 @@
 """Pure comparison utilities over persisted candidate runs.
 
 Comparison reads only what's already on disk — it never trains. Use this
-after :func:`src.collection.candidate_runner.train_candidate` has been
-called for two or more candidates.
+after :func:`src.collection.candidates.train_candidate` has been called
+for two or more candidates.
 
 The headline function :func:`compare_runs` returns a tall metrics frame
 (one row per candidate × split × metric) with the candidate spec,

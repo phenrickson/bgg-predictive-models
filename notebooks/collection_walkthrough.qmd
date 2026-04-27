@@ -492,8 +492,11 @@ candidate run records the splits version it consumed.
 import tempfile
 from pathlib import Path
 
-from src.collection.candidates import CollectionCandidate
-from src.collection.candidate_runner import train_candidate
+from src.collection.candidates import (
+    CollectionCandidate,
+    train_candidate,
+    train_candidates,
+)
 from src.collection.candidate_comparison import (
     load_candidate_runs,
     compare_runs,
@@ -560,23 +563,12 @@ for c in candidates:
 
 Each call: load splits, slice features, downsample, tune, threshold, eval,
 save artifacts. They write to disjoint paths (`{outcome}/{candidate}/v{N}/`)
-so they're independent — running them sequentially or via a script loop is
-identical.
+so they're independent.
 
 ```{python}
-results = []
-for c in candidates:
-    print(f"\n--- training candidate: {c.name} ---")
-    result = train_candidate(
-        candidate=c,
-        outcome=outcomes["own"],
-        storage=storage,
-    )
-    results.append(result)
-    print(
-        f"v{result.version} → val={result.val_metrics} "
-        f"test={result.test_metrics}"
-    )
+results = train_candidates(candidates, outcomes["own"], storage)
+for r in results:
+    print(f"{r.candidate.name} v{r.version}: val={r.val_metrics} test={r.test_metrics}")
 ```
 
 ### What's on disk

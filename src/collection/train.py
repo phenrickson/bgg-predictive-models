@@ -2,8 +2,8 @@
 
 Looks up ``--candidate`` by name in ``config.collections.candidates``,
 combines it with the named outcome, and runs
-:func:`src.collection.candidate_runner.train_candidate`. Splits must
-already exist (run ``uv run python -m src.collection.split`` first).
+:func:`src.collection.candidates.train_candidate`. Splits must already
+exist (run ``uv run python -m src.collection.split`` first).
 
 Stdout: a single JSON line with ``version``, ``splits_version``,
 ``val_metrics``, ``test_metrics`` so callers can parse the result.
@@ -19,8 +19,7 @@ import json
 import sys
 from typing import List, Optional
 
-from src.collection.candidate_runner import train_candidate
-from src.collection.candidates import load_candidates
+from src.collection.candidates import load_candidates, train_candidate
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.outcomes import load_outcomes
 from src.utils.config import load_config
