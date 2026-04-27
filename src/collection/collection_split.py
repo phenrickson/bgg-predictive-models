@@ -54,7 +54,7 @@ class ClassificationSplitConfig:
     time_column: str = "year_published"
 
     # Negative eligibility filters (applied before split in both modes)
-    min_ratings_for_negatives: int = 50
+    min_ratings_for_negatives: int = 0
     min_year_for_negatives: Optional[int] = None
     max_year_for_negatives: Optional[int] = None
 
@@ -240,28 +240,52 @@ class CollectionSplitter:
 def downsample_negatives(
     df: pl.DataFrame,
     ratio: float,
+    protect_min_ratings: int = 25,
+    rating_column: str = "users_rated",
     random_seed: int = 42,
 ) -> pl.DataFrame:
     """Downsample the negatives (label=False rows) to a target ratio of
     negatives-per-positive. Positives are preserved.
+
+    Negatives with ``rating_column >= protect_min_ratings`` are always kept;
+    the low-rating tail (``< protect_min_ratings``) is sampled to fill the
+    remaining budget up to ``n_positives * ratio`` total negatives. If the
+    protected pool alone already exceeds the target, no low-rating negatives
+    are added.
+
+    Set ``protect_min_ratings=0`` to recover the old behavior (uniform
+    sampling over all negatives).
 
     Use this at training time on the training DataFrame only — never on
     validation or test. The split itself should preserve the real class
     distribution; downsampling is a training-time class-balance concern.
 
     Args:
-        df: DataFrame with a boolean `label` column.
+        df: DataFrame with a boolean ``label`` column.
         ratio: Target negatives-per-positive (e.g., 5.0 → 5 negatives per positive).
+        protect_min_ratings: Keep every negative with ``rating_column`` at or
+            above this value; only sample the rows below it. Default 25.
+        rating_column: Column used for the protection threshold. Default
+            ``users_rated``.
         random_seed: Seed for the negative sampling RNG.
 
     Returns:
-        DataFrame with all positives plus `int(n_positives * ratio)` negatives,
-        or all negatives if the pool is smaller than the target.
+        DataFrame with all positives, all protected high-rating negatives,
+        and a sampled subset of low-rating negatives.
     """
     if "label" not in df.columns:
         raise ValueError("downsample_negatives requires a 'label' column")
     if ratio <= 0:
         raise ValueError(f"ratio must be > 0, got {ratio!r}")
+    if protect_min_ratings < 0:
+        raise ValueError(
+            f"protect_min_ratings must be >= 0, got {protect_min_ratings!r}"
+        )
+    if protect_min_ratings > 0 and rating_column not in df.columns:
+        raise ValueError(
+            f"rating_column {rating_column!r} missing from df; "
+            f"available columns start with: {df.columns[:10]}"
+        )
 
     positives = df.filter(pl.col("label").cast(pl.Boolean) == True)
     negatives = df.filter(pl.col("label").cast(pl.Boolean) == False)
@@ -270,5 +294,20 @@ def downsample_negatives(
     if target >= negatives.height:
         return df
 
-    sampled = negatives.sample(n=target, shuffle=True, seed=random_seed)
-    return pl.concat([positives, sampled], how="vertical_relaxed")
+    if protect_min_ratings == 0:
+        sampled = negatives.sample(n=target, shuffle=True, seed=random_seed)
+        return pl.concat([positives, sampled], how="vertical_relaxed")
+
+    protected = negatives.filter(pl.col(rating_column) >= protect_min_ratings)
+    tail = negatives.filter(pl.col(rating_column) < protect_min_ratings)
+
+    remaining = target - protected.height
+    if remaining <= 0:
+        return pl.concat([positives, protected], how="vertical_relaxed")
+    if remaining >= tail.height:
+        return pl.concat([positives, protected, tail], how="vertical_relaxed")
+
+    sampled_tail = tail.sample(n=remaining, shuffle=True, seed=random_seed)
+    return pl.concat(
+        [positives, protected, sampled_tail], how="vertical_relaxed"
+    )

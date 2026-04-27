@@ -79,6 +79,12 @@ class PipelineConfig:
     classification outcomes using this negatives-per-positive ratio. Val and
     test splits are never downsampled. ``None`` disables downsampling."""
 
+    downsample_protect_min_ratings: int = 25
+    """Floor for protected (always-kept) negatives during downsampling.
+    Negatives with ``users_rated >= downsample_protect_min_ratings`` are
+    never sampled out — only the low-rating tail gets thinned. Set to 0
+    for uniform sampling over all negatives."""
+
 
 class CollectionPipeline:
     """End-to-end pipeline for user collection modeling.
@@ -306,6 +312,7 @@ class CollectionPipeline:
             train_df = downsample_negatives(
                 train_df,
                 ratio=self.config.downsample_negatives_ratio,
+                protect_min_ratings=self.config.downsample_protect_min_ratings,
                 random_seed=self.config.classification_split_config.random_seed,
             )
             logger.info(
@@ -321,7 +328,7 @@ class CollectionPipeline:
             classification_config=self.config.classification_model_config,
             regression_config=self.config.regression_model_config,
         )
-        pipeline_obj, best_params = model.train(train_df, val_df)
+        pipeline_obj, best_params, _ = model.tune(train_df, val_df)
 
         threshold: Optional[float] = None
         if outcome.task == "classification":

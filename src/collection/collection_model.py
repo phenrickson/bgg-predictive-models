@@ -33,6 +33,7 @@ from src.collection.outcomes import OutcomeDefinition
 from src.models.training import (
     create_preprocessing_pipeline,
     tune_model,
+    tune_model_cv,
     select_X_y,
 )
 from src.models.outcomes.hurdle import find_optimal_threshold
@@ -160,14 +161,61 @@ class CollectionModel:
 
         raise ValueError(f"Unsupported task: {self.outcome.task!r}")
 
-    def train(
+    def tune(
         self, train_df: pl.DataFrame, val_df: pl.DataFrame
-    ) -> Tuple[Pipeline, Dict[str, Any]]:
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+        """Holdout hyperparameter tuning.
+
+        Searches the model's param grid by training each candidate on
+        ``train_df`` and scoring on ``val_df``. Uses the existing patience
+        early-stopping loop in :func:`tune_model`.
+
+        Returns ``(fitted_pipeline, best_params, tuning_results)`` — the
+        results frame has one row per *evaluated* config (early-stopped
+        configs are not included), sorted best-first.
+        """
         if self.outcome.task == "classification":
-            return self._train_classification(train_df, val_df)
+            return self._tune_classification(train_df, val_df)
         if self.outcome.task == "regression":
-            return self._train_regression(train_df, val_df)
+            return self._tune_regression(train_df, val_df)
         raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+
+    def tune_cv(
+        self, train_df: pl.DataFrame, cv_folds: int = 5
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+        """K-fold cross-validation hyperparameter tuning.
+
+        Searches the full param grid by k-fold CV on ``train_df`` only.
+        Validation/test sets are not used. Slower than :meth:`tune` but
+        avoids reusing the val set for both selection and final reporting.
+
+        Returns ``(fitted_pipeline, best_params, tuning_results)``.
+        """
+        if self.outcome.task == "classification":
+            return self._tune_classification_cv(train_df, cv_folds=cv_folds)
+        if self.outcome.task == "regression":
+            return self._tune_regression_cv(train_df, cv_folds=cv_folds)
+        raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+
+    def train(
+        self,
+        train_df: pl.DataFrame,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Pipeline:
+        """Fit a pipeline on ``train_df`` with the given hyperparameters.
+
+        No tuning. ``params`` uses the same ``model__<name>`` key shape that
+        :meth:`tune` / :meth:`tune_cv` return as ``best_params``. Pass
+        ``None`` (default) to fit with the model's defaults.
+        """
+        pipeline = self.build_pipeline()
+        if params:
+            pipeline.named_steps["model"].set_params(
+                **{k.replace("model__", ""): v for k, v in params.items()}
+            )
+        X, y = self._prepare(train_df)
+        pipeline.fit(X, y)
+        return pipeline
 
     def evaluate(
         self,
@@ -193,19 +241,15 @@ class CollectionModel:
 
     # --- classification path ---
 
-    def _train_classification(
+    def _tune_classification(
         self, train_df: pl.DataFrame, val_df: pl.DataFrame
-    ) -> Tuple[Pipeline, Dict[str, Any]]:
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
         cfg = self.classification_config
         param_grid = dict(CLASSIFIER_PARAM_GRIDS[cfg.model_type])
-
         X_train, y_train = self._prepare(train_df)
         X_val, y_val = self._prepare(val_df)
-
-        pipeline = self.build_pipeline()
-
-        best_pipeline, best_params = tune_model(
-            pipeline=pipeline,
+        return tune_model(
+            pipeline=self.build_pipeline(),
             train_X=X_train,
             train_y=y_train,
             tune_X=X_val,
@@ -214,7 +258,22 @@ class CollectionModel:
             metric=cfg.tuning_metric,
             patience=cfg.patience,
         )
-        return best_pipeline, best_params
+
+    def _tune_classification_cv(
+        self, train_df: pl.DataFrame, cv_folds: int
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+        cfg = self.classification_config
+        param_grid = dict(CLASSIFIER_PARAM_GRIDS[cfg.model_type])
+        X_train, y_train = self._prepare(train_df)
+        return tune_model_cv(
+            pipeline=self.build_pipeline(),
+            X=X_train,
+            y=y_train,
+            param_grid=param_grid,
+            metric=cfg.tuning_metric,
+            cv_folds=cv_folds,
+            task="classification",
+        )
 
     def _evaluate_classification(
         self,
@@ -437,19 +496,15 @@ class CollectionModel:
 
     # --- regression path ---
 
-    def _train_regression(
+    def _tune_regression(
         self, train_df: pl.DataFrame, val_df: pl.DataFrame
-    ) -> Tuple[Pipeline, Dict[str, Any]]:
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
         cfg = self.regression_config
         param_grid = dict(REGRESSOR_PARAM_GRIDS[cfg.model_type])
-
         X_train, y_train = self._prepare(train_df)
         X_val, y_val = self._prepare(val_df)
-
-        pipeline = self.build_pipeline()
-
-        best_pipeline, best_params = tune_model(
-            pipeline=pipeline,
+        return tune_model(
+            pipeline=self.build_pipeline(),
             train_X=X_train,
             train_y=y_train,
             tune_X=X_val,
@@ -458,7 +513,22 @@ class CollectionModel:
             metric=cfg.tuning_metric,
             patience=cfg.patience,
         )
-        return best_pipeline, best_params
+
+    def _tune_regression_cv(
+        self, train_df: pl.DataFrame, cv_folds: int
+    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+        cfg = self.regression_config
+        param_grid = dict(REGRESSOR_PARAM_GRIDS[cfg.model_type])
+        X_train, y_train = self._prepare(train_df)
+        return tune_model_cv(
+            pipeline=self.build_pipeline(),
+            X=X_train,
+            y=y_train,
+            param_grid=param_grid,
+            metric=cfg.tuning_metric,
+            cv_folds=cv_folds,
+            task="regression",
+        )
 
     def _evaluate_regression(self, pipeline: Pipeline, df: pl.DataFrame) -> Dict[str, float]:
         X, y = self._prepare(df)

@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import polars as pl
 import pytest
 
@@ -139,7 +140,10 @@ def test_downsample_applied_to_train_only(patched_pipeline_env):
     10 + 20 = 30 rows (ratio * n_pos negatives). Val and test frames are
     unchanged."""
 
-    config = PipelineConfig(downsample_negatives_ratio=2.0)
+    config = PipelineConfig(
+        downsample_negatives_ratio=2.0,
+        downsample_protect_min_ratings=0,
+    )
 
     # Pre-baked splits. The train frame has 10 pos / 100 neg; val and test
     # keep the raw class distribution (big negatives count) to verify they
@@ -165,16 +169,20 @@ def test_downsample_applied_to_train_only(patched_pipeline_env):
         model_instance = MagicMock()
         captured: Dict[str, pl.DataFrame] = {}
 
-        def fake_train(td: pl.DataFrame, vd: pl.DataFrame):
+        def fake_tune(td: pl.DataFrame, vd: pl.DataFrame):
             captured["train"] = td
             captured["val"] = vd
-            return MagicMock(name="pipeline"), {"param": 1}
+            return (
+                MagicMock(name="pipeline"),
+                {"param": 1},
+                pd.DataFrame([{"params": {"param": 1}, "score": 0.5}]),
+            )
 
         def fake_evaluate(_pipeline, df, threshold=None):
             captured.setdefault("evaluated", []).append((df, threshold))
             return {"f1": 0.5}
 
-        model_instance.train.side_effect = fake_train
+        model_instance.tune.side_effect = fake_tune
         model_instance.find_threshold.return_value = 0.4
         model_instance.evaluate.side_effect = fake_evaluate
         mock_model_cls.return_value = model_instance
@@ -239,7 +247,11 @@ def test_threshold_used_in_evaluation_for_classification(patched_pipeline_env):
         "src.collection.collection_pipeline.CollectionModel"
     ) as mock_model_cls:
         model_instance = MagicMock()
-        model_instance.train.return_value = (MagicMock(name="pipeline"), {})
+        model_instance.tune.return_value = (
+            MagicMock(name="pipeline"),
+            {},
+            pd.DataFrame(),
+        )
         model_instance.find_threshold.return_value = 0.37
         model_instance.evaluate.return_value = {"f1": 0.5}
         mock_model_cls.return_value = model_instance
@@ -290,7 +302,11 @@ def test_no_threshold_passed_for_regression(patched_pipeline_env):
         "src.collection.collection_pipeline.CollectionModel"
     ) as mock_model_cls:
         model_instance = MagicMock()
-        model_instance.train.return_value = (MagicMock(name="pipeline"), {})
+        model_instance.tune.return_value = (
+            MagicMock(name="pipeline"),
+            {},
+            pd.DataFrame(),
+        )
         model_instance.evaluate.return_value = {"rmse": 1.0}
         mock_model_cls.return_value = model_instance
 
