@@ -494,6 +494,7 @@ from pathlib import Path
 
 from src.collection.candidates import (
     CollectionCandidate,
+    save_candidate_run,
     train_candidate,
     train_candidates,
 )
@@ -561,14 +562,40 @@ for c in candidates:
 
 ### Train candidates
 
-Each call: load splits, slice features, downsample, tune, threshold, eval,
-save artifacts. They write to disjoint paths (`{outcome}/{candidate}/v{N}/`)
-so they're independent.
+Pure compute — fits each candidate against the splits and returns
+results in memory. No disk writes; nothing under
+`{outcome}/{candidate}/v{N}/` yet.
 
 ```{python}
-results = train_candidates(candidates, outcomes["own"], storage)
+results = train_candidates(
+    candidates, outcomes["own"],
+    train_df=train_df, val_df=val_df, test_df=test_df,
+    username=USERNAME,
+)
 for r in results:
-    print(f"{r.candidate.name} v{r.version}: val={r.val_metrics} test={r.test_metrics}")
+    print(f"{r.candidate.name}: val={r.val_metrics} test={r.test_metrics}")
+```
+
+Each result carries the fitted pipeline and threshold, so you can
+inspect predictions without round-tripping through disk:
+
+```{python}
+r = results[0]
+val_preds = model.predict_with_labels(r.pipeline, val_df, threshold=r.threshold)
+val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
+    "proba", descending=True
+).head(10)
+```
+
+### Persist runs
+
+Decide which results to keep. Each `save_candidate_run` writes to
+`{outcome}/{candidate}/v{N}/` and bumps the candidate version.
+
+```{python}
+for r in results:
+    artifact_dir = save_candidate_run(r, storage)
+    print(f"saved {r.candidate.name} → {artifact_dir}")
 ```
 
 ### What's on disk

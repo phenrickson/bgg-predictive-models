@@ -19,7 +19,11 @@ import json
 import sys
 from typing import List, Optional
 
-from src.collection.candidates import load_candidates, train_candidate
+from src.collection.candidates import (
+    load_candidates,
+    save_candidate_run,
+    train_candidate,
+)
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.outcomes import load_outcomes
 from src.utils.config import load_config
@@ -89,16 +93,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         environment=args.environment,
     )
 
+    splits = storage.load_canonical_splits(args.outcome, version=args.splits_version)
+    if splits is None:
+        print(
+            f"No canonical splits available for outcome {args.outcome!r}. "
+            f"Run `just split outcome={args.outcome}` first.",
+            file=sys.stderr,
+        )
+        return 1
+
     result = train_candidate(
-        candidate, outcome, storage, splits_version=args.splits_version
+        candidate,
+        outcome,
+        train_df=splits["train"],
+        val_df=splits["validation"],
+        test_df=splits["test"],
+        splits_version=splits["version"],
+        username=args.username,
     )
+    artifact_dir = save_candidate_run(result, storage)
+    version = storage.latest_candidate_version(args.outcome, candidate.name)
 
     print(
         json.dumps(
             {
                 "candidate": candidate.name,
                 "outcome": args.outcome,
-                "version": result.version,
+                "version": version,
                 "splits_version": result.splits_version,
                 "threshold": result.threshold,
                 "val_metrics": result.val_metrics,
@@ -106,7 +127,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "n_train": result.train_n,
                 "n_val": result.val_n,
                 "n_test": result.test_n,
-                "artifact_dir": result.artifact_dir,
+                "artifact_dir": artifact_dir,
             }
         )
     )

@@ -194,55 +194,49 @@ def load_candidates(config: Dict[str, Any]) -> Dict[str, CollectionCandidate]:
 
 @dataclass
 class CandidateRunResult:
-    """Pointer to a persisted candidate run plus the in-memory artifacts."""
+    """In-memory artifacts from training one candidate. Pure result —
+    nothing has been persisted yet. Pass to :func:`save_candidate_run` to
+    write to disk."""
 
     candidate: CollectionCandidate
     outcome: OutcomeDefinition
-    version: int
-    splits_version: int
+    pipeline: Any  # sklearn Pipeline; typed Any to avoid sklearn import
     threshold: Optional[float]
     best_params: Dict[str, Any]
     val_metrics: Dict[str, float]
     test_metrics: Dict[str, float]
+    train_used: pl.DataFrame  # the (possibly downsampled / feature-sliced) train frame
     train_n: int
     val_n: int
     test_n: int
-    artifact_dir: str
+    splits_version: Optional[int] = None
+    tuning_results: Optional[pl.DataFrame] = None
 
 
 def train_candidate(
     candidate: CollectionCandidate,
     outcome: OutcomeDefinition,
-    storage: CollectionArtifactStorage,
+    train_df: pl.DataFrame,
+    val_df: pl.DataFrame,
+    test_df: pl.DataFrame,
     splits_version: Optional[int] = None,
+    username: str = "unknown",
     protected_columns: Sequence[str] = PROTECTED_COLUMNS,
 ) -> CandidateRunResult:
-    """Train one candidate and persist its artifacts.
+    """Train one candidate. Pure compute — does not persist anything.
 
-    Loads the canonical splits at ``{outcome}/_splits/v{splits_version}/``
-    (latest if ``splits_version=None``), applies the candidate's feature
-    slicing and training-set downsampling, runs the configured tuning
-    strategy, picks a classification threshold on val, evaluates on val
-    and test, and writes all artifacts under
-    ``{outcome}/{candidate.name}/v{N}/``.
+    Applies the candidate's feature slicing and training-set downsampling
+    to the provided splits, runs the configured tuning strategy, picks a
+    classification threshold on val, evaluates on val and test, and
+    returns a :class:`CandidateRunResult` carrying the fitted pipeline
+    and metrics in memory. Pass the result to :func:`save_candidate_run`
+    to write artifacts.
 
     Raises:
-        ValueError: If splits cannot be loaded, the candidate's config does
-            not match the outcome's task, or requested feature columns are
-            missing from the splits.
+        ValueError: If the candidate's config does not match the outcome's
+            task, or requested feature columns are missing from the splits.
     """
     _validate_candidate_for_outcome(candidate, outcome)
-
-    splits = storage.load_canonical_splits(outcome.name, version=splits_version)
-    if splits is None:
-        raise ValueError(
-            f"No canonical splits available for outcome {outcome.name!r}. "
-            f"Persist them with storage.save_canonical_splits(...) first."
-        )
-    splits_version_used: int = splits["version"]
-    train_df: pl.DataFrame = splits["train"]
-    val_df: pl.DataFrame = splits["validation"]
-    test_df: pl.DataFrame = splits["test"]
 
     if candidate.feature_columns is not None:
         keep = _resolve_feature_columns(
@@ -266,7 +260,7 @@ def train_candidate(
         )
 
     model = CollectionModel(
-        username=storage.username,
+        username=username,
         outcome=outcome,
         classification_config=candidate.classification_config,
         regression_config=candidate.regression_config,
@@ -283,71 +277,85 @@ def train_candidate(
     val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
     test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
 
-    registration: Dict[str, Any] = {
-        "task": outcome.task,
-        "outcome_name": outcome.name,
-        "candidate_spec": candidate.to_dict(),
-        "splits_version": splits_version_used,
-        "tuning_strategy": candidate.tuning,
-        "best_params": best_params,
-        "metrics": test_metrics,
-        "val_metrics": val_metrics,
-        "n_train_used": int(train_used.height),
-        "n_train_canonical": int(train_df.height),
-        "n_val": int(val_df.height),
-        "n_test": int(test_df.height),
-        "git_sha": _git_sha(),
-        "trained_at": datetime.now().isoformat(),
-    }
-
     tuning_results_pl: Optional[pl.DataFrame] = None
     if tuning_results is not None and len(tuning_results) > 0:
         tuning_results_pl = _coerce_tuning_results(tuning_results)
 
-    artifact_dir = storage.save_candidate_run(
-        outcome=outcome.name,
-        candidate=candidate.name,
-        pipeline=pipeline_obj,
-        registration=registration,
-        tuning_results=tuning_results_pl,
-        train_used=train_used,
-        threshold=threshold,
-    )
-
-    version = storage.latest_candidate_version(outcome.name, candidate.name)
-    assert version is not None  # we just wrote it
-
     return CandidateRunResult(
         candidate=candidate,
         outcome=outcome,
-        version=version,
-        splits_version=splits_version_used,
+        pipeline=pipeline_obj,
         threshold=threshold,
         best_params=best_params,
         val_metrics=val_metrics,
         test_metrics=test_metrics,
+        train_used=train_used,
         train_n=train_used.height,
         val_n=val_df.height,
         test_n=test_df.height,
-        artifact_dir=artifact_dir,
+        splits_version=splits_version,
+        tuning_results=tuning_results_pl,
     )
 
 
 def train_candidates(
     candidates: Sequence[CollectionCandidate],
     outcome: OutcomeDefinition,
-    storage: CollectionArtifactStorage,
+    train_df: pl.DataFrame,
+    val_df: pl.DataFrame,
+    test_df: pl.DataFrame,
     splits_version: Optional[int] = None,
+    username: str = "unknown",
 ) -> List[CandidateRunResult]:
-    """Train each candidate sequentially and return all results.
+    """Train each candidate sequentially. No persistence; no error handling.
 
-    No error handling — if one candidate raises, the rest don't run.
-    Use a CLI-level loop if you need continue-on-error semantics.
+    If one candidate raises, the rest don't run. Use a CLI-level loop if
+    you need continue-on-error semantics.
     """
     return [
-        train_candidate(c, outcome, storage, splits_version=splits_version)
+        train_candidate(
+            c, outcome, train_df, val_df, test_df,
+            splits_version=splits_version, username=username,
+        )
         for c in candidates
     ]
+
+
+def save_candidate_run(
+    result: CandidateRunResult,
+    storage: CollectionArtifactStorage,
+) -> str:
+    """Persist a :class:`CandidateRunResult` under
+    ``{outcome}/{candidate.name}/v{N}/`` via ``storage``. Returns the
+    artifact directory path.
+
+    Stamps the registration with the storage user, current git SHA, and
+    timestamp at save time.
+    """
+    registration: Dict[str, Any] = {
+        "task": result.outcome.task,
+        "outcome_name": result.outcome.name,
+        "candidate_spec": result.candidate.to_dict(),
+        "splits_version": result.splits_version,
+        "tuning_strategy": result.candidate.tuning,
+        "best_params": result.best_params,
+        "metrics": result.test_metrics,
+        "val_metrics": result.val_metrics,
+        "n_train_used": int(result.train_n),
+        "n_val": int(result.val_n),
+        "n_test": int(result.test_n),
+        "git_sha": _git_sha(),
+        "trained_at": datetime.now().isoformat(),
+    }
+    return storage.save_candidate_run(
+        outcome=result.outcome.name,
+        candidate=result.candidate.name,
+        pipeline=result.pipeline,
+        registration=registration,
+        tuning_results=result.tuning_results,
+        train_used=result.train_used,
+        threshold=result.threshold,
+    )
 
 
 def _validate_candidate_for_outcome(
