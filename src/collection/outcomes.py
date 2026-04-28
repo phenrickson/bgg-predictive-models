@@ -124,25 +124,44 @@ def _apply_require(df: pl.DataFrame, require: str) -> pl.DataFrame:
     return df.filter(_OPS[operator](pl.col(column), value))
 
 
-def _apply_label_rule(df: pl.DataFrame, rule: LabelRule) -> pl.DataFrame:
-    """Add a 'label' column from the given rule."""
+def _apply_label_rule(df: pl.DataFrame, rule: LabelRule, task: str) -> pl.DataFrame:
+    """Add a 'label' column from the given rule.
+
+    For classification outcomes, null in the source column is coerced to
+    ``False`` — a game absent from the user's collection-joined frame
+    (left-join → null) means the user has no relationship with it, which
+    is a negative for outcomes like ``own`` / ``rated`` / ``love``.
+
+    For regression outcomes, nulls are preserved. The caller is expected
+    to use the outcome's ``require`` filter (e.g. ``user_rating > 0``)
+    to drop those rows.
+    """
     if isinstance(rule, DirectColumnRule):
-        return df.with_columns(pl.col(rule.column).alias("label"))
+        col = pl.col(rule.column)
+        if task == "classification":
+            col = col.fill_null(False).cast(pl.Boolean)
+        return df.with_columns(col.alias("label"))
     if isinstance(rule, AnyOfRule):
-        expr = pl.col(rule.columns[0]).cast(pl.Boolean)
+        # AnyOfRule is classification-only by construction (boolean OR).
+        expr = pl.col(rule.columns[0]).fill_null(False).cast(pl.Boolean)
         for c in rule.columns[1:]:
-            expr = expr | pl.col(c).cast(pl.Boolean)
+            expr = expr | pl.col(c).fill_null(False).cast(pl.Boolean)
         return df.with_columns(expr.alias("label"))
     if isinstance(rule, PredicateRule):
-        return df.with_columns(_OPS[rule.operator](pl.col(rule.column), rule.value).alias("label"))
+        expr = _OPS[rule.operator](pl.col(rule.column), rule.value)
+        if task == "classification":
+            expr = expr.fill_null(False)
+        return df.with_columns(expr.alias("label"))
     raise TypeError(f"Unknown rule type: {type(rule)!r}")
 
 
 def apply_outcome(df: pl.DataFrame, outcome: OutcomeDefinition) -> pl.DataFrame:
     """Apply the outcome's require filter (if any), then add a label column.
 
-    Nulls in source columns propagate into the label column (polars three-valued
-    logic). Callers training on the result should drop null-label rows first.
+    Classification labels treat null source columns as ``False`` (e.g. a
+    game absent from the user's collection-joined frame is "not owned").
+    Regression labels keep nulls; pair regression outcomes with a
+    ``require`` filter to drop them.
     """
     filtered = df if outcome.require is None else _apply_require(df, outcome.require)
-    return _apply_label_rule(filtered, outcome.label_rule)
+    return _apply_label_rule(filtered, outcome.label_rule, outcome.task)

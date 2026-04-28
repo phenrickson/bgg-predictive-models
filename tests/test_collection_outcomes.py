@@ -150,3 +150,49 @@ def test_apply_outcome_love_predicate_with_require():
     # require drops rows 2 and 5; love is user_rating >= 8
     assert out["game_id"].to_list() == [1, 3, 4]
     assert out["label"].to_list() == [True, True, False]
+
+
+def _join_fixture_df() -> pl.DataFrame:
+    """Universe ⟕ collection: rows 4 and 5 have no collection match
+    (left-join nulls in owned / prev_owned / user_rating)."""
+    return pl.DataFrame({
+        "game_id": [1, 2, 3, 4, 5],
+        "owned": [True, False, False, None, None],
+        "prev_owned": [False, True, False, None, None],
+        "user_rating": [8.0, 0.0, 9.5, None, None],
+    })
+
+
+def test_classification_direct_column_treats_null_as_false():
+    """Games not in the user's collection (left-join → null on `owned`)
+    must be treated as not owned, not as null."""
+    outcomes = load_outcomes(SAMPLE_CONFIG)
+    out = apply_outcome(_join_fixture_df(), outcomes["own"])
+    assert out["label"].to_list() == [True, False, False, False, False]
+    assert out["label"].null_count() == 0
+
+
+def test_classification_any_of_treats_null_as_false():
+    outcomes = load_outcomes(SAMPLE_CONFIG)
+    out = apply_outcome(_join_fixture_df(), outcomes["ever_owned"])
+    assert out["label"].to_list() == [True, True, False, False, False]
+    assert out["label"].null_count() == 0
+
+
+def test_classification_predicate_treats_null_as_false():
+    """`user_rating > 0` on a left-joined row with null user_rating →
+    False, not null."""
+    outcomes = load_outcomes(SAMPLE_CONFIG)
+    out = apply_outcome(_join_fixture_df(), outcomes["rated"])
+    assert out["label"].to_list() == [True, False, True, False, False]
+    assert out["label"].null_count() == 0
+
+
+def test_regression_require_drops_null_rows():
+    """Regression outcomes don't fill nulls in the label column. The
+    `require: user_rating > 0` filter drops them upstream."""
+    outcomes = load_outcomes(SAMPLE_CONFIG)
+    out = apply_outcome(_join_fixture_df(), outcomes["rating"])
+    # rows 2, 4, 5 dropped (rating == 0 or null)
+    assert out["game_id"].to_list() == [1, 3]
+    assert out["label"].to_list() == [8.0, 9.5]
