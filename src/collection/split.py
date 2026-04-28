@@ -19,9 +19,8 @@ from typing import List, Optional
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.collection_processor import CollectionProcessor
 from src.collection.collection_split import (
-    ClassificationSplitConfig,
     CollectionSplitter,
-    RegressionSplitConfig,
+    load_split_configs,
 )
 from src.collection.outcomes import apply_outcome, load_outcomes
 from src.data.loader import BGGDataLoader
@@ -97,9 +96,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     joined = universe_df.join(processed, on="game_id", how="left")
     labeled = apply_outcome(joined, outcome)
 
+    classification_split, regression_split = load_split_configs(project_config.raw_config)
     splitter = CollectionSplitter(
-        classification_config=ClassificationSplitConfig(),
-        regression_config=RegressionSplitConfig(),
+        classification_config=classification_split,
+        regression_config=regression_split,
     )
     train_df, val_df, test_df = splitter.split(labeled, outcome)
 

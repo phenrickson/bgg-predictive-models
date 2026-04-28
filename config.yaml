@@ -156,11 +156,23 @@ collections:
     bucket_name: bgg-predictive-models
     base_prefix: collections
   split:
-    negative_sampling_ratio: 5.0
-    negative_sampling_strategy: popularity_weighted  # random, popularity_weighted, uniform
-    min_ratings_for_negatives: 50
-    validation_ratio: 0.15
-    test_ratio: 0.15
+    # Classification splitting. Mirrors ClassificationSplitConfig.
+    # split_mode: stratified_random | time_based
+    classification:
+      split_mode: time_based
+      train_through: 2022       # last year (inclusive) in training
+      prediction_window: 2      # validation window in years (val = 2023-2024)
+      test_window: 1            # test window in years (test = 2025)
+      time_column: year_published
+      random_seed: 1999
+      # stratified_random fallback ratios — used only when split_mode=stratified_random
+      validation_ratio: 0.15
+      test_ratio: 0.15
+    # Regression splitting. Mirrors RegressionSplitConfig (random shuffle).
+    regression:
+      validation_ratio: 0.15
+      test_ratio: 0.15
+      random_seed: 42
   model:
     type: lightgbm
     use_sample_weights: false
@@ -192,45 +204,31 @@ collections:
       require: "user_rating > 0"
   candidates:
     - name: logistic_default
-      tuning: cv
-      cv_folds: 5
-      downsample_negatives_ratio: 50
+      tuning: holdout
+      downsample_negatives_ratio: 500
       downsample_protect_min_ratings: 25
-      notes: "Logistic regression baseline, CV-tuned"
+      notes: "Logistic regression baseline, holdout-tuned against time-based val"
       classification_config:
         model_type: logistic
         tuning_metric: log_loss
         threshold_optimization_metric: f2
+        preprocessor_kwargs:
+          preserve_columns:
+            - year_published
+            - predicted_complexity
     - name: lgbm_default
-      tuning: cv
-      cv_folds: 5
-      downsample_negatives_ratio: 50
+      tuning: holdout
+      downsample_negatives_ratio: 500
       downsample_protect_min_ratings: 25
-      notes: "LightGBM baseline, CV-tuned"
+      notes: "LightGBM baseline, holdout-tuned against time-based val"
       classification_config:
         model_type: lightgbm
         tuning_metric: log_loss
         threshold_optimization_metric: f2
-    - name: lgbm_no_year
-      tuning: cv
-      cv_folds: 5
-      downsample_negatives_ratio: 50
-      downsample_protect_min_ratings: 25
-      notes: "LightGBM with year_published excluded as a feature"
-      classification_config:
-        model_type: lightgbm
-        tuning_metric: log_loss
-        threshold_optimization_metric: f2
-      feature_columns:
-        - users_rated
-        - average_rating
-        - bayesaverage
-        - num_weights
-        - average_weight
-        - min_players
-        - max_players
-        - min_age
-        - playing_time
+        preprocessor_kwargs:
+          preserve_columns:
+            - year_published
+            - predicted_complexity
 
 # Scoring Configuration
 scoring:

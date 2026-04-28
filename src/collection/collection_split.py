@@ -20,8 +20,8 @@ class balancing is a training-time concern (see :func:`downsample_negatives`).
 """
 
 import logging
-from dataclasses import dataclass
-from typing import Literal, Optional, Tuple
+from dataclasses import dataclass, fields
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import polars as pl
 
@@ -67,6 +67,31 @@ class RegressionSplitConfig:
     validation_ratio: float = 0.15
     test_ratio: float = 0.15
     random_seed: int = 42
+
+
+def _coerce(cls, data: Optional[Dict[str, Any]]):
+    """Build ``cls`` from a YAML-loaded dict. Unknown keys are ignored so
+    the config can carry stratified-random fallback ratios on a time-based
+    config (and vice versa) without erroring."""
+    if not data:
+        return cls()
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
+
+
+def load_split_configs(
+    config: Dict[str, Any],
+) -> Tuple[ClassificationSplitConfig, RegressionSplitConfig]:
+    """Read ``collections.split`` from a YAML config and return a
+    ``(ClassificationSplitConfig, RegressionSplitConfig)`` pair.
+
+    Falls back to dataclass defaults when sections are missing.
+    """
+    section = (config.get("collections") or {}).get("split") or {}
+    return (
+        _coerce(ClassificationSplitConfig, section.get("classification")),
+        _coerce(RegressionSplitConfig, section.get("regression")),
+    )
 
 
 SplitTriple = Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]
