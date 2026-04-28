@@ -351,7 +351,7 @@ X_transformed_df.head()
 
 Training already happened above; evaluate on validation and test.
 
-Classification models pick a decision threshold on val (optimizing the configured metric, e.g. F2) and then use that same threshold to report test metrics. Evaluating at 0.5 on an imbalanced problem collapses precision/recall/F1 to \~0 even when the probability ranking is fine (AUC / PR-AUC stay sensible) — always pass the optimized threshold.
+Classification models pick a decision threshold on val (optimizing the configured metric, e.g. F2) and then use that same threshold to report test metrics. `find_threshold(val_df)` stashes the optimized cutoff on `model.threshold`; subsequent `evaluate` / `predict_with_labels` / `evaluate_stratified` calls use it automatically. Skip `find_threshold` and the model falls back to 0.5 — which collapses precision/recall/F1 to \~0 on imbalanced problems even when the probability ranking is fine (AUC / PR-AUC stay sensible).
 
 ```{python}
 model.find_threshold(val_df)
@@ -405,8 +405,9 @@ print(test_stratified.round(4))
 The single `model.tune(...)` flow above is great when you've decided on one model. For *experimenting* — comparing logistic vs lightgbm, or lightgbm with different feature subsets — there's a separate flow built around three pieces:
 
 -   **`CollectionCandidate`** — a named experiment spec (model type, tuning strategy, optional feature subset, optional fixed params).
--   **`train_candidate(...)`** — runs one candidate end-to-end and persists every artifact under `{outcome}/{candidate}/v{N}/` via `CollectionArtifactStorage`.
--   **`compare_runs(...)`** — pure read over what's on disk; never trains.
+-   **`train_candidate(...)`** / **`train_candidates(...)`** — pure compute. Fit one or many candidates against the splits and return `CandidateRunResult`s in memory. No disk writes.
+-   **`save_candidate_run(...)`** — persist a result under `{outcome}/{candidate}/v{N}/` via `CollectionArtifactStorage`. Decoupled from training so you can decide which results are worth keeping.
+-   **`compare_runs(...)`** / **`summarize_runs(...)`** — pure reads over what's on disk; never train.
 
 Comparison must happen over the **same val/test splits**, so `save_canonical_splits` writes them to `{outcome}/_splits/v{N}/` and each candidate run records the splits version it consumed.
 
@@ -423,6 +424,7 @@ from src.collection.candidates import (
 from src.collection.candidate_comparison import (
     load_candidate_runs,
     compare_runs,
+    summarize_runs,
 )
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 
@@ -549,21 +551,19 @@ for r in runs:
     )
 ```
 
-`compare_runs` returns a tall polars frame:
+`summarize_runs` is the at-a-glance view: one row per `(candidate, split)`, one column per metric, no metadata clutter.
+
+```{python}
+summarize_runs(runs)
+```
+
+`compare_runs` returns the same data in long form — useful when you want to filter to a single metric, join in metadata, or aggregate.
 
 ```{python}
 comparison_df = compare_runs(runs)
-comparison_df
-```
-
-Pivot to a wide view if you want to eyeball metric × split per candidate:
-
-```{python}
-comparison_df.pivot(
-    values="value",
-    index=["candidate", "version"],
-    on=["split", "metric"],
-).sort("candidate")
+comparison_df.filter(pl.col("split") == "test").select(
+    "candidate", "metric", "value"
+)
 ```
 
 ### Stratified comparison across candidates
