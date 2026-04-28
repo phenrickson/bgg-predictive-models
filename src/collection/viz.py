@@ -43,14 +43,18 @@ FEATURE_GROUPS: dict[str, str] = {
 }
 
 
-# Prefixes that should be stripped from raw feature names regardless of
-# whether they map to a display group. Includes FEATURE_GROUPS keys plus
-# preprocessor-generated families that the model trains on but don't get
-# their own facet (missingindicator, player_count).
-_STRIP_PREFIXES: tuple[str, ...] = tuple(FEATURE_GROUPS.keys()) + (
-    "missingindicator_",
-    "player_count_",
-)
+# Plain prefixes whose values are descriptive on their own (e.g.
+# ``designer_uwe_rosenberg`` -> ``Uwe Rosenberg``). Just strip and humanize.
+_STRIP_PREFIXES: tuple[str, ...] = tuple(FEATURE_GROUPS.keys())
+
+# Prefixes whose values would be ambiguous after stripping. Keep a short
+# tag so the feature is still identifiable (and doesn't collide with a
+# non-prefixed feature of the same name, e.g. ``min_age`` vs.
+# ``missingindicator_min_age``).
+_RELABEL_PREFIXES: dict[str, str] = {
+    "missingindicator_": "Missing",  # "Missing: Min Age"
+    "player_count_": "Players",       # "Players: 6"
+}
 
 
 # --- Public API ---
@@ -67,15 +71,30 @@ def feature_group(feature_name: str) -> str:
 
 def tidy_feature_name(name: str, max_len: int = 40) -> str:
     """Strip the feature-family prefix, swap underscores for spaces,
-    title-case, and truncate to ``max_len`` (with an ellipsis)."""
-    for p in _STRIP_PREFIXES:
+    title-case, and truncate to ``max_len`` (with an ellipsis).
+
+    Prefixes whose values are ambiguous on their own (``missingindicator_``,
+    ``player_count_``) get a short tag so the feature stays identifiable
+    (e.g. ``player_count_6`` -> ``Players: 6``).
+    """
+    relabel: Optional[str] = None
+    for p, tag in _RELABEL_PREFIXES.items():
         if name.startswith(p):
             name = name[len(p):]
+            relabel = tag
             break
+    else:
+        for p in _STRIP_PREFIXES:
+            if name.startswith(p):
+                name = name[len(p):]
+                break
     name = name.replace("_", " ").strip()
-    if len(name) > max_len:
-        name = name[: max_len - 3] + "..."
-    return name.title() if name else name
+    body = name.title() if name else name
+    if relabel is not None and body:
+        body = f"{relabel}: {body}"
+    if len(body) > max_len:
+        body = body[: max_len - 3] + "..."
+    return body
 
 
 def plot_feature_importance(
