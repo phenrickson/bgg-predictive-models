@@ -150,3 +150,30 @@ def compare_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
             }
         )
     return pl.DataFrame(rows)
+
+
+def summarize_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
+    """Wide, metric-focused view of the selected run per candidate.
+
+    Two rows per candidate (val + test), one column per metric, no metadata
+    clutter. Use this for at-a-glance candidate comparison; use
+    :func:`compare_runs` when you need the long-form view (filtering by
+    metric, joining metadata, etc.).
+
+    Args:
+        runs: Output of :func:`load_candidate_runs`.
+
+    Returns:
+        Polars DataFrame with one row per ``(candidate, split)``, sorted by
+        candidate then split (val before test). Empty frame with just
+        ``candidate`` and ``split`` columns if ``runs`` is empty.
+    """
+    tall = compare_runs(runs)
+    if tall.height == 0:
+        return pl.DataFrame(schema={"candidate": pl.Utf8, "split": pl.Utf8})
+
+    wide = tall.pivot(values="value", index=["candidate", "split"], on="metric")
+    return wide.sort(
+        ["candidate", "split"],
+        descending=[False, True],  # val before test alphabetically
+    )
