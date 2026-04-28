@@ -120,24 +120,21 @@ if reloaded is not None:
 
 ## 3. Process + split the collection
 
-Run the full data-prep chain: process → apply_outcome → split. Start with the `own` outcome as the concrete example. The processor canonicalizes BGG column names (e.g. `previously_owned` → `prev_owned`) and joins with the game universe.
+Data flow: **collection = labels, universe = features.** We load each separately, join (universe ⟕ collection by `game_id`) so every game gets the user's status if any, apply the outcome's labeling rule, then split.
+
+### Load the user's collection
+
+The processor reads the stored collection and normalizes column names (e.g. `previously_owned` → `prev_owned`). It does **not** join features — that happens after the universe is loaded.
 
 ```{python}
 from src.utils.config import load_config
-from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
+from src.collection.collection_processor import CollectionProcessor
 from src.collection.outcomes import load_outcomes, apply_outcome
 
 project_config = load_config()
 bq_config = project_config.get_bigquery_config()
 
-processor = CollectionProcessor(
-    config=bq_config,
-    environment="dev",
-    processor_config=ProcessorConfig(
-        use_predicted_complexity=True,
-        use_embeddings=False,
-    ),
-)
+processor = CollectionProcessor(config=bq_config, environment="dev")
 processed = processor.process(USERNAME)
 print(f"processed: {processed.height} rows, {len(processed.columns)} columns")
 print(f"has prev_owned: {'prev_owned' in processed.columns}")
@@ -152,29 +149,9 @@ for name, outcome in outcomes.items():
     print(f"{name}: task={outcome.task}, rule={type(outcome.label_rule).__name__}, require={outcome.require}")
 ```
 
-Apply one outcome — `own` — to get a labeled dataframe:
+### Load the game universe (features)
 
 ```{python}
-labeled_own = apply_outcome(processed, outcomes["own"])
-print(f"labeled rows: {labeled_own.height}")
-print(f"positives (label=True): {labeled_own.filter(pl.col('label') == True).height}")
-print(f"negatives (label=False): {labeled_own.filter(pl.col('label') == False).height}")
-```
-
-### Load the game universe and create a splitter
-
-Join with universe of BGG games
-
-```{python}
-from src.collection.collection_split import (
-    CollectionSplitter,
-    ClassificationSplitConfig,
-    RegressionSplitConfig,
-)
-
-# Load the universe via BGGDataLoader. Pass the same enrichment flags
-# we used for the user's processed collection so the schemas match on
-# both sides of the split.
 from src.data.loader import BGGDataLoader
 
 universe_loader = BGGDataLoader(bq_config)
@@ -185,21 +162,37 @@ universe_df = universe_loader.load_features(
 print(f"universe: {universe_df.height} games, {len(universe_df.columns)} columns")
 ```
 
-Use the collection splitter
+### Join, label, split
+
+Universe ⟕ collection by `game_id`: every universe game gets the user's status if any. Then apply the `own` outcome to derive `label`. Games the user owns → True; everything else → False (or null for outcomes with a `require` filter).
 
 ```{python}
+joined = universe_df.join(processed, on="game_id", how="left")
+labeled_own = apply_outcome(joined, outcomes["own"])
+print(f"labeled rows: {labeled_own.height}")
+print(f"positives (label=True): {labeled_own.filter(pl.col('label') == True).height}")
+print(f"negatives (label=False): {labeled_own.filter(pl.col('label') == False).height}")
+```
+
+The splitter takes that labeled feature frame and splits it.
+
+```{python}
+from src.collection.collection_split import (
+    CollectionSplitter,
+    ClassificationSplitConfig,
+    RegressionSplitConfig,
+)
+
 # Time-based split: train on everything through 2022, validate on
 # 2023-2024, test on 2025. Anything 2026+ is "upcoming" and gets scored
 # separately from score_universe.
 time_splitter = CollectionSplitter(
-    universe_df=universe_df,
     classification_config=ClassificationSplitConfig(
         split_mode="time_based",
         train_through=2022,
         prediction_window=2,  # val = 2023-2024
         test_window=1,  # test = 2025
         random_seed=1999,
-        min_ratings_for_negatives=0,
     ),
     regression_config=RegressionSplitConfig(random_seed=42),
 )
@@ -221,10 +214,7 @@ def describe_splits(train_df, val_df, test_df, *, label_column: str = "label") -
         print(", ".join(parts))
 
 
-# use splitter
 train_df, val_df, test_df = time_splitter.split(labeled_own, outcomes["own"])
-
-# describe splits
 describe_splits(train_df, val_df, test_df)
 ```
 
