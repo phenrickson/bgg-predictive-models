@@ -221,6 +221,23 @@ collections:
           preserve_columns:
             - year_published
             - predicted_complexity
+    - name: logistic_row_norm
+      tuning: holdout
+      downsample_negatives_ratio: 500
+      downsample_protect_min_ratings: 25
+      notes: "Logistic with row-wise L2 normalization on mechanic/category/family blocks"
+      classification_config:
+        model_type: logistic
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+        preprocessor_kwargs:
+          preserve_columns:
+            - year_published
+            - predicted_complexity
+          normalize_row_families:
+            - mechanics
+            - categories
+            - families
     - name: lgbm_default
       tuning: holdout
       downsample_negatives_ratio: 500
@@ -234,6 +251,23 @@ collections:
           preserve_columns:
             - year_published
             - predicted_complexity
+    - name: lgbm_row_norm
+      tuning: holdout
+      downsample_negatives_ratio: 500
+      downsample_protect_min_ratings: 25
+      notes: "LightGBM with row-wise L2 normalization on mechanic/category/family blocks"
+      classification_config:
+        model_type: lightgbm
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+        preprocessor_kwargs:
+          preserve_columns:
+            - year_published
+            - predicted_complexity
+          normalize_row_families:
+            - mechanics
+            - categories
+            - families
 
 # Scoring Configuration
 scoring:

@@ -25,7 +25,8 @@ Run cells top-to-bottom. Set `USERNAME` below to the BGG user you want to walk t
 
 ```{python}
 #| tags: [setup]
-USERNAME = "phenrickson"
+USERNAME = "GOBBluth89"
+# USERNAME = "phenrickson"
 # USERNAME = "TomBrewstErr"
 print(f"username: {USERNAME}")
 ```
@@ -714,7 +715,9 @@ top_games_by_rank(results, train_df, n=25, exclude_game_ids=owned_ids).select(
 ```
 
 ```{python}
-top_games_by_rank(results, val_df.filter(pl.col("name")!= "Bah! Humbug! and the 12 Games of Christmas"), n=25).select(pl.col("rank"), cs.starts_with("name_"))
+top_games_by_rank(results, val_df, n=25).select(pl.col("rank"), cs.starts_with("name_"))
+
+
 ```
 
 ```{python}
@@ -722,7 +725,7 @@ top_games_by_rank(results, test_df, n=25).select(pl.col("rank"), cs.starts_with(
 ```
 
 ```{python}
-top_games_by_rank(results, upcoming.filter(pl.col("name")!='Market Fortune'), n=25).select(pl.col("rank"), cs.starts_with("name_")).to_pandas().style.hide()
+top_games_by_rank(results, upcoming, n=25).select(pl.col("rank"), cs.starts_with("name_")).to_pandas().style.hide()
 ```
 
 
