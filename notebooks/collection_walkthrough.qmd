@@ -262,8 +262,10 @@ print(unfit_pipeline)
 # Optional: downsample training-set negatives to 5 per positive for class balance.
 # Only touch the training frame — val and test keep the real class distribution
 # so tuning and evaluation stay honest.
-downsample_ratio = 250
-train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=250)
+downsample_ratio = 100
+train_down = downsample_negatives(
+    train_df, protect_min_ratings=25, ratio=downsample_ratio
+)
 
 print(
     f"train before: {train_df.height} rows "
@@ -448,6 +450,11 @@ COMMON_PREPROCESSOR_KWARGS = {
     "preserve_columns": ["year_published", "predicted_complexity"],
 }
 
+ROW_NORM_PREPROCESSOR_KWARGS = {
+    **COMMON_PREPROCESSOR_KWARGS,
+    "normalize_row_families": ["mechanics", "categories", "families"],
+}
+
 candidates = [
     CollectionCandidate(
         name="logistic_default",
@@ -460,11 +467,31 @@ candidates = [
         downsample_negatives_ratio=downsample_ratio,
     ),
     CollectionCandidate(
+        name="logistic_row_norm",
+        classification_config=ClassificationModelConfig(
+            model_type="logistic",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=ROW_NORM_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+    CollectionCandidate(
         name="lgbm_default",
         classification_config=ClassificationModelConfig(
             model_type="lightgbm",
             tuning_metric="log_loss",
             preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+    CollectionCandidate(
+        name="lgbm_row_norm",
+        classification_config=ClassificationModelConfig(
+            model_type="lightgbm",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=ROW_NORM_PREPROCESSOR_KWARGS,
         ),
         tuning="holdout",
         downsample_negatives_ratio=downsample_ratio,
@@ -581,6 +608,7 @@ stratified_df.select([
 Pull feature importances (for tree models) or coefficients (for logistic) out of the trained pipeline, aligned with the preprocessor's output feature names.
 
 ```{python}
+model = results[1].model
 importance = model.feature_importance()
 importance.head(20)
 ```
@@ -606,17 +634,19 @@ Filter to a single feature family (designers, publishers, mechanics, etc.) and s
 plot_feature_importance(importance, group="Publishers", top_pos=20, top_neg=15)
 ```
 
-### Faceted across groups
-
-One panel per group, shared color scale.
 
 ```{python}
-plot_feature_importance_grid(
-    importance,
-    groups=["Designers", "Publishers", "Mechanics", "Categories"],
-    top_pos=12,
-    top_neg=12,
-)
+plot_feature_importance(importance, group="Designers", top_pos=20, top_neg=15)
+```
+
+
+```{python}
+plot_feature_importance(importance, group="Artists", top_pos=20, top_neg=15)
+```
+
+
+```{python}
+plot_feature_importance(importance, group="Mechanics", top_pos=20, top_neg=15)
 ```
 
 ------------------------------------------------------------------------
@@ -674,23 +704,40 @@ Two complementary views of model agreement:
 -   **`compare_top_games`** — pick a single ranking (mean score by default, or a specific candidate via `rank_by`) and surface every model's score for those rows. Best for "given this ordering, where do models agree?"
 
 ```{python}
+# Option A: explicit reload
 from src.collection.candidate_comparison import compare_top_games, top_games_by_rank
+import polars.selectors as cs
 
-top_games_by_rank(results, train_df, n=25)
+top_games_by_rank(results, train_df, n=25, exclude_game_ids=owned_ids).select(
+    pl.col("rank"), cs.starts_with("name_")
+)
 ```
 
 ```{python}
-compare_top_games(results, val_df, n=25)
+top_games_by_rank(results, val_df.filter(pl.col("name")!= "Bah! Humbug! and the 12 Games of Christmas"), n=25).select(pl.col("rank"), cs.starts_with("name_"))
 ```
 
 ```{python}
-compare_top_games(results, test_df, n=25)
+top_games_by_rank(results, test_df, n=25).select(pl.col("rank"), cs.starts_with("name_"))
 ```
 
 ```{python}
-compare_top_games(results, upcoming, n=25, exclude_game_ids=owned_ids)
+top_games_by_rank(results, upcoming.filter(pl.col("name")!='Market Fortune'), n=25).select(pl.col("rank"), cs.starts_with("name_")).to_pandas().style.hide()
 ```
 
+
+Model importance form lightgbm
+
+```{python}
+lgb_importance = results[2].model.feature_importance()
+plot_feature_importance(lgb_importance, top_pos=30)
+
+```
+
+```{python}
+
+plot_feature_importance(lgb_importance, group="Designers")
+```
 ## Next
 
 Once the checklist is green, hook the same steps into `CollectionPipeline.run_full_pipeline` and make sure the CLI round-trip (`make train-collection USERNAME=... OUTCOME=own`) matches what we see here.

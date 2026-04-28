@@ -639,10 +639,9 @@ class CollectionModel:
 
         scored = df.with_columns(pl.Series("score", score))
 
-        if exclude_game_ids is not None:
-            excluded = list(set(exclude_game_ids))
-            if excluded and "game_id" in scored.columns:
-                scored = scored.filter(~pl.col("game_id").is_in(excluded))
+        if exclude_game_ids is not None and "game_id" in scored.columns:
+            excl_df = pl.DataFrame({"game_id": list(exclude_game_ids)}).unique()
+            scored = scored.join(excl_df, on="game_id", how="anti")
 
         kept = [c for c in include_columns if c in scored.columns]
         return scored.select(kept + ["score"]).sort("score", descending=True).head(n)
