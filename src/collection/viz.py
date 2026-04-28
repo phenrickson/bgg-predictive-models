@@ -11,7 +11,7 @@ No fitting or scoring happens here.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from typing import Callable, Optional, Sequence, Union
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -43,6 +43,16 @@ FEATURE_GROUPS: dict[str, str] = {
 }
 
 
+# Prefixes that should be stripped from raw feature names regardless of
+# whether they map to a display group. Includes FEATURE_GROUPS keys plus
+# preprocessor-generated families that the model trains on but don't get
+# their own facet (missingindicator, player_count).
+_STRIP_PREFIXES: tuple[str, ...] = tuple(FEATURE_GROUPS.keys()) + (
+    "missingindicator_",
+    "player_count_",
+)
+
+
 # --- Public API ---
 
 
@@ -55,6 +65,19 @@ def feature_group(feature_name: str) -> str:
     return "Other"
 
 
+def tidy_feature_name(name: str, max_len: int = 40) -> str:
+    """Strip the feature-family prefix, swap underscores for spaces,
+    title-case, and truncate to ``max_len`` (with an ellipsis)."""
+    for p in _STRIP_PREFIXES:
+        if name.startswith(p):
+            name = name[len(p):]
+            break
+    name = name.replace("_", " ").strip()
+    if len(name) > max_len:
+        name = name[: max_len - 3] + "..."
+    return name.title() if name else name
+
+
 def plot_feature_importance(
     importance_df: pd.DataFrame,
     group: Optional[str] = None,
@@ -62,6 +85,7 @@ def plot_feature_importance(
     top_neg: int = 25,
     title: Optional[str] = None,
     interactive: bool = False,
+    name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
 ) -> Union[ggplot, go.Figure]:
     """One diverging-bar feature-importance plot.
 
@@ -75,8 +99,17 @@ def plot_feature_importance(
         title: Plot title. Defaults to ``group`` (or ``"Feature Importance"``).
         interactive: If ``True``, return a plotly figure for Dash.
             Otherwise (default) return a plotnine figure for notebooks.
+        name_formatter: Applied to each feature label before plotting.
+            Defaults to :func:`tidy_feature_name`. Pass ``None`` for raw
+            names (still with the group prefix stripped when ``group`` is set).
     """
-    df = _prepare(importance_df, group=group, top_pos=top_pos, top_neg=top_neg)
+    df = _prepare(
+        importance_df,
+        group=group,
+        top_pos=top_pos,
+        top_neg=top_neg,
+        name_formatter=name_formatter,
+    )
     plot_title = title or group or "Feature Importance"
     if interactive:
         return _render_plotly_bars(df, title=plot_title)
@@ -91,6 +124,7 @@ def plot_feature_importance_grid(
     cols: int = 2,
     title: Optional[str] = None,
     interactive: bool = False,
+    name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
 ) -> Union[ggplot, go.Figure]:
     """Faceted grid of feature-importance plots, one panel per group.
 
@@ -106,10 +140,18 @@ def plot_feature_importance_grid(
         title: Overall plot title.
         interactive: If ``True``, return a plotly figure for Dash.
             Otherwise return a plotnine figure.
+        name_formatter: Applied to each feature label before plotting.
+            Defaults to :func:`tidy_feature_name`. Pass ``None`` for raw names.
     """
     parts = []
     for g in groups:
-        sub = _prepare(importance_df, group=g, top_pos=top_pos, top_neg=top_neg)
+        sub = _prepare(
+            importance_df,
+            group=g,
+            top_pos=top_pos,
+            top_neg=top_neg,
+            name_formatter=name_formatter,
+        )
         sub = sub.assign(group=g)
         parts.append(sub)
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
@@ -138,10 +180,12 @@ def _prepare(
     group: Optional[str],
     top_pos: int,
     top_neg: int,
+    name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
 ) -> pd.DataFrame:
     """Filter to ``group`` (if set), strip the prefix, take top-N each side,
-    sort descending. Returns a fresh frame with ``feature`` and ``value``
-    columns ready to plot."""
+    sort descending, then apply ``name_formatter``. Returns a fresh frame
+    with ``feature`` and ``value`` columns ready to plot.
+    """
     df = importance_df.copy()
     if group is not None:
         mask = df["feature"].map(feature_group) == group
@@ -149,11 +193,14 @@ def _prepare(
         df["feature"] = df["feature"].map(lambda f: _strip_group_prefix(f, group))
     pos = df[df["value"] > 0].nlargest(top_pos, "value")
     neg = df[df["value"] < 0].nsmallest(top_neg, "value")
-    return (
+    out = (
         pd.concat([pos, neg], ignore_index=True)
         .sort_values("value", ascending=False)
         .reset_index(drop=True)
     )
+    if name_formatter is not None:
+        out["feature"] = out["feature"].map(name_formatter)
+    return out
 
 
 # --- plotnine renderers (static, notebook-friendly) ---
