@@ -83,38 +83,47 @@ def patched_pipeline_env(tmp_path, monkeypatch):
 
 
 def test_pipeline_passes_processor_config_through(patched_pipeline_env):
-    """Constructing the pipeline with a ProcessorConfig should cause
-    CollectionProcessor to be constructed with that same ProcessorConfig
-    (for both _process_collection and _load_game_universe)."""
-    pc = ProcessorConfig(use_predicted_complexity=True)
+    """Constructing the pipeline with a ProcessorConfig should:
+
+    - construct CollectionProcessor with that same ProcessorConfig
+      (so user-collection processing inherits the flags), and
+    - call BGGDataLoader.load_features with matching flags
+      (so the universe inherits the same flags).
+    """
+    pc = ProcessorConfig(use_predicted_complexity=True, use_embeddings=False)
     config = PipelineConfig(processor_config=pc)
 
     with patch(
         "src.collection.collection_pipeline.CollectionProcessor"
-    ) as mock_processor_cls:
+    ) as mock_processor_cls, patch(
+        "src.collection.collection_pipeline.BGGDataLoader"
+    ) as mock_loader_cls:
         processor_instance = MagicMock()
         processor_instance.process.return_value = pl.DataFrame({"game_id": [1]})
-        processor_instance.load_features.return_value = pl.DataFrame({"game_id": [1]})
         mock_processor_cls.return_value = processor_instance
+
+        loader_instance = MagicMock()
+        loader_instance.load_features.return_value = pl.DataFrame({"game_id": [1]})
+        mock_loader_cls.return_value = loader_instance
 
         pipeline = CollectionPipeline("alice", config)
 
-        # Exercise both paths that need a processor.
         pipeline._process_collection()
         pipeline._load_game_universe()
 
-        # Exactly one CollectionProcessor should have been constructed
-        # (shared between the two calls) with our processor_config.
-        assert mock_processor_cls.call_count == 1, (
-            "processor should be cached; both paths must share one instance"
-        )
+        # CollectionProcessor receives our processor_config verbatim.
+        assert mock_processor_cls.call_count == 1
         _, kwargs = mock_processor_cls.call_args
-        assert kwargs.get("processor_config") is pc, (
-            "The user's ProcessorConfig must be passed through verbatim"
+        assert kwargs.get("processor_config") is pc
+
+        # _load_game_universe constructs a BGGDataLoader and forwards the
+        # enrichment flags from processor_config.
+        loader_instance.load_features.assert_called_once_with(
+            use_predicted_complexity=True,
+            use_embeddings=False,
         )
-        # Both paths were actually exercised on the shared instance.
+
         processor_instance.process.assert_called_once_with("alice")
-        processor_instance.load_features.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

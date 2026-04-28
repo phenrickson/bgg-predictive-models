@@ -17,13 +17,14 @@ import sys
 from typing import List, Optional
 
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
-from src.collection.collection_processor import CollectionProcessor
+from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
 from src.collection.collection_split import (
     ClassificationSplitConfig,
     CollectionSplitter,
     RegressionSplitConfig,
 )
 from src.collection.outcomes import apply_outcome, load_outcomes
+from src.data.loader import BGGDataLoader
 from src.utils.config import load_config
 from src.utils.logging import setup_logging
 
@@ -71,9 +72,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         environment=args.environment,
     )
 
+    processor_config = ProcessorConfig()
     processor = CollectionProcessor(
         config=bq_config,
         environment=args.environment,
+        processor_config=processor_config,
     )
     processed = processor.process(args.username)
     if processed is None:
@@ -86,7 +89,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
-    universe_df = processor.load_features()
+    universe_df = BGGDataLoader(bq_config).load_features(
+        use_predicted_complexity=processor_config.use_predicted_complexity,
+        use_embeddings=processor_config.use_embeddings,
+    )
 
     splitter = CollectionSplitter(
         universe_df=universe_df,

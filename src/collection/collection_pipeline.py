@@ -16,6 +16,7 @@ import polars as pl
 
 from src.collection.collection_loader import BGGCollectionLoader
 from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
+from src.data.loader import BGGDataLoader
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.collection.collection_split import (
     ClassificationSplitConfig,
@@ -288,12 +289,14 @@ class CollectionPipeline:
     def _load_game_universe(self) -> pl.DataFrame:
         """Full BGG game universe for negative sampling and prediction.
 
-        Uses the same :class:`CollectionProcessor` (and therefore the same
-        ``ProcessorConfig``) as training, so the feature set is identical
-        on both sides of the split.
+        Uses the same enrichment flags as the user-collection processing,
+        so the feature schema matches on both sides of the split.
         """
-        processor = self._get_processor()
-        return processor.load_features()
+        pcfg = self.config.processor_config or ProcessorConfig()
+        return BGGDataLoader(self.bq_config).load_features(
+            use_predicted_complexity=pcfg.use_predicted_complexity,
+            use_embeddings=pcfg.use_embeddings,
+        )
 
     def _train_one_outcome(
         self,
