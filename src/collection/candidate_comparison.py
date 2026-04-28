@@ -221,11 +221,12 @@ def compare_top_games(
     score_cols = [f"score_{nm}" for nm in names]
 
     if df.height == 0:
-        empty_cols = [c for c in include_columns if c in df.columns] + score_cols
-        empty = df.head(0).select([
-            pl.lit(None).cast(pl.Float64).alias(c) for c in empty_cols
-        ])
-        return empty.with_columns(pl.lit("").alias("picked_by"))
+        kept = [c for c in include_columns if c in df.columns]
+        return pl.DataFrame(schema=
+            {c: df.schema[c] for c in kept}
+            | {c: pl.Float64 for c in score_cols}
+            | {"picked_by": pl.Utf8}
+        )
 
     # Score every row with every model. (Cheaper than re-scoring per model
     # and aligning afterwards; the predict cost is the same either way and
