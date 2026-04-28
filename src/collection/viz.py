@@ -43,17 +43,18 @@ FEATURE_GROUPS: dict[str, str] = {
 }
 
 
-# Plain prefixes whose values are descriptive on their own (e.g.
-# ``designer_uwe_rosenberg`` -> ``Uwe Rosenberg``). Just strip and humanize.
-_STRIP_PREFIXES: tuple[str, ...] = tuple(FEATURE_GROUPS.keys())
-
-# Prefixes whose values would be ambiguous after stripping. Keep a short
-# tag so the feature is still identifiable (and doesn't collide with a
-# non-prefixed feature of the same name, e.g. ``min_age`` vs.
-# ``missingindicator_min_age``).
-_RELABEL_PREFIXES: dict[str, str] = {
-    "missingindicator_": "Missing",  # "Missing: Min Age"
-    "player_count_": "Players",       # "Players: 6"
+# Singular display tags for each family prefix. Appears in front of the
+# feature name as ``Tag: Value`` so a label is self-explanatory in mixed
+# plots (where designers, publishers, etc. share the same axis).
+_PREFIX_TAGS: dict[str, str] = {
+    "category_": "Category",
+    "mechanic_": "Mechanic",
+    "designer_": "Designer",
+    "artist_": "Artist",
+    "publisher_": "Publisher",
+    "family_": "Family",
+    "missingindicator_": "Missing",
+    "player_count_": "Players",
 }
 
 
@@ -69,29 +70,36 @@ def feature_group(feature_name: str) -> str:
     return "Other"
 
 
-def tidy_feature_name(name: str, max_len: int = 40) -> str:
-    """Strip the feature-family prefix, swap underscores for spaces,
-    title-case, and truncate to ``max_len`` (with an ellipsis).
+def tidy_feature_name(
+    name: str, max_len: int = 40, include_tag: bool = True
+) -> str:
+    """Render a raw feature name for display.
 
-    Prefixes whose values are ambiguous on their own (``missingindicator_``,
-    ``player_count_``) get a short tag so the feature stays identifiable
-    (e.g. ``player_count_6`` -> ``Players: 6``).
+    Strips the family prefix, swaps underscores for spaces, title-cases,
+    and (when ``include_tag`` is ``True``) prepends a singular tag so the
+    family stays visible:
+
+    - ``designer_uwe_rosenberg`` -> ``Designer: Uwe Rosenberg``
+    - ``publisher_fantasy_flight_games`` -> ``Publisher: Fantasy Flight Games``
+    - ``player_count_6`` -> ``Players: 6``
+    - ``missingindicator_min_age`` -> ``Missing: Min Age``
+
+    Pass ``include_tag=False`` when the surrounding context already
+    identifies the family (e.g. a single-group plot with ``Designers`` in
+    the title) and the tag would just be visual noise.
+
+    Truncates to ``max_len`` with an ellipsis.
     """
-    relabel: Optional[str] = None
-    for p, tag in _RELABEL_PREFIXES.items():
+    tag: Optional[str] = None
+    for p, t in _PREFIX_TAGS.items():
         if name.startswith(p):
             name = name[len(p):]
-            relabel = tag
+            tag = t
             break
-    else:
-        for p in _STRIP_PREFIXES:
-            if name.startswith(p):
-                name = name[len(p):]
-                break
     name = name.replace("_", " ").strip()
     body = name.title() if name else name
-    if relabel is not None and body:
-        body = f"{relabel}: {body}"
+    if include_tag and tag is not None and body:
+        body = f"{tag}: {body}"
     if len(body) > max_len:
         body = body[: max_len - 3] + "..."
     return body
@@ -186,14 +194,6 @@ def plot_feature_importance_grid(
 # --- Shared data prep ---
 
 
-def _strip_group_prefix(feature_name: str, group: str) -> str:
-    """Remove the prefix corresponding to ``group`` from ``feature_name``."""
-    for prefix, label in FEATURE_GROUPS.items():
-        if label == group and feature_name.startswith(prefix):
-            return feature_name[len(prefix) :]
-    return feature_name
-
-
 def _prepare(
     importance_df: pd.DataFrame,
     group: Optional[str],
@@ -201,15 +201,19 @@ def _prepare(
     top_neg: int,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
 ) -> pd.DataFrame:
-    """Filter to ``group`` (if set), strip the prefix, take top-N each side,
-    sort descending, then apply ``name_formatter``. Returns a fresh frame
-    with ``feature`` and ``value`` columns ready to plot.
+    """Filter to ``group`` (if set), take top-N each side, sort descending,
+    then apply ``name_formatter``. Returns a fresh frame with ``feature``
+    and ``value`` columns ready to plot.
+
+    When ``group`` is set the surrounding plot already identifies the
+    family, so the default formatter is invoked with ``include_tag=False``
+    to drop the redundant ``Family:`` prefix. Custom formatters are passed
+    through unchanged.
     """
     df = importance_df.copy()
     if group is not None:
         mask = df["feature"].map(feature_group) == group
         df = df.loc[mask].copy()
-        df["feature"] = df["feature"].map(lambda f: _strip_group_prefix(f, group))
     pos = df[df["value"] > 0].nlargest(top_pos, "value")
     neg = df[df["value"] < 0].nsmallest(top_neg, "value")
     out = (
@@ -218,7 +222,12 @@ def _prepare(
         .reset_index(drop=True)
     )
     if name_formatter is not None:
-        out["feature"] = out["feature"].map(name_formatter)
+        if name_formatter is tidy_feature_name and group is not None:
+            out["feature"] = out["feature"].map(
+                lambda f: tidy_feature_name(f, include_tag=False)
+            )
+        else:
+            out["feature"] = out["feature"].map(name_formatter)
     return out
 
 
@@ -243,18 +252,27 @@ def _render_plotnine_bars(df: pd.DataFrame, title: str) -> ggplot:
 
 
 def _render_plotnine_grid(df: pd.DataFrame, title: str) -> ggplot:
-    # Use a per-group ordered factor so each facet sorts correctly.
+    # Per-group ordered factor so each facet sorts correctly. We salt each
+    # level with the group name to keep them unique across facets, then
+    # strip the salt at draw time via scale_x_discrete(labels=...).
     df = df.copy()
     df["feature"] = df["group"].astype(str) + "::" + df["feature"].astype(str)
     feature_order = list(df.sort_values("value", ascending=True)["feature"].unique())
     df["feature"] = pd.Categorical(df["feature"], categories=feature_order)
     cmax = float(df["value"].abs().max()) if len(df) else 1.0
+    from plotnine import scale_x_discrete
+
+    def _drop_salt(label: str) -> str:
+        # ``GroupName::Actual Feature`` -> ``Actual Feature``
+        return label.split("::", 1)[-1]
+
     return (
         ggplot(df, aes(x="feature", y="value", fill="value"))
         + geom_col()
         + geom_vline(xintercept=0, color="grey", linetype="dotted")
         + coord_flip()
         + facet_wrap("~ group", scales="free_y")
+        + scale_x_discrete(labels=_drop_salt)
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
         + theme_minimal()
