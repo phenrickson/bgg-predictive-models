@@ -262,9 +262,10 @@ def _render_plotnine_grid(df: pd.DataFrame, title: str) -> ggplot:
     cmax = float(df["value"].abs().max()) if len(df) else 1.0
     from plotnine import scale_x_discrete
 
-    def _drop_salt(label: str) -> str:
+    def _drop_salt(labels):
+        # plotnine passes the whole list of breaks; return the matching list.
         # ``GroupName::Actual Feature`` -> ``Actual Feature``
-        return label.split("::", 1)[-1]
+        return [str(lbl).split("::", 1)[-1] for lbl in labels]
 
     return (
         ggplot(df, aes(x="feature", y="value", fill="value"))
