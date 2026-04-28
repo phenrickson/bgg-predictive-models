@@ -417,6 +417,21 @@ class CollectionModel:
         names = [f"f{i}" for i in range(transformed.shape[1])]
         return pd.DataFrame(transformed, columns=names, index=X.index)
 
+    def preview_features(self, df: pl.DataFrame) -> pd.DataFrame:
+        """Fit the preprocessor on ``df`` and return the post-preprocessing
+        feature matrix. The model is not fit.
+
+        Useful for inspecting how different ``preprocessor_kwargs`` change the
+        feature set without paying the cost of training the model.
+        """
+        preprocessor = self.build_pipeline().named_steps["preprocessor"]
+        X, y = self._prepare(df)
+        transformed = preprocessor.fit_transform(X, y)
+        if hasattr(transformed, "columns"):
+            return pd.DataFrame(transformed)
+        names = [f"f{i}" for i in range(transformed.shape[1])]
+        return pd.DataFrame(transformed, columns=names, index=X.index)
+
     def feature_names(self, pipeline: Pipeline, df: pl.DataFrame) -> list:
         """Return the post-preprocessing feature names produced when ``df`` is
         transformed. Recovered by actually running ``transform`` on a small
