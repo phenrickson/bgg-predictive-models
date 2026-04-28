@@ -677,6 +677,21 @@ model.top_games(test_df, n=25)
 model.top_games(upcoming, n=25)
 ```
 
+### Cross-candidate comparison
+
+`compare_top_games` scores the same frame with each candidate's model and lays the scores out side-by-side. Default ranking is by mean score (so games every model likes float to the top); pass `rank_by="lgbm_default"` to sort by a single candidate.
+
+```{python}
+from src.collection.candidate_comparison import compare_top_games
+
+compare_top_games(results, val_df, n=25)
+```
+
+```{python}
+# Where do the models disagree most? Sort by lgbm and inspect the spread.
+compare_top_games(results, val_df, n=25, rank_by="lgbm_default")
+```
+
 ## Next
 
 Once the checklist is green, hook the same steps into `CollectionPipeline.run_full_pipeline` and make sure the CLI round-trip (`make train-collection USERNAME=... OUTCOME=own`) matches what we see here.

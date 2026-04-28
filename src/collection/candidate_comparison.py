@@ -13,11 +13,14 @@ like.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, TYPE_CHECKING
 
 import polars as pl
 
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
+
+if TYPE_CHECKING:
+    from src.collection.candidates import CandidateRunResult
 
 logger = logging.getLogger(__name__)
 
@@ -177,3 +180,89 @@ def summarize_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
         ["candidate", "split"],
         descending=[False, True],  # val before test alphabetically
     )
+
+
+def compare_top_games(
+    results: Sequence["CandidateRunResult"],
+    df: pl.DataFrame,
+    n: int = 25,
+    rank_by: Optional[str] = None,
+    exclude_game_ids: Optional[Iterable[int]] = None,
+    include_columns: Sequence[str] = ("game_id", "name", "year_published"),
+) -> pl.DataFrame:
+    """Score ``df`` with each candidate's model and return a wide top-N view.
+
+    One row per game, one ``score_<candidate>`` column per result, plus the
+    columns in ``include_columns`` that exist on ``df``. Useful for
+    eyeballing where models agree and disagree.
+
+    Args:
+        results: In-memory ``CandidateRunResult``s (from ``train_candidates``).
+        df: Rows to score. Must have the columns each model was trained on.
+        n: Top-N rows to return after sorting.
+        rank_by: Candidate name to sort by. ``None`` (default) sorts by the
+            mean score across all candidates, so games every model likes
+            float to the top.
+        exclude_game_ids: ``game_id``s to drop before ranking (e.g. games
+            the user already owns).
+        include_columns: Columns from ``df`` to surface alongside the
+            scores. Missing columns are silently skipped.
+
+    Returns:
+        Polars DataFrame with the kept ``include_columns`` plus one
+        ``score_<candidate>`` column per result, sorted descending by
+        ``rank_by`` (or mean score), top-``n`` rows.
+    """
+    if not results:
+        raise ValueError("compare_top_games requires at least one result")
+
+    names = [r.candidate.name for r in results]
+    if rank_by is not None and rank_by not in names:
+        raise ValueError(
+            f"rank_by={rank_by!r} not in candidate names: {names}"
+        )
+
+    if df.height == 0:
+        empty_cols = [c for c in include_columns if c in df.columns] + [
+            f"score_{n_}" for n_ in names
+        ]
+        return df.head(0).select([
+            pl.lit(None).cast(pl.Float64).alias(c) for c in empty_cols
+        ])
+
+    # Score with each model. CollectionModel.top_games uses self.fitted_pipeline
+    # internally; we replicate that scoring logic without the per-model sort,
+    # because we want all rows aligned for the wide view.
+    scored = df
+    score_cols: List[str] = []
+    for r in results:
+        col = f"score_{r.candidate.name}"
+        score_cols.append(col)
+        pipeline = r.model._require_fitted()
+        X = df.drop("label") if "label" in df.columns else df
+        X = X.to_pandas()
+        if r.outcome.task == "classification":
+            score = pipeline.predict_proba(X)[:, 1]
+        else:
+            score = pipeline.predict(X)
+        scored = scored.with_columns(pl.Series(col, score))
+
+    if exclude_game_ids is not None:
+        excluded = list(set(exclude_game_ids))
+        if excluded and "game_id" in scored.columns:
+            scored = scored.filter(~pl.col("game_id").is_in(excluded))
+
+    if rank_by is not None:
+        sort_col = f"score_{rank_by}"
+    else:
+        sort_col = "_mean_score"
+        scored = scored.with_columns(
+            pl.mean_horizontal(*score_cols).alias(sort_col)
+        )
+
+    kept = [c for c in include_columns if c in scored.columns]
+    out = scored.select(kept + score_cols + ([sort_col] if sort_col == "_mean_score" else []))
+    out = out.sort(sort_col, descending=True).head(n)
+    if sort_col == "_mean_score":
+        out = out.drop(sort_col)
+    return out
