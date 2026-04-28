@@ -182,12 +182,11 @@ def test_downsample_applied_to_train_only(patched_pipeline_env):
             captured["train"] = td
             captured["val"] = vd
             return (
-                MagicMock(name="pipeline"),
                 {"param": 1},
                 pd.DataFrame([{"params": {"param": 1}, "score": 0.5}]),
             )
 
-        def fake_evaluate(_pipeline, df, threshold=None):
+        def fake_evaluate(df, threshold=None):
             captured.setdefault("evaluated", []).append((df, threshold))
             return {"f1": 0.5}
 
@@ -233,10 +232,11 @@ def test_downsample_applied_to_train_only(patched_pipeline_env):
 
 
 def test_threshold_used_in_evaluation_for_classification(patched_pipeline_env):
-    """For a classification outcome, ``model.evaluate`` must be called with
-    the threshold returned by ``find_threshold``. The default-0.5 call
-    (no threshold kwarg) would collapse precision/recall/f1 on imbalanced
-    outcomes, which is the bug this change fixes."""
+    """For a classification outcome, ``find_threshold`` must be called on the
+    val split before ``evaluate`` runs, so the model carries the optimized
+    threshold by the time evaluation happens. The default-0.5 fallback would
+    collapse precision/recall/f1 on imbalanced outcomes, which is the bug
+    this contract guards against."""
 
     config = PipelineConfig()
 
@@ -256,11 +256,7 @@ def test_threshold_used_in_evaluation_for_classification(patched_pipeline_env):
         "src.collection.collection_pipeline.CollectionModel"
     ) as mock_model_cls:
         model_instance = MagicMock()
-        model_instance.tune.return_value = (
-            MagicMock(name="pipeline"),
-            {},
-            pd.DataFrame(),
-        )
+        model_instance.tune.return_value = ({}, pd.DataFrame())
         model_instance.find_threshold.return_value = 0.37
         model_instance.evaluate.return_value = {"f1": 0.5}
         mock_model_cls.return_value = model_instance
@@ -272,20 +268,14 @@ def test_threshold_used_in_evaluation_for_classification(patched_pipeline_env):
             splitter=splitter,
         )
 
-    # evaluate should have been called twice (val + test), each with the
-    # threshold kwarg set to find_threshold()'s return value.
+    # evaluate should have been called twice (val + test). With the new API
+    # threshold lives on the model itself, so callers no longer pass it.
     assert model_instance.evaluate.call_count == 2
-    for call in model_instance.evaluate.call_args_list:
-        assert "threshold" in call.kwargs, (
-            "evaluate() must be called with threshold=... for classification"
-        )
-        assert call.kwargs["threshold"] == 0.37
 
-    # And find_threshold should have been called on the val split.
+    # find_threshold should have been called on val before evaluate runs.
     model_instance.find_threshold.assert_called_once()
     find_threshold_args, _ = model_instance.find_threshold.call_args
-    # Second positional arg is val_df.
-    assert find_threshold_args[1].height == val_df.height
+    assert find_threshold_args[0].height == val_df.height
 
 
 def test_no_threshold_passed_for_regression(patched_pipeline_env):
@@ -311,11 +301,7 @@ def test_no_threshold_passed_for_regression(patched_pipeline_env):
         "src.collection.collection_pipeline.CollectionModel"
     ) as mock_model_cls:
         model_instance = MagicMock()
-        model_instance.tune.return_value = (
-            MagicMock(name="pipeline"),
-            {},
-            pd.DataFrame(),
-        )
+        model_instance.tune.return_value = ({}, pd.DataFrame())
         model_instance.evaluate.return_value = {"rmse": 1.0}
         mock_model_cls.return_value = model_instance
 
@@ -327,6 +313,5 @@ def test_no_threshold_passed_for_regression(patched_pipeline_env):
         )
 
     model_instance.find_threshold.assert_not_called()
-    # Each evaluate call has threshold=None (explicitly).
-    for call in model_instance.evaluate.call_args_list:
-        assert call.kwargs.get("threshold") is None
+    # Threshold lives on the model; evaluate takes no threshold kwarg now.
+    assert model_instance.evaluate.call_count == 2

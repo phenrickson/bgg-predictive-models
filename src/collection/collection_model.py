@@ -125,9 +125,24 @@ class CollectionModel:
         self.outcome = outcome
         self.classification_config = classification_config or ClassificationModelConfig()
         self.regression_config = regression_config or RegressionModelConfig()
+
+        # Fit-time state. Populated by train / tune / tune_cv (pipeline) and
+        # find_threshold (threshold). Helpers read these instead of taking
+        # the pipeline as an argument.
+        self.fitted_pipeline: Optional[Pipeline] = None
+        self.threshold: Optional[float] = None
+        self._feature_names: Optional[list] = None
+
         logger.info(
             f"CollectionModel init: user={username!r} outcome={outcome.name!r} task={outcome.task!r}"
         )
+
+    def _require_fitted(self) -> Pipeline:
+        if self.fitted_pipeline is None:
+            raise RuntimeError(
+                "Model is not fit. Call train(), tune(), or tune_cv() first."
+            )
+        return self.fitted_pipeline
 
     def build_pipeline(self) -> Pipeline:
         """Build the sklearn Pipeline (preprocessor + unfit model) for inspection.
@@ -169,50 +184,67 @@ class CollectionModel:
 
     def tune(
         self, train_df: pl.DataFrame, val_df: pl.DataFrame
-    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+    ) -> Tuple[Dict[str, Any], pd.DataFrame]:
         """Holdout hyperparameter tuning.
 
         Searches the model's param grid by training each candidate on
         ``train_df`` and scoring on ``val_df``. Uses the existing patience
-        early-stopping loop in :func:`tune_model`.
+        early-stopping loop in :func:`tune_model`. The best pipeline is
+        stashed on ``self.fitted_pipeline``; helpers read it from there.
 
-        Returns ``(fitted_pipeline, best_params, tuning_results)`` — the
-        results frame has one row per *evaluated* config (early-stopped
-        configs are not included), sorted best-first.
+        Returns ``(best_params, tuning_results)`` — the results frame has one
+        row per *evaluated* config (early-stopped configs are not included),
+        sorted best-first.
         """
         if self.outcome.task == "classification":
-            return self._tune_classification(train_df, val_df)
-        if self.outcome.task == "regression":
-            return self._tune_regression(train_df, val_df)
-        raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+            pipeline, best_params, tuning_results = self._tune_classification(
+                train_df, val_df
+            )
+        elif self.outcome.task == "regression":
+            pipeline, best_params, tuning_results = self._tune_regression(
+                train_df, val_df
+            )
+        else:
+            raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+        self._set_fitted(pipeline, train_df)
+        return best_params, tuning_results
 
     def tune_cv(
         self, train_df: pl.DataFrame, cv_folds: int = 5
-    ) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+    ) -> Tuple[Dict[str, Any], pd.DataFrame]:
         """K-fold cross-validation hyperparameter tuning.
 
         Searches the full param grid by k-fold CV on ``train_df`` only.
         Validation/test sets are not used. Slower than :meth:`tune` but
         avoids reusing the val set for both selection and final reporting.
+        The best pipeline is stashed on ``self.fitted_pipeline``.
 
-        Returns ``(fitted_pipeline, best_params, tuning_results)``.
+        Returns ``(best_params, tuning_results)``.
         """
         if self.outcome.task == "classification":
-            return self._tune_classification_cv(train_df, cv_folds=cv_folds)
-        if self.outcome.task == "regression":
-            return self._tune_regression_cv(train_df, cv_folds=cv_folds)
-        raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+            pipeline, best_params, tuning_results = self._tune_classification_cv(
+                train_df, cv_folds=cv_folds
+            )
+        elif self.outcome.task == "regression":
+            pipeline, best_params, tuning_results = self._tune_regression_cv(
+                train_df, cv_folds=cv_folds
+            )
+        else:
+            raise ValueError(f"Unsupported task: {self.outcome.task!r}")
+        self._set_fitted(pipeline, train_df)
+        return best_params, tuning_results
 
     def train(
         self,
         train_df: pl.DataFrame,
         params: Optional[Dict[str, Any]] = None,
-    ) -> Pipeline:
+    ) -> None:
         """Fit a pipeline on ``train_df`` with the given hyperparameters.
 
         No tuning. ``params`` uses the same ``model__<name>`` key shape that
         :meth:`tune` / :meth:`tune_cv` return as ``best_params``. Pass
-        ``None`` (default) to fit with the model's defaults.
+        ``None`` (default) to fit with the model's defaults. The fitted
+        pipeline is stashed on ``self.fitted_pipeline``.
         """
         pipeline = self.build_pipeline()
         if params:
@@ -221,50 +253,59 @@ class CollectionModel:
             )
         X, y = self._prepare(train_df)
         pipeline.fit(X, y)
-        return pipeline
+        self._set_fitted(pipeline, train_df)
+
+    def _set_fitted(self, pipeline: Pipeline, train_df: pl.DataFrame) -> None:
+        """Stash the fitted pipeline and cache feature names. Helpers read
+        from ``self.fitted_pipeline`` and ``self._feature_names``.
+        """
+        self.fitted_pipeline = pipeline
+        # Cache feature names by transforming a small slice; recovers names
+        # even when sklearn's get_feature_names_out is unreliable on this stack.
+        preprocessor = pipeline.named_steps["preprocessor"]
+        X, _ = self._prepare(train_df.head(5))
+        transformed = preprocessor.transform(X)
+        if hasattr(transformed, "columns"):
+            self._feature_names = list(transformed.columns)
+        else:
+            self._feature_names = [f"f{i}" for i in range(transformed.shape[1])]
 
     def evaluate(
         self,
-        pipeline: Pipeline,
         df: pl.DataFrame,
         threshold: Optional[float] = None,
     ) -> Dict[str, float]:
-        """Evaluate a fitted pipeline on ``df``.
+        """Evaluate the fitted model on ``df``.
 
-        For classification, ``threshold`` is the decision threshold for turning
-        probabilities into hard predictions. If ``None``, uses 0.5.
-        Pass the threshold returned by :meth:`find_threshold` to evaluate at
-        the optimized cutoff; pass the same frozen threshold to compare val
-        and test fairly.
-
-        For regression, ``threshold`` is ignored.
+        Classification: ``threshold`` defaults to ``self.threshold`` (set by
+        :meth:`find_threshold`); falls back to 0.5 if neither is set.
+        Regression: ``threshold`` is ignored.
         """
+        pipeline = self._require_fitted()
         if self.outcome.task == "classification":
-            return self._evaluate_classification(pipeline, df, threshold=threshold)
+            t = self.threshold if threshold is None else threshold
+            return self._evaluate_classification(pipeline, df, threshold=t)
         if self.outcome.task == "regression":
             return self._evaluate_regression(pipeline, df)
         raise ValueError(f"Unsupported task: {self.outcome.task!r}")
 
     def predict_with_labels(
         self,
-        pipeline: Pipeline,
         df: pl.DataFrame,
         threshold: Optional[float] = None,
     ) -> pl.DataFrame:
         """Return ``df`` with prediction columns appended.
 
-        Classification: appends ``proba`` (P(label=1)) and ``pred`` (hard
-        prediction at ``threshold``, default 0.5).
-        Regression: appends ``pred`` (predicted value); ``threshold`` ignored.
-
-        Useful for inspecting predictions row-by-row alongside the true
-        label — sort by ``proba``, group by any column you like, find
-        misclassifications, etc.
+        Classification: appends ``proba`` and ``pred`` (hard prediction at
+        ``threshold``; defaults to ``self.threshold``, falling back to 0.5).
+        Regression: appends ``pred``; ``threshold`` ignored.
         """
+        pipeline = self._require_fitted()
         X, _ = self._prepare(df)
         if self.outcome.task == "classification":
             proba = pipeline.predict_proba(X)[:, 1]
-            t = 0.5 if threshold is None else float(threshold)
+            t_pick = threshold if threshold is not None else self.threshold
+            t = 0.5 if t_pick is None else float(t_pick)
             return df.with_columns([
                 pl.Series("proba", proba),
                 pl.Series("pred", (proba >= t).astype(int)),
@@ -334,7 +375,6 @@ class CollectionModel:
 
     def evaluate_stratified(
         self,
-        pipeline: Pipeline,
         df: pl.DataFrame,
         threshold: Optional[float] = None,
         bins: Sequence[Tuple[Optional[int], Optional[int]]] = (
@@ -363,6 +403,8 @@ class CollectionModel:
                 f"bin_column {bin_column!r} missing from df; "
                 f"available columns start with: {df.columns[:10]}"
             )
+        pipeline = self._require_fitted()
+        t = self.threshold if threshold is None else threshold
 
         rows = []
         for low, high in bins:
@@ -377,7 +419,7 @@ class CollectionModel:
                 rows.append(row)
                 continue
             metrics = self._evaluate_classification(
-                pipeline, subset, threshold=threshold
+                pipeline, subset, threshold=t
             )
             row.update(metrics)
             row["n_pos"] = int(subset.filter(pl.col("label") == True).height)
@@ -387,7 +429,7 @@ class CollectionModel:
         overall = {"bin": "all", "n_rows": df.height}
         if df.height:
             overall.update(
-                self._evaluate_classification(pipeline, df, threshold=threshold)
+                self._evaluate_classification(pipeline, df, threshold=t)
             )
             overall["n_pos"] = int(df.filter(pl.col("label") == True).height)
         rows.append(overall)
@@ -401,14 +443,13 @@ class CollectionModel:
             return f"{low}+"
         return f"{low}-{high - 1}"
 
-    def transform_features(
-        self, pipeline: Pipeline, df: pl.DataFrame
-    ) -> pd.DataFrame:
+    def transform_features(self, df: pl.DataFrame) -> pd.DataFrame:
         """Run the fitted preprocessor on ``df`` and return a pandas DataFrame.
 
         Uses whatever column names the preprocessor's output carries; falls back
         to generic ``f0..fN-1`` if the underlying transform returns a bare array.
         """
+        pipeline = self._require_fitted()
         preprocessor = pipeline.named_steps["preprocessor"]
         X, _ = self._prepare(df)
         transformed = preprocessor.transform(X)
@@ -432,17 +473,16 @@ class CollectionModel:
         names = [f"f{i}" for i in range(transformed.shape[1])]
         return pd.DataFrame(transformed, columns=names, index=X.index)
 
-    def feature_names(self, pipeline: Pipeline, df: pl.DataFrame) -> list:
-        """Return the post-preprocessing feature names produced when ``df`` is
-        transformed. Recovered by actually running ``transform`` on a small
-        slice, since ``Pipeline.get_feature_names_out()`` is unreliable on
-        this stack.
-        """
-        return list(self.transform_features(pipeline, df.head(5)).columns)
+    @property
+    def feature_names(self) -> list:
+        """Post-preprocessing feature names captured at fit time."""
+        if self._feature_names is None:
+            raise RuntimeError(
+                "Model is not fit. Call train(), tune(), or tune_cv() first."
+            )
+        return list(self._feature_names)
 
-    def feature_importance(
-        self, pipeline: Pipeline, df: pl.DataFrame
-    ) -> pd.DataFrame:
+    def feature_importance(self) -> pd.DataFrame:
         """Return a feature-importance DataFrame for the fitted pipeline.
 
         Dispatches on what the underlying model exposes:
@@ -450,12 +490,10 @@ class CollectionModel:
         - linear models → ``coef_`` as ``value`` (flattened)
 
         Columns: ``feature``, ``value``, ``abs_value`` (sorted by abs_value desc).
-
-        ``df`` is any DataFrame with the same schema as training — used only to
-        recover feature names.
         """
+        pipeline = self._require_fitted()
         model_step = pipeline.named_steps["model"]
-        names = self.feature_names(pipeline, df)
+        names = self.feature_names
 
         if hasattr(model_step, "feature_importances_"):
             values = model_step.feature_importances_
@@ -482,7 +520,6 @@ class CollectionModel:
 
     def top_games(
         self,
-        pipeline: Pipeline,
         df: pl.DataFrame,
         n: int = 25,
         exclude_game_ids: Optional[Iterable[int]] = None,
@@ -494,7 +531,6 @@ class CollectionModel:
         models return the predicted label.
 
         Args:
-            pipeline: Fitted sklearn Pipeline.
             df: Rows to score. Must have columns matching training features
                 plus whatever is listed in ``include_columns``.
             n: Number of rows to keep after sorting.
@@ -507,6 +543,7 @@ class CollectionModel:
             Polars DataFrame with the ``include_columns`` present in ``df``
             plus a ``score`` column, sorted by score descending, top ``n`` rows.
         """
+        pipeline = self._require_fitted()
         if df.height == 0:
             return df.head(0).with_columns(pl.lit(None).cast(pl.Float64).alias("score"))
 
@@ -528,21 +565,23 @@ class CollectionModel:
         kept = [c for c in include_columns if c in scored.columns]
         return scored.select(kept + ["score"]).sort("score", descending=True).head(n)
 
-    def find_threshold(self, pipeline: Pipeline, val_df: pl.DataFrame) -> float:
-        """Return the probability threshold that maximises the configured metric on val.
-
-        `find_optimal_threshold` returns a dict including diagnostic scores; we only
-        surface the threshold value here so callers (pipeline, storage, CLI) can
-        treat it as a plain float.
+    def find_threshold(self, val_df: pl.DataFrame) -> float:
+        """Return and stash the probability threshold that maximises the
+        configured metric on ``val_df``. After this call, ``self.threshold``
+        is set; subsequent ``evaluate`` / ``predict_with_labels`` /
+        ``evaluate_stratified`` calls use it by default.
         """
         if self.outcome.task != "classification":
             raise ValueError("find_threshold is only meaningful for classification outcomes")
+        pipeline = self._require_fitted()
         X, y = self._prepare(val_df)
         proba = pipeline.predict_proba(X)[:, 1]
         result = find_optimal_threshold(
             y, proba, metric=self.classification_config.threshold_optimization_metric
         )
-        return float(result["threshold"])
+        threshold = float(result["threshold"])
+        self.threshold = threshold
+        return threshold
 
     # --- regression path ---
 

@@ -242,7 +242,11 @@ model = CollectionModel(
     outcome=outcomes["own"],
     classification_config=ClassificationModelConfig(
         # model_type defaults to "logistic"; flip to "lightgbm" or "catboost" to try others.
+        model_type="logistic",
         tuning_metric="log_loss",
+        preprocessor_kwargs={
+            "preserve_columns": ["year_published", "predicted_complexity"]
+        },
         patience=5,
     ),
 )
@@ -262,8 +266,8 @@ strict_model = CollectionModel(
     classification_config=ClassificationModelConfig(
         model_type="lightgbm",
         preprocessor_kwargs={
-            "designer_min_freq": 25,
-            "max_publisher_features": 100,
+            "family_min_freq": 500,
+            "preserve_columns": ["year_published", "predicted_complexity"],
         },
     ),
 )
@@ -274,7 +278,7 @@ print(strict_model.build_pipeline().named_steps["preprocessor"])
 # Optional: downsample training-set negatives to 5 per positive for class balance.
 # Only touch the training frame — val and test keep the real class distribution
 # so tuning and evaluation stay honest.
-train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=100)
+train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=250)
 
 print(
     f"train before: {train_df.height} rows "
@@ -289,11 +293,11 @@ print('train', train_df.shape)
 print('train_down', train_down.shape)
 ```
 
-Tune hyperparameters using `train_down` for fitting and `val_df` for scoring. `tune` returns the fitted best pipeline, the chosen params, and a results frame with one row per evaluated config (early-stopped configs are not included).
+Tune hyperparameters using `train_down` for fitting and `val_df` for scoring. `tune` stashes the fitted best pipeline on `model.fitted_pipeline` and returns the chosen params and a results frame with one row per evaluated config (early-stopped configs are not included).
 
 ```{python}
-pipeline_obj, best_params, tuning_results = model.tune(train_down, val_df)
-print("pipeline steps:", [s[0] for s in pipeline_obj.steps])
+best_params, tuning_results = model.tune(train_down, val_df)
+print("pipeline steps:", [s[0] for s in model.fitted_pipeline.steps])
 print("best params:", best_params)
 tuning_results.head(10)
 ```
@@ -313,7 +317,7 @@ model_cv = CollectionModel(
     ),
 )
 
-pipeline_cv, best_params_cv, cv_results = model_cv.tune_cv(train_down, cv_folds=3)
+best_params_cv, cv_results = model_cv.tune_cv(train_down, cv_folds=3)
 print("cv best params:", best_params_cv)
 cv_results.head(10)
 ```
@@ -321,9 +325,9 @@ cv_results.head(10)
 Compare the two on val/test so you can see whether CV-selected hyperparameters generalize better than holdout-selected ones:
 
 ```{python}
-threshold_cv = model_cv.find_threshold(pipeline_cv, val_df)
-val_metrics_cv = model_cv.evaluate(pipeline_cv, val_df, threshold=threshold_cv)
-test_metrics_cv = model_cv.evaluate(pipeline_cv, test_df, threshold=threshold_cv)
+model_cv.find_threshold(val_df)
+val_metrics_cv = model_cv.evaluate(val_df)
+test_metrics_cv = model_cv.evaluate(test_df)
 print("cv val :", val_metrics_cv)
 print("cv test:", test_metrics_cv)
 ```
@@ -335,7 +339,7 @@ print("cv test:", test_metrics_cv)
 Look at what the preprocessor produces: what columns come out, which get transformed, and how many features the model actually trains on.
 
 ```{python}
-X_transformed_df = model.transform_features(pipeline_obj, train_down)
+X_transformed_df = model.transform_features(train_down)
 print(f"post-preprocess features: {X_transformed_df.shape[1]}")
 print("first 30:", list(X_transformed_df.columns[:30]))
 X_transformed_df.head()
@@ -350,13 +354,13 @@ Training already happened above; evaluate on validation and test.
 Classification models pick a decision threshold on val (optimizing the configured metric, e.g. F2) and then use that same threshold to report test metrics. Evaluating at 0.5 on an imbalanced problem collapses precision/recall/F1 to \~0 even when the probability ranking is fine (AUC / PR-AUC stay sensible) — always pass the optimized threshold.
 
 ```{python}
-threshold = model.find_threshold(pipeline_obj, val_df)
-print(f"optimized threshold ({model.classification_config.threshold_optimization_metric}): {threshold:.4f}")
+model.find_threshold(val_df)
+print(f"optimized threshold ({model.classification_config.threshold_optimization_metric}): {model.threshold:.4f}")
 ```
 
 ```{python}
-val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
-test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
+val_metrics = model.evaluate(val_df)
+test_metrics = model.evaluate(test_df)
 
 pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
 ```
@@ -366,7 +370,7 @@ pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
 Before slicing metrics, just look at the predictions: append `proba` and `pred` to the validation frame and sort.
 
 ```{python}
-val_preds = model.predict_with_labels(pipeline_obj, val_df, threshold=threshold)
+val_preds = model.predict_with_labels(val_df)
 val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
     "proba", descending=True
 ).head(20)
@@ -385,8 +389,8 @@ val_preds.filter((pl.col("label") == True) & (pl.col("pred") == 0)).select(
 Overall metrics can look rosy when the negative pool is dominated by obscure games the model rarely needs to separate out. Break val and test metrics down by `users_rated` (default buckets: \<25, 25–99, 100+) to see how the model actually behaves on games people have heard of. NaN in `roc_auc` / `pr_auc` / `log_loss` means a bin had only one class.
 
 ```{python}
-val_stratified = model.evaluate_stratified(pipeline_obj, val_df, threshold=threshold)
-test_stratified = model.evaluate_stratified(pipeline_obj, test_df, threshold=threshold)
+val_stratified = model.evaluate_stratified(val_df)
+test_stratified = model.evaluate_stratified(test_df)
 
 print("val stratified:")
 print(val_stratified.round(4))
@@ -451,24 +455,32 @@ print("splits version:", splits_paths["version"])
 Three deliberately different specs so the comparison frame has something to say:
 
 ```{python}
+# Shared preprocessor settings — keep year_published (default) and pass
+# predicted_complexity through untouched so the model sees it as a feature.
+COMMON_PREPROCESSOR_KWARGS = {
+    "preserve_columns": ["year_published", "predicted_complexity"],
+}
+
 candidates = [
     CollectionCandidate(
         name="logistic_default",
         classification_config=ClassificationModelConfig(
             model_type="logistic",
             tuning_metric="log_loss",
+            preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
         ),
         tuning="holdout",
-        downsample_negatives_ratio=50,
+        downsample_negatives_ratio=500,
     ),
     CollectionCandidate(
         name="lgbm_default",
         classification_config=ClassificationModelConfig(
             model_type="lightgbm",
             tuning_metric="log_loss",
+            preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
         ),
         tuning="holdout",
-        downsample_negatives_ratio=50,
+        downsample_negatives_ratio=500,
     ),
 ]
 
@@ -490,11 +502,11 @@ for r in results:
     print(f"{r.candidate.name}: val={r.val_metrics} test={r.test_metrics}")
 ```
 
-Each result carries the fitted pipeline and threshold, so you can inspect predictions without round-tripping through disk:
+Each result carries the trained `CollectionModel` (fitted pipeline + optimized threshold baked in), so all the same helpers you used on the standalone `model` work on `r.model`:
 
 ```{python}
-r = results[0]
-val_preds = model.predict_with_labels(r.pipeline, val_df, threshold=r.threshold)
+r = results[1]
+val_preds = r.model.predict_with_labels(val_df)
 val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
     "proba", descending=True
 ).head(10)
@@ -556,22 +568,15 @@ comparison_df.pivot(
 
 ### Stratified comparison across candidates
 
-The pure comparison only sees the overall metrics that landed in `registration.json`. For per-bin behavior (e.g. "which candidate is best on games with \<25 ratings?") load each pipeline back and run `evaluate_stratified` on whichever splits you care about:
+The pure comparison only sees the overall metrics that landed in `registration.json`. For per-bin behavior (e.g. "which candidate is best on games with \<25 ratings?"), call `evaluate_stratified` on each candidate's trained model directly:
 
 ```{python}
 import polars as pl
 
 stratified_rows = []
-for c in candidates:
-    pipe, registration, thr = storage.load_candidate_run("own", c.name)
-    # Rebuild a CollectionModel just to reuse its evaluate_stratified helper.
-    cand_model = CollectionModel(
-        username=USERNAME,
-        outcome=outcomes["own"],
-        classification_config=c.classification_config,
-    )
-    val_stratified = cand_model.evaluate_stratified(pipe, val_df, threshold=thr)
-    val_stratified["candidate"] = c.name
+for r in results:
+    val_stratified = r.model.evaluate_stratified(val_df)
+    val_stratified["candidate"] = r.candidate.name
     val_stratified["split"] = "val"
     stratified_rows.append(val_stratified)
 
@@ -580,7 +585,7 @@ stratified_df = pl.from_pandas(
 )
 stratified_df.select([
     "candidate", "split", "bin", "n_rows", "n_pos",
-    "precision", "recall", "f1",
+    "precision", "recall", "f1", "roc_auc"
 ])
 ```
 
@@ -591,7 +596,7 @@ stratified_df.select([
 Pull feature importances (for tree models) or coefficients (for logistic) out of the trained pipeline, aligned with the preprocessor's output feature names.
 
 ```{python}
-importance = model.feature_importance(pipeline_obj, train_down)
+importance = model.feature_importance()
 importance.head(20)
 ```
 
@@ -638,40 +643,38 @@ Rank games by predicted `own` probability within each split. The `model.top_game
 ```{python}
 owned_ids = raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
 
-score_universe = universe_loader.load_features(
-    use_predicted_complexity=True,
-    use_embeddings=False,
-)
-upcoming = score_universe.filter(pl.col("year_published") >= 2026)
-print(f"score universe: {score_universe.height}, upcoming (2026+): {upcoming.height}")
+upcoming = universe_df.filter(pl.col("year_published") >= 2026)
+print(f"score universe: {universe_df.height}, upcoming (2026+): {upcoming.height}")
 ```
 
-### Top 25 unowned games in the (downsampled) training set
+
+
+### Top 25 unowned games in the training set
 
 ```{python}
 pl.Config.set_tbl_cols(-1)
 pl.Config.set_tbl_rows(50)
 pl.Config.set_fmt_str_lengths(200)
       # show up to 50 rows
-model.top_games(pipeline_obj, train_down, n=25, exclude_game_ids=owned_ids)
+model.top_games(train_df, n=25, exclude_game_ids=owned_ids)
 ```
 
 ### Top 25 games in the validation set (2023–2024)
 
 ```{python}
-model.top_games(pipeline_obj, val_df, n=25)
+model.top_games(val_df, n=25)
 ```
 
 ### Top 25 games in the test set (2025)
 
 ```{python}
-model.top_games(pipeline_obj, test_df, n=25)
+model.top_games(test_df, n=25)
 ```
 
 ### Top 25 upcoming games (2026+)
 
 ```{python}
-model.top_games(pipeline_obj, upcoming, n=25)
+model.top_games(upcoming, n=25)
 ```
 
 ## Next

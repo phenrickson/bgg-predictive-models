@@ -335,14 +335,13 @@ class CollectionPipeline:
             classification_config=self.config.classification_model_config,
             regression_config=self.config.regression_model_config,
         )
-        pipeline_obj, best_params, _ = model.tune(train_df, val_df)
+        best_params, _ = model.tune(train_df, val_df)
 
-        threshold: Optional[float] = None
         if outcome.task == "classification":
-            threshold = model.find_threshold(pipeline_obj, val_df)
+            model.find_threshold(val_df)  # stashes onto model.threshold
 
-        val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
-        test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
+        val_metrics = model.evaluate(val_df)
+        test_metrics = model.evaluate(test_df)
 
         version = self.storage.next_version(outcome.name)
 
@@ -355,7 +354,11 @@ class CollectionPipeline:
             "val_metrics": val_metrics,
         }
         self.storage.save_model(
-            outcome.name, pipeline_obj, metadata, threshold=threshold, version=version
+            outcome.name,
+            model.fitted_pipeline,
+            metadata,
+            threshold=model.threshold,
+            version=version,
         )
 
         logger.info(
@@ -367,7 +370,7 @@ class CollectionPipeline:
         return {
             "version": version,
             "task": outcome.task,
-            "threshold": threshold,
+            "threshold": model.threshold,
             "best_params": best_params,
             # Backward compat: "metrics" still points at test metrics.
             "metrics": test_metrics,

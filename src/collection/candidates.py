@@ -196,12 +196,20 @@ def load_candidates(config: Dict[str, Any]) -> Dict[str, CollectionCandidate]:
 class CandidateRunResult:
     """In-memory artifacts from training one candidate. Pure result —
     nothing has been persisted yet. Pass to :func:`save_candidate_run` to
-    write to disk."""
+    write to disk.
+
+    ``model`` is the trained :class:`CollectionModel`. It carries the
+    fitted pipeline and the optimized threshold (for classification) on
+    its own state, so call ``result.model.feature_importance()``,
+    ``result.model.top_games(df)``, ``result.model.evaluate(df)`` etc.
+    Run-specific metadata (val/test metrics, best_params, splits_version,
+    etc.) lives on the result, since it isn't a property of the model
+    itself.
+    """
 
     candidate: CollectionCandidate
     outcome: OutcomeDefinition
-    pipeline: Any  # sklearn Pipeline; typed Any to avoid sklearn import
-    threshold: Optional[float]
+    model: CollectionModel
     best_params: Dict[str, Any]
     val_metrics: Dict[str, float]
     test_metrics: Dict[str, float]
@@ -266,16 +274,15 @@ def train_candidate(
         regression_config=candidate.regression_config,
     )
 
-    pipeline_obj, best_params, tuning_results = _run_tuning(
+    best_params, tuning_results = _run_tuning(
         candidate, model, train_used, val_df
     )
 
-    threshold: Optional[float] = None
     if outcome.task == "classification":
-        threshold = model.find_threshold(pipeline_obj, val_df)
+        model.find_threshold(val_df)  # stashes onto model.threshold
 
-    val_metrics = model.evaluate(pipeline_obj, val_df, threshold=threshold)
-    test_metrics = model.evaluate(pipeline_obj, test_df, threshold=threshold)
+    val_metrics = model.evaluate(val_df)
+    test_metrics = model.evaluate(test_df)
 
     tuning_results_pl: Optional[pl.DataFrame] = None
     if tuning_results is not None and len(tuning_results) > 0:
@@ -284,8 +291,7 @@ def train_candidate(
     return CandidateRunResult(
         candidate=candidate,
         outcome=outcome,
-        pipeline=pipeline_obj,
-        threshold=threshold,
+        model=model,
         best_params=best_params,
         val_metrics=val_metrics,
         test_metrics=test_metrics,
@@ -350,11 +356,11 @@ def save_candidate_run(
     return storage.save_candidate_run(
         outcome=result.outcome.name,
         candidate=result.candidate.name,
-        pipeline=result.pipeline,
+        pipeline=result.model.fitted_pipeline,
         registration=registration,
         tuning_results=result.tuning_results,
         train_used=result.train_used,
-        threshold=result.threshold,
+        threshold=result.model.threshold,
     )
 
 
@@ -400,15 +406,17 @@ def _run_tuning(
     train_df: pl.DataFrame,
     val_df: pl.DataFrame,
 ):
-    """Dispatch on candidate.tuning. Returns (pipeline, best_params, tuning_results)."""
+    """Dispatch on candidate.tuning. Stashes the fitted pipeline on ``model``;
+    returns ``(best_params, tuning_results)``.
+    """
     if candidate.tuning == "cv":
         return model.tune_cv(train_df, cv_folds=candidate.cv_folds)
     if candidate.tuning == "holdout":
         return model.tune(train_df, val_df)
     if candidate.tuning == "none":
         params = candidate.fixed_params or {}
-        pipeline = model.train(train_df, params=params)
-        return pipeline, dict(params), None
+        model.train(train_df, params=params)
+        return dict(params), None
     raise ValueError(f"Unknown tuning strategy: {candidate.tuning!r}")
 
 
