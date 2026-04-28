@@ -133,11 +133,23 @@ class CollectionModel:
         self.threshold: Optional[float] = None
         self._feature_names: Optional[list] = None
 
+        # Set by finalize() — same hyperparams as fitted_pipeline, refit on
+        # the union of train/val/test up through `finalize_through`. This is
+        # the model used to score upcoming releases.
+        self.finalized_pipeline: Optional[Pipeline] = None
+        self.finalize_through: Optional[int] = None
+
         logger.info(
             f"CollectionModel init: user={username!r} outcome={outcome.name!r} task={outcome.task!r}"
         )
 
-    def _require_fitted(self) -> Pipeline:
+    def _require_fitted(self, use_finalized: bool = False) -> Pipeline:
+        if use_finalized:
+            if self.finalized_pipeline is None:
+                raise RuntimeError(
+                    "Model has not been finalized. Call finalize() first."
+                )
+            return self.finalized_pipeline
         if self.fitted_pipeline is None:
             raise RuntimeError(
                 "Model is not fit. Call train(), tune(), or tune_cv() first."
@@ -255,6 +267,62 @@ class CollectionModel:
         pipeline.fit(X, y)
         self._set_fitted(pipeline, train_df)
 
+    def finalize(
+        self,
+        df: pl.DataFrame,
+        finalize_through: int,
+        time_column: str = "year_published",
+    ) -> None:
+        """Refit the tuned model on every row through ``finalize_through``.
+
+        Workflow: tune on train, validate on val, evaluate on test, then call
+        ``finalize`` with the union of train/val/test. The refit uses the same
+        hyperparameters as ``fitted_pipeline`` (no re-tuning, no threshold
+        re-search) and is stashed on ``self.finalized_pipeline``. Helpers
+        accept ``use_finalized=True`` to score with it; pass it to
+        :meth:`top_games` when ranking upcoming releases.
+
+        Args:
+            df: Combined train + val + test (or whatever you trust). Will be
+                filtered to ``df[time_column] <= finalize_through``.
+            finalize_through: Last year (inclusive) to include.
+            time_column: Year column to filter on. Defaults to
+                ``year_published``.
+        """
+        if self.fitted_pipeline is None:
+            raise RuntimeError(
+                "Cannot finalize before fitting. Call train(), tune(), or "
+                "tune_cv() first."
+            )
+        if time_column not in df.columns:
+            raise ValueError(
+                f"time_column {time_column!r} missing from df; "
+                f"columns start with: {df.columns[:10]}"
+            )
+
+        keep = df.filter(pl.col(time_column) <= finalize_through)
+        if keep.height == 0:
+            raise ValueError(
+                f"No rows with {time_column} <= {finalize_through} in df "
+                f"(df has {df.height} rows)"
+            )
+        logger.info(
+            f"Finalizing through {finalize_through}: refitting on "
+            f"{keep.height}/{df.height} rows"
+        )
+
+        # Mirror the fitted pipeline's structure with the same model
+        # hyperparams. Fresh pipeline so the existing fitted_pipeline keeps
+        # its train-only state (callers may still want it for diagnostics).
+        params = self.fitted_pipeline.named_steps["model"].get_params(deep=False)
+        pipeline = self.build_pipeline()
+        pipeline.named_steps["model"].set_params(**params)
+        X, y = self._prepare(keep)
+        pipeline.fit(X, y)
+
+        self.finalized_pipeline = pipeline
+        self.finalize_through = finalize_through
+
     def _set_fitted(self, pipeline: Pipeline, train_df: pl.DataFrame) -> None:
         """Stash the fitted pipeline and cache feature names. Helpers read
         from ``self.fitted_pipeline`` and ``self._feature_names``.
@@ -274,14 +342,19 @@ class CollectionModel:
         self,
         df: pl.DataFrame,
         threshold: Optional[float] = None,
+        use_finalized: bool = False,
     ) -> Dict[str, float]:
         """Evaluate the fitted model on ``df``.
 
         Classification: ``threshold`` defaults to ``self.threshold`` (set by
         :meth:`find_threshold`); falls back to 0.5 if neither is set.
         Regression: ``threshold`` is ignored.
+
+        ``use_finalized=True`` evaluates with the finalized pipeline. Note
+        that evaluating the finalized model on data it was refit on is not
+        a generalization measure — use this only on truly held-out frames.
         """
-        pipeline = self._require_fitted()
+        pipeline = self._require_fitted(use_finalized=use_finalized)
         if self.outcome.task == "classification":
             t = self.threshold if threshold is None else threshold
             return self._evaluate_classification(pipeline, df, threshold=t)
@@ -293,14 +366,17 @@ class CollectionModel:
         self,
         df: pl.DataFrame,
         threshold: Optional[float] = None,
+        use_finalized: bool = False,
     ) -> pl.DataFrame:
         """Return ``df`` with prediction columns appended.
 
         Classification: appends ``proba`` and ``pred`` (hard prediction at
         ``threshold``; defaults to ``self.threshold``, falling back to 0.5).
         Regression: appends ``pred``; ``threshold`` ignored.
+
+        Pass ``use_finalized=True`` to predict with the finalized pipeline.
         """
-        pipeline = self._require_fitted()
+        pipeline = self._require_fitted(use_finalized=use_finalized)
         X, _ = self._prepare(df)
         if self.outcome.task == "classification":
             proba = pipeline.predict_proba(X)[:, 1]
@@ -383,6 +459,7 @@ class CollectionModel:
             (100, None),
         ),
         bin_column: str = "users_rated",
+        use_finalized: bool = False,
     ) -> pd.DataFrame:
         """Evaluate ``df`` stratified by a numeric bin column (default
         ``users_rated``).
@@ -403,7 +480,7 @@ class CollectionModel:
                 f"bin_column {bin_column!r} missing from df; "
                 f"available columns start with: {df.columns[:10]}"
             )
-        pipeline = self._require_fitted()
+        pipeline = self._require_fitted(use_finalized=use_finalized)
         t = self.threshold if threshold is None else threshold
 
         rows = []
@@ -524,6 +601,7 @@ class CollectionModel:
         n: int = 25,
         exclude_game_ids: Optional[Iterable[int]] = None,
         include_columns: Sequence[str] = ("game_id", "name", "year_published"),
+        use_finalized: bool = False,
     ) -> pl.DataFrame:
         """Score every row in ``df`` and return the top-``n`` by predicted score.
 
@@ -538,12 +616,16 @@ class CollectionModel:
                 the user already owns).
             include_columns: Columns from ``df`` to surface alongside the
                 score. Missing columns are silently skipped.
+            use_finalized: If ``True`` use ``self.finalized_pipeline`` (refit
+                on the full pre-finalize-through window). Required for
+                ranking upcoming releases since the train-only pipeline
+                never saw the most recent year.
 
         Returns:
             Polars DataFrame with the ``include_columns`` present in ``df``
             plus a ``score`` column, sorted by score descending, top ``n`` rows.
         """
-        pipeline = self._require_fitted()
+        pipeline = self._require_fitted(use_finalized=use_finalized)
         if df.height == 0:
             return df.head(0).with_columns(pl.lit(None).cast(pl.Float64).alias("score"))
 

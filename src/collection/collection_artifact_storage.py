@@ -758,6 +758,9 @@ class CollectionArtifactStorage:
         ``train_used`` is the actual training frame after downsampling or
         feature-slicing (different from the canonical training split).
 
+        Finalization (refit on train+val+test through ``finalize_through``)
+        is a separate step — see :meth:`save_finalized_pipeline`.
+
         Returns the absolute path to the version directory.
         """
         self._validate_candidate_name(candidate)
@@ -799,6 +802,60 @@ class CollectionArtifactStorage:
             f"Saved candidate run {outcome}/{candidate} v{version} to {version_dir}/"
         )
         return f"{version_dir}/"
+
+    def save_finalized_pipeline(
+        self,
+        outcome: str,
+        candidate: str,
+        version: int,
+        pipeline: Any,
+        finalize_through: int,
+    ) -> str:
+        """Add a finalized pipeline to an existing candidate run directory.
+
+        Writes ``finalized.pkl`` next to the existing ``model.pkl`` and
+        updates ``registration.json`` with ``finalize_through`` and the
+        timestamp the finalize was applied. Returns the path to the
+        ``finalized.pkl`` file.
+        """
+        self._validate_candidate_name(candidate)
+        version_rel = Path(outcome) / candidate / f"v{version}"
+        if not (self.base_dir / version_rel).exists():
+            raise ValueError(
+                f"No run at {version_rel}; can't add finalized pipeline"
+            )
+
+        finalized_path = self._upload_pickle(
+            version_rel / "finalized.pkl", pipeline
+        )
+
+        reg_path = version_rel / "registration.json"
+        registration = self._download_json(reg_path) or {}
+        registration["finalize_through"] = int(finalize_through)
+        registration["finalized_at"] = datetime.now().isoformat()
+        self._upload_json(reg_path, registration)
+
+        logger.info(
+            f"Saved finalized pipeline to {self.base_dir / finalized_path}"
+        )
+        return f"{self.base_dir / finalized_path}"
+
+    def load_finalized_pipeline(
+        self,
+        outcome: str,
+        candidate: str,
+        version: Optional[int] = None,
+    ) -> Optional[Any]:
+        """Load the finalized pipeline for an existing run, or ``None`` if
+        the candidate has not been finalized yet."""
+        self._validate_candidate_name(candidate)
+        if version is None:
+            version = self.latest_candidate_version(outcome, candidate)
+            if version is None:
+                return None
+        return self._download_pickle(
+            Path(outcome) / candidate / f"v{version}" / "finalized.pkl"
+        )
 
     def load_candidate_run(
         self,

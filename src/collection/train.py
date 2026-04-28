@@ -111,6 +111,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         splits_version=splits["version"],
         username=args.username,
     )
+
     artifact_dir = save_candidate_run(result, storage)
     version = storage.latest_candidate_version(args.outcome, candidate.name)
 
@@ -121,7 +122,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "outcome": args.outcome,
                 "version": version,
                 "splits_version": result.splits_version,
-                "threshold": result.threshold,
+                "threshold": result.model.threshold,
                 "val_metrics": result.val_metrics,
                 "test_metrics": result.test_metrics,
                 "n_train": result.train_n,

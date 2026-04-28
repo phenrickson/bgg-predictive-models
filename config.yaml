@@ -184,6 +184,11 @@ collections:
     top_n_categories: 10
     top_n_mechanics: 10
   min_ratings_for_universe: 25
+  # Last year (inclusive) the finalize step refits each candidate on. After
+  # tuning + evaluation against the time-based splits, finalize() refits on
+  # train+val+test filtered to year_published <= finalize_through. The
+  # resulting pipeline is what scores upcoming releases.
+  finalize_through: 2025
   outcomes:
     own:
       task: classification

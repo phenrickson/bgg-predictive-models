@@ -56,6 +56,17 @@ compare outcome="own" out="" candidates="":
         $([ -n "{{out}}" ] && echo "--out {{out}}") \
         $([ -n "{{candidates}}" ] && echo "--candidates {{candidates}}")
 
+# Refit a trained candidate on train+val+test through finalize_through.
+# Defaults to collections.finalize_through from config.yaml; override with
+# finalize_through=2025 if you need a different cutoff.
+finalize outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
+    uv run python -m src.collection.finalize \
+        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --candidate {{candidate}} \
+        $([ "{{version}}" != "latest" ] && echo "--version {{version}}") \
+        $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}") \
+        --local-root {{local_root}}
+
 # Copy a candidate run into the production-winner path.
 promote outcome="own" candidate="lgbm_default" version="latest":
     uv run python -m src.collection.promote \
