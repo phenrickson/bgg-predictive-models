@@ -668,12 +668,15 @@ model.top_games(upcoming, n=25)
 
 ### Cross-candidate comparison
 
-`compare_top_games` takes each candidate's top-``n`` and unions them. The output has one row per game that made *any* model's top-``n``, with every model's score side-by-side and a `picked_by` column listing which models had it. Sorted by mean score descending — so games every model liked float to the top, while games only one model picked sit lower with that model's name in `picked_by`.
+Two complementary views of model agreement:
+
+-   **`top_games_by_rank`** — each candidate's top-``n`` laid out by rank. Row 1 shows every model's #1 pick side-by-side; row 2 their #2; etc. Best for "what does each model actually pick first?"
+-   **`compare_top_games`** — pick a single ranking (mean score by default, or a specific candidate via `rank_by`) and surface every model's score for those rows. Best for "given this ordering, where do models agree?"
 
 ```{python}
-from src.collection.candidate_comparison import compare_top_games
+from src.collection.candidate_comparison import compare_top_games, top_games_by_rank
 
-compare_top_games(results, train_df, n=25)
+top_games_by_rank(results, train_df, n=25)
 ```
 
 ```{python}

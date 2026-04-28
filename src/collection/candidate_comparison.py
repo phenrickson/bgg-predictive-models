@@ -266,3 +266,62 @@ def compare_top_games(
     if sort_col == "_mean_score":
         out = out.drop(sort_col)
     return out
+
+
+def top_games_by_rank(
+    results: Sequence["CandidateRunResult"],
+    df: pl.DataFrame,
+    n: int = 10,
+    exclude_game_ids: Optional[Iterable[int]] = None,
+    label_column: str = "name",
+) -> pl.DataFrame:
+    """Side-by-side top-``n`` picks per candidate, aligned by rank.
+
+    One row per rank position (1..n). For each candidate, two columns:
+    ``<label_column>_<candidate>`` (the game's display name) and
+    ``score_<candidate>`` (the model's score). Reads as "model A's
+    top 1 pick was X with score 0.94; model B's was Y with score 0.92."
+
+    Args:
+        results: In-memory ``CandidateRunResult``s (from ``train_candidates``).
+        df: Rows to score. Must have ``label_column`` plus the columns
+            each model was trained on.
+        n: Top-N per candidate.
+        exclude_game_ids: ``game_id``s to drop before ranking.
+        label_column: Column to surface as each game's identifier
+            (default ``"name"``).
+    """
+    if not results:
+        raise ValueError("top_games_by_rank requires at least one result")
+    if label_column not in df.columns:
+        raise ValueError(
+            f"label_column {label_column!r} missing from df; "
+            f"columns: {df.columns[:10]}"
+        )
+
+    excluded = set(exclude_game_ids) if exclude_game_ids is not None else set()
+
+    columns: Dict[str, List[Any]] = {"rank": list(range(1, n + 1))}
+    for r in results:
+        pipeline = r.model._require_fitted()
+        X = df.drop("label") if "label" in df.columns else df
+        X = X.to_pandas()
+        if r.outcome.task == "classification":
+            score = pipeline.predict_proba(X)[:, 1]
+        else:
+            score = pipeline.predict(X)
+        scored = df.with_columns(pl.Series("_score", score))
+        if excluded and "game_id" in scored.columns:
+            scored = scored.filter(~pl.col("game_id").is_in(list(excluded)))
+        top = scored.sort("_score", descending=True).head(n)
+
+        labels = top[label_column].to_list()
+        scores = top["_score"].to_list()
+        # Pad to ``n`` rows if df was smaller than n after exclusions.
+        labels += [None] * (n - len(labels))
+        scores += [None] * (n - len(scores))
+
+        columns[f"{label_column}_{r.candidate.name}"] = labels
+        columns[f"score_{r.candidate.name}"] = scores
+
+    return pl.DataFrame(columns)
