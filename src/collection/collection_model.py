@@ -5,7 +5,7 @@ tuning infrastructure from src.models.training.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -48,6 +48,7 @@ class ClassificationModelConfig:
     handle_imbalance: str = "scale_pos_weight"  # 'scale_pos_weight' | 'none'
     threshold_optimization_metric: str = "f2"  # 'f1' | 'f2' | 'precision' | 'recall'
     preprocessor_type: str = "auto"
+    preprocessor_kwargs: Dict[str, Any] = field(default_factory=dict)
     tuning_metric: str = "log_loss"
     patience: int = 10
 
@@ -56,6 +57,7 @@ class ClassificationModelConfig:
 class RegressionModelConfig:
     model_type: str = "lightgbm"  # 'lightgbm' | 'catboost'
     preprocessor_type: str = "auto"
+    preprocessor_kwargs: Dict[str, Any] = field(default_factory=dict)
     tuning_metric: str = "rmse"  # 'rmse' | 'mae'
     patience: int = 10
 
@@ -142,7 +144,9 @@ class CollectionModel:
                 )
             model = CLASSIFIER_MAPPING[cfg.model_type]()
             preprocessor = create_preprocessing_pipeline(
-                model_type=cfg.preprocessor_type, model_name=cfg.model_type
+                model_type=cfg.preprocessor_type,
+                model_name=cfg.model_type,
+                **cfg.preprocessor_kwargs,
             )
             return Pipeline([("preprocessor", preprocessor), ("model", model)])
 
@@ -155,7 +159,9 @@ class CollectionModel:
                 )
             model = REGRESSOR_MAPPING[cfg.model_type]()
             preprocessor = create_preprocessing_pipeline(
-                model_type=cfg.preprocessor_type, model_name=cfg.model_type
+                model_type=cfg.preprocessor_type,
+                model_name=cfg.model_type,
+                **cfg.preprocessor_kwargs,
             )
             return Pipeline([("preprocessor", preprocessor), ("model", model)])
 
