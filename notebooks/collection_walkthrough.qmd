@@ -334,6 +334,7 @@ print(
 print('train', train_df.shape)
 print('train_down', train_down.shape)
 ```
+
 Tune hyperparameters using `train_down` for fitting and `val_df` for
 scoring. `tune` returns the fitted best pipeline, the chosen params, and
 a results frame with one row per evaluated config (early-stopped configs
@@ -686,6 +687,42 @@ of the trained pipeline, aligned with the preprocessor's output feature names.
 ```{python}
 importance = model.feature_importance(pipeline_obj, train_down)
 importance.head(20)
+```
+
+### Top features overall
+
+Diverging-bar plot of the top-N positive and top-N negative features.
+Default renderer is plotnine (static); pass `interactive=True` for plotly.
+
+```{python}
+from src.collection.viz import (
+    plot_feature_importance,
+    plot_feature_importance_grid,
+)
+
+plot_feature_importance(importance, top_pos=20, top_neg=20)
+```
+
+### Per-group views
+
+Filter to a single feature family (designers, publishers, mechanics, etc.)
+and strip the prefix from the y-axis labels.
+
+```{python}
+plot_feature_importance(importance, group="Publishers", top_pos=20, top_neg=15)
+```
+
+### Faceted across groups
+
+One panel per group, shared color scale.
+
+```{python}
+plot_feature_importance_grid(
+    importance,
+    groups=["Designers", "Publishers", "Mechanics", "Categories"],
+    top_pos=12,
+    top_neg=12,
+)
 ```
 
 ---
