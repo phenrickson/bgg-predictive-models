@@ -71,9 +71,14 @@ class PipelineConfig:
     analyzer_config: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
     processor_config: Optional[ProcessorConfig] = None
-    """Optional ProcessorConfig passed to :class:`CollectionProcessor` for both
-    collection processing and game-universe feature loading. If ``None``, the
-    processor uses its own defaults."""
+    """Optional ProcessorConfig passed to :class:`CollectionProcessor`."""
+
+    use_predicted_complexity: bool = False
+    """If True, the loaded universe carries ``predicted_complexity``."""
+
+    use_embeddings: bool = False
+    """If True, the loaded universe carries description-embedding columns
+    (``emb_0..emb_{N-1}``)."""
 
     downsample_negatives_ratio: Optional[float] = None
     """If set, apply :func:`downsample_negatives` to the training split of
@@ -174,12 +179,17 @@ class CollectionPipeline:
         # Step 2: save the processed snapshot (outcome-agnostic)
         self.storage.save_collection(processed)
 
-        # Step 3: load the game universe (used for negative sampling and prediction).
-        # This is the full BGG game-features dataset, not the user's collection.
+        # Step 3: load the game universe (features for every game).
         universe_df = self._load_game_universe()
         logger.info(f"Loaded game universe: {universe_df.height} games")
 
-        # Step 4: load outcomes from config
+        # Step 4: join universe (features) with the user's collection
+        # (status). Every universe row gets the user's status if any.
+        # This single frame is what the splitter operates on.
+        joined = universe_df.join(processed, on="game_id", how="left")
+        logger.info(f"Joined frame: {joined.height} rows × {len(joined.columns)} columns")
+
+        # Step 5: load outcomes from config
         outcomes = load_outcomes(self._project_config.raw_config)
         if outcome_filter:
             missing = set(outcome_filter) - set(outcomes)
@@ -189,10 +199,9 @@ class CollectionPipeline:
         if not outcomes:
             raise ValueError("No outcomes to train")
 
-        # Step 5: shared splitter. Negatives are sampled from the full universe,
-        # not from the user's collection.
+        # Step 6: shared splitter (no universe arg — just splits the
+        # joined frame).
         splitter = CollectionSplitter(
-            universe_df=universe_df,
             classification_config=self.config.classification_split_config,
             regression_config=self.config.regression_split_config,
         )
@@ -209,7 +218,7 @@ class CollectionPipeline:
             logger.info(f"--- outcome: {name} ({outcome.task}) ---")
             try:
                 results["outcomes"][name] = self._train_one_outcome(
-                    processed, outcome, splitter
+                    joined, outcome, splitter
                 )
             except Exception as exc:
                 logger.exception(f"Outcome {name!r} failed: {exc}")
@@ -287,24 +296,19 @@ class CollectionPipeline:
         return result
 
     def _load_game_universe(self) -> pl.DataFrame:
-        """Full BGG game universe for negative sampling and prediction.
-
-        Uses the same enrichment flags as the user-collection processing,
-        so the feature schema matches on both sides of the split.
-        """
-        pcfg = self.config.processor_config or ProcessorConfig()
+        """Full BGG game universe (features for every game)."""
         return BGGDataLoader(self.bq_config).load_features(
-            use_predicted_complexity=pcfg.use_predicted_complexity,
-            use_embeddings=pcfg.use_embeddings,
+            use_predicted_complexity=self.config.use_predicted_complexity,
+            use_embeddings=self.config.use_embeddings,
         )
 
     def _train_one_outcome(
         self,
-        processed: pl.DataFrame,
+        joined: pl.DataFrame,
         outcome: OutcomeDefinition,
         splitter: CollectionSplitter,
     ) -> Dict[str, Any]:
-        labeled = apply_outcome(processed, outcome)
+        labeled = apply_outcome(joined, outcome)
         train_df, val_df, test_df = splitter.split(labeled, outcome)
 
         if (

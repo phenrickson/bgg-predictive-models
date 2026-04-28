@@ -17,7 +17,7 @@ import sys
 from typing import List, Optional
 
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
-from src.collection.collection_processor import CollectionProcessor, ProcessorConfig
+from src.collection.collection_processor import CollectionProcessor
 from src.collection.collection_split import (
     ClassificationSplitConfig,
     CollectionSplitter,
@@ -72,11 +72,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         environment=args.environment,
     )
 
-    processor_config = ProcessorConfig()
     processor = CollectionProcessor(
         config=bq_config,
         environment=args.environment,
-        processor_config=processor_config,
     )
     processed = processor.process(args.username)
     if processed is None:
@@ -90,17 +88,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     universe_df = BGGDataLoader(bq_config).load_features(
-        use_predicted_complexity=processor_config.use_predicted_complexity,
-        use_embeddings=processor_config.use_embeddings,
+        use_predicted_complexity=False,
+        use_embeddings=False,
     )
 
+    # Universe (features) ⟕ collection (status). Every game in the
+    # universe gets the user's status if any.
+    joined = universe_df.join(processed, on="game_id", how="left")
+    labeled = apply_outcome(joined, outcome)
+
     splitter = CollectionSplitter(
-        universe_df=universe_df,
         classification_config=ClassificationSplitConfig(),
         regression_config=RegressionSplitConfig(),
     )
-
-    labeled = apply_outcome(processed, outcome)
     train_df, val_df, test_df = splitter.split(labeled, outcome)
 
     paths = storage.save_canonical_splits(args.outcome, train_df, val_df, test_df)

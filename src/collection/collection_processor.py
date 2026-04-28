@@ -1,7 +1,10 @@
-"""Process raw user collection into a joined, game-universe-aware dataframe.
+"""Process raw user collection into a canonical-schema dataframe.
 
-Outcome-agnostic: produces one unlabeled dataframe per user. Labeling is
-applied downstream via src.collection.outcomes.apply_outcome.
+Outcome-agnostic: produces one unlabeled, user-only dataframe per user
+(no game features). Game features are loaded separately via
+:meth:`src.data.loader.BGGDataLoader.load_features` and joined later in
+the pipeline; this processor only normalizes the user's collection
+columns.
 
 Raw collection columns come from the BGG XML API (see CollectionLoader).
 The processor normalizes those names into a canonical schema used by the
@@ -15,7 +18,6 @@ from typing import Optional
 import polars as pl
 
 from src.collection.collection_storage import CollectionStorage
-from src.data.loader import BGGDataLoader
 from src.utils.config import BigQueryConfig
 
 logger = logging.getLogger(__name__)
@@ -33,23 +35,14 @@ class ProcessorConfig:
     games_only: bool = True
     """If True, filter out non-boardgame subtypes."""
 
-    use_predicted_complexity: bool = False
-    """If True, join latest predicted_complexity from
-    bgg-data-warehouse.predictions.bgg_complexity_predictions."""
-
-    use_embeddings: bool = False
-    """If True, join latest description embeddings from
-    bgg-data-warehouse.predictions.bgg_description_embeddings and
-    explode into emb_0..emb_N columns."""
-
 
 class CollectionProcessor:
-    """Join raw user collection with game universe features.
+    """Normalize a user's stored collection into canonical schema.
 
-    Outcome-agnostic: returns a single unlabeled dataframe containing all
-    games the user has any relationship to (owned, prev_owned, rated, etc.),
-    joined with the game universe feature set. Labeling is applied by the
-    pipeline downstream via apply_outcome().
+    Outcome-agnostic: returns the user's collection rows with canonical
+    column names and (optionally) filtered to boardgame subtypes. Game
+    features are not joined here — the caller joins with the universe
+    (loaded via :class:`BGGDataLoader`) before labeling and splitting.
     """
 
     def __init__(
@@ -62,7 +55,6 @@ class CollectionProcessor:
         self.environment = environment
         self.processor_config = processor_config or ProcessorConfig()
         self.storage = CollectionStorage(environment=environment)
-        self.loader = BGGDataLoader(config)
 
     def process(self, username: str) -> Optional[pl.DataFrame]:
         """Produce the unlabeled, joined dataframe for one user.
@@ -89,19 +81,10 @@ class CollectionProcessor:
                 collection_df = collection_df.filter(pl.col("subtype") == "boardgame")
                 logger.info(f"Filtered to boardgames: {before} -> {len(collection_df)}")
 
-        logger.info("Loading game universe features from warehouse")
-        features_df = self.loader.load_features(
-            use_predicted_complexity=self.processor_config.use_predicted_complexity,
-            use_embeddings=self.processor_config.use_embeddings,
-        )
-
-        logger.info("Joining collection with game features")
-        joined = collection_df.join(features_df, on="game_id", how="left", suffix="_features")
-
         logger.info(
-            f"Processed {len(joined)} rows × {len(joined.columns)} columns for '{username}'"
+            f"Processed {len(collection_df)} rows × {len(collection_df.columns)} columns for '{username}'"
         )
-        return joined
+        return collection_df
 
     @staticmethod
     def _to_canonical(df: pl.DataFrame) -> pl.DataFrame:

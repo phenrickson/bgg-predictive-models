@@ -83,15 +83,16 @@ def patched_pipeline_env(tmp_path, monkeypatch):
 
 
 def test_pipeline_passes_processor_config_through(patched_pipeline_env):
-    """Constructing the pipeline with a ProcessorConfig should:
-
-    - construct CollectionProcessor with that same ProcessorConfig
-      (so user-collection processing inherits the flags), and
-    - call BGGDataLoader.load_features with matching flags
-      (so the universe inherits the same flags).
+    """Constructing the pipeline with a ProcessorConfig should construct
+    CollectionProcessor with that same ProcessorConfig, and feature
+    flags on PipelineConfig should flow through to BGGDataLoader.
     """
-    pc = ProcessorConfig(use_predicted_complexity=True, use_embeddings=False)
-    config = PipelineConfig(processor_config=pc)
+    pc = ProcessorConfig()
+    config = PipelineConfig(
+        processor_config=pc,
+        use_predicted_complexity=True,
+        use_embeddings=False,
+    )
 
     with patch(
         "src.collection.collection_pipeline.CollectionProcessor"
@@ -116,8 +117,7 @@ def test_pipeline_passes_processor_config_through(patched_pipeline_env):
         _, kwargs = mock_processor_cls.call_args
         assert kwargs.get("processor_config") is pc
 
-        # _load_game_universe constructs a BGGDataLoader and forwards the
-        # enrichment flags from processor_config.
+        # _load_game_universe forwards the feature flags from PipelineConfig.
         loader_instance.load_features.assert_called_once_with(
             use_predicted_complexity=True,
             use_embeddings=False,
@@ -199,7 +199,7 @@ def test_downsample_applied_to_train_only(patched_pipeline_env):
         pipeline = CollectionPipeline("alice", config)
         # Bypass the processor/universe loaders we aren't testing here.
         pipeline._train_one_outcome(
-            processed=_labeled_frame(10, 100),
+            joined=_labeled_frame(10, 100),
             outcome=outcome,
             splitter=splitter,
         )
@@ -267,7 +267,7 @@ def test_threshold_used_in_evaluation_for_classification(patched_pipeline_env):
 
         pipeline = CollectionPipeline("alice", config)
         pipeline._train_one_outcome(
-            processed=_labeled_frame(5, 5),
+            joined=_labeled_frame(5, 5),
             outcome=outcome,
             splitter=splitter,
         )
@@ -321,7 +321,7 @@ def test_no_threshold_passed_for_regression(patched_pipeline_env):
 
         pipeline = CollectionPipeline("alice", config)
         pipeline._train_one_outcome(
-            processed=_labeled_frame(5, 5),
+            joined=_labeled_frame(5, 5),
             outcome=outcome,
             splitter=splitter,
         )
