@@ -186,58 +186,52 @@ def compare_top_games(
     results: Sequence["CandidateRunResult"],
     df: pl.DataFrame,
     n: int = 25,
-    rank_by: Optional[str] = None,
     exclude_game_ids: Optional[Iterable[int]] = None,
     include_columns: Sequence[str] = ("game_id", "name", "year_published"),
 ) -> pl.DataFrame:
-    """Score ``df`` with each candidate's model and return a wide top-N view.
+    """Per-model top-``n`` games, unioned across candidates.
 
-    One row per game, one ``score_<candidate>`` column per result, plus the
-    columns in ``include_columns`` that exist on ``df``. Useful for
-    eyeballing where models agree and disagree.
+    Each candidate scores ``df`` and contributes its own top-``n`` games to
+    the output set. Games appear in the result if they made *any* model's
+    top-``n``. Each row carries every model's score for that game (so
+    disagreements are visible), plus a ``picked_by`` column listing which
+    models had it in their top.
 
     Args:
         results: In-memory ``CandidateRunResult``s (from ``train_candidates``).
         df: Rows to score. Must have the columns each model was trained on.
-        n: Top-N rows to return after sorting.
-        rank_by: Candidate name to sort by. ``None`` (default) sorts by the
-            mean score across all candidates, so games every model likes
-            float to the top.
-        exclude_game_ids: ``game_id``s to drop before ranking (e.g. games
-            the user already owns).
+        n: Top-N per candidate. Output row count is the union — between
+            ``n`` (perfect agreement) and ``n * len(results)`` (no overlap).
+        exclude_game_ids: ``game_id``s to drop before ranking.
         include_columns: Columns from ``df`` to surface alongside the
             scores. Missing columns are silently skipped.
 
     Returns:
-        Polars DataFrame with the kept ``include_columns`` plus one
-        ``score_<candidate>`` column per result, sorted descending by
-        ``rank_by`` (or mean score), top-``n`` rows.
+        Polars DataFrame with the kept ``include_columns``, one
+        ``score_<candidate>`` column per result, and a ``picked_by``
+        column. Sorted by mean score descending so games every model
+        liked float to the top.
     """
     if not results:
         raise ValueError("compare_top_games requires at least one result")
+    if "game_id" not in df.columns:
+        raise ValueError("compare_top_games requires a 'game_id' column on df")
 
     names = [r.candidate.name for r in results]
-    if rank_by is not None and rank_by not in names:
-        raise ValueError(
-            f"rank_by={rank_by!r} not in candidate names: {names}"
-        )
+    score_cols = [f"score_{nm}" for nm in names]
 
     if df.height == 0:
-        empty_cols = [c for c in include_columns if c in df.columns] + [
-            f"score_{n_}" for n_ in names
-        ]
-        return df.head(0).select([
+        empty_cols = [c for c in include_columns if c in df.columns] + score_cols
+        empty = df.head(0).select([
             pl.lit(None).cast(pl.Float64).alias(c) for c in empty_cols
         ])
+        return empty.with_columns(pl.lit("").alias("picked_by"))
 
-    # Score with each model. CollectionModel.top_games uses self.fitted_pipeline
-    # internally; we replicate that scoring logic without the per-model sort,
-    # because we want all rows aligned for the wide view.
+    # Score every row with every model. (Cheaper than re-scoring per model
+    # and aligning afterwards; the predict cost is the same either way and
+    # we end up with a single wide frame.)
     scored = df
-    score_cols: List[str] = []
-    for r in results:
-        col = f"score_{r.candidate.name}"
-        score_cols.append(col)
+    for r, col in zip(results, score_cols):
         pipeline = r.model._require_fitted()
         X = df.drop("label") if "label" in df.columns else df
         X = X.to_pandas()
@@ -249,20 +243,36 @@ def compare_top_games(
 
     if exclude_game_ids is not None:
         excluded = list(set(exclude_game_ids))
-        if excluded and "game_id" in scored.columns:
+        if excluded:
             scored = scored.filter(~pl.col("game_id").is_in(excluded))
 
-    if rank_by is not None:
-        sort_col = f"score_{rank_by}"
-    else:
-        sort_col = "_mean_score"
-        scored = scored.with_columns(
-            pl.mean_horizontal(*score_cols).alias(sort_col)
+    # Each candidate's top-N by its own score. Track which models picked
+    # each game so we can build picked_by after unioning.
+    picks: Dict[int, List[str]] = {}
+    for r, col in zip(results, score_cols):
+        top = scored.sort(col, descending=True).head(n)
+        for gid in top["game_id"].to_list():
+            picks.setdefault(gid, []).append(r.candidate.name)
+
+    if not picks:
+        kept = [c for c in include_columns if c in scored.columns]
+        return scored.head(0).select(kept + score_cols).with_columns(
+            pl.lit("").alias("picked_by")
         )
 
-    kept = [c for c in include_columns if c in scored.columns]
-    out = scored.select(kept + score_cols + ([sort_col] if sort_col == "_mean_score" else []))
-    out = out.sort(sort_col, descending=True).head(n)
-    if sort_col == "_mean_score":
-        out = out.drop(sort_col)
-    return out
+    union = scored.filter(pl.col("game_id").is_in(list(picks.keys())))
+
+    # Attach picked_by ("logistic, lgbm") in the candidate order callers
+    # passed in.
+    picked_by_map = {gid: ", ".join(ms) for gid, ms in picks.items()}
+    union = union.with_columns(
+        pl.col("game_id").map_elements(
+            picked_by_map.get, return_dtype=pl.Utf8
+        ).alias("picked_by")
+    )
+
+    kept = [c for c in include_columns if c in union.columns]
+    out = union.select(kept + score_cols + ["picked_by"])
+    return out.with_columns(
+        pl.mean_horizontal(*score_cols).alias("_mean_score")
+    ).sort("_mean_score", descending=True).drop("_mean_score")

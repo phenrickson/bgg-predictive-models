@@ -259,25 +259,10 @@ print(unfit_pipeline)
 `ClassificationModelConfig` and `RegressionModelConfig` both take an open `preprocessor_kwargs` dict that gets passed straight through to `create_preprocessing_pipeline`. Use it to override any of the 25+ knobs in that function's defaults (`designer_min_freq`, `max_publisher_features`, `include_description_embeddings`, etc.) without promoting them to first-class config fields. Typos raise `TypeError` at `build_pipeline()` time — there's no silent fallthrough.
 
 ```{python}
-# Example: tighter frequency cutoffs on a tree model.
-strict_model = CollectionModel(
-    username=USERNAME,
-    outcome=outcomes["own"],
-    classification_config=ClassificationModelConfig(
-        model_type="lightgbm",
-        preprocessor_kwargs={
-            "family_min_freq": 500,
-            "preserve_columns": ["year_published", "predicted_complexity"],
-        },
-    ),
-)
-print(strict_model.build_pipeline().named_steps["preprocessor"])
-```
-
-```{python}
 # Optional: downsample training-set negatives to 5 per positive for class balance.
 # Only touch the training frame — val and test keep the real class distribution
 # so tuning and evaluation stay honest.
+downsample_ratio = 250
 train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=250)
 
 print(
@@ -309,27 +294,27 @@ tuning_results.head(10)
 `tune_cv` instead runs k-fold CV on the training set only — val/test stay completely untouched until evaluation. The CV path exhaustively searches the full grid (no patience early-stopping), so expect it to be slower than `tune` for the same grid.
 
 ```{python}
-model_cv = CollectionModel(
-    username=USERNAME,
-    outcome=outcomes["own"],
-    classification_config=ClassificationModelConfig(
-        tuning_metric="log_loss",
-    ),
-)
+# model_cv = CollectionModel(
+#     username=USERNAME,
+#     outcome=outcomes["own"],
+#     classification_config=ClassificationModelConfig(
+#         tuning_metric="log_loss",
+#     ),
+# )
 
-best_params_cv, cv_results = model_cv.tune_cv(train_down, cv_folds=3)
-print("cv best params:", best_params_cv)
-cv_results.head(10)
+# best_params_cv, cv_results = model_cv.tune_cv(train_down, cv_folds=3)
+# print("cv best params:", best_params_cv)
+# cv_results.head(10)
 ```
 
 Compare the two on val/test so you can see whether CV-selected hyperparameters generalize better than holdout-selected ones:
 
 ```{python}
-model_cv.find_threshold(val_df)
-val_metrics_cv = model_cv.evaluate(val_df)
-test_metrics_cv = model_cv.evaluate(test_df)
-print("cv val :", val_metrics_cv)
-print("cv test:", test_metrics_cv)
+# model_cv.find_threshold(val_df)
+# val_metrics_cv = model_cv.evaluate(val_df)
+# test_metrics_cv = model_cv.evaluate(test_df)
+# print("cv val :", val_metrics_cv)
+# print("cv test:", test_metrics_cv)
 ```
 
 ------------------------------------------------------------------------
@@ -472,7 +457,7 @@ candidates = [
             preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
         ),
         tuning="holdout",
-        downsample_negatives_ratio=500,
+        downsample_negatives_ratio=downsample_ratio,
     ),
     CollectionCandidate(
         name="lgbm_default",
@@ -482,7 +467,7 @@ candidates = [
             preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
         ),
         tuning="holdout",
-        downsample_negatives_ratio=500,
+        downsample_negatives_ratio=downsample_ratio,
     ),
 ]
 
@@ -561,9 +546,9 @@ summarize_runs(runs)
 
 ```{python}
 comparison_df = compare_runs(runs)
-comparison_df.filter(pl.col("split") == "test").select(
-    "candidate", "metric", "value"
-)
+comparison_df.select(
+    "candidate", "split", "metric", "value"
+).filter(pl.col("metric")=='pr_auc')
 ```
 
 ### Stratified comparison across candidates
@@ -585,8 +570,8 @@ stratified_df = pl.from_pandas(
 )
 stratified_df.select([
     "candidate", "split", "bin", "n_rows", "n_pos",
-    "precision", "recall", "f1", "roc_auc"
-])
+    "precision", "recall", "f1", "roc_auc", "pr_auc"
+]).sort("split", "bin")
 ```
 
 ------------------------------------------------------------------------
@@ -648,15 +633,19 @@ print(f"score universe: {universe_df.height}, upcoming (2026+): {upcoming.height
 ```
 
 
-
 ### Top 25 unowned games in the training set
 
 ```{python}
 pl.Config.set_tbl_cols(-1)
 pl.Config.set_tbl_rows(50)
 pl.Config.set_fmt_str_lengths(200)
-      # show up to 50 rows
+# show up to 50 rows
 model.top_games(train_df, n=25, exclude_game_ids=owned_ids)
+```
+
+```{python}
+# top games from lightbbm
+# results[1].model.top_games(train_df, n=25, exclude_game_ids=owned_ids)
 ```
 
 ### Top 25 games in the validation set (2023–2024)
@@ -679,17 +668,24 @@ model.top_games(upcoming, n=25)
 
 ### Cross-candidate comparison
 
-`compare_top_games` scores the same frame with each candidate's model and lays the scores out side-by-side. Default ranking is by mean score (so games every model likes float to the top); pass `rank_by="lgbm_default"` to sort by a single candidate.
+`compare_top_games` takes each candidate's top-``n`` and unions them. The output has one row per game that made *any* model's top-``n``, with every model's score side-by-side and a `picked_by` column listing which models had it. Sorted by mean score descending — so games every model liked float to the top, while games only one model picked sit lower with that model's name in `picked_by`.
 
 ```{python}
 from src.collection.candidate_comparison import compare_top_games
 
+compare_top_games(results, train_df, n=25)
+```
+
+```{python}
 compare_top_games(results, val_df, n=25)
 ```
 
 ```{python}
-# Where do the models disagree most? Sort by lgbm and inspect the spread.
-compare_top_games(results, val_df, n=25, rank_by="lgbm_default")
+compare_top_games(results, test_df, n=25)
+```
+
+```{python}
+compare_top_games(results, upcoming, n=25, exclude_game_ids=owned_ids)
 ```
 
 ## Next
