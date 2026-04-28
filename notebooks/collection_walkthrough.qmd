@@ -260,7 +260,27 @@ model = CollectionModel(
 # Inspect the unfit pipeline before training.
 unfit_pipeline = model.build_pipeline()
 print(unfit_pipeline)
+```
 
+`ClassificationModelConfig` and `RegressionModelConfig` both take an open `preprocessor_kwargs` dict that gets passed straight through to `create_preprocessing_pipeline`. Use it to override any of the 25+ knobs in that function's defaults (`designer_min_freq`, `max_publisher_features`, `include_description_embeddings`, etc.) without promoting them to first-class config fields. Typos raise `TypeError` at `build_pipeline()` time — there's no silent fallthrough.
+
+```{python}
+# Example: tighter frequency cutoffs on a tree model.
+strict_model = CollectionModel(
+    username=USERNAME,
+    outcome=outcomes["own"],
+    classification_config=ClassificationModelConfig(
+        model_type="lightgbm",
+        preprocessor_kwargs={
+            "designer_min_freq": 25,
+            "max_publisher_features": 100,
+        },
+    ),
+)
+print(strict_model.build_pipeline().named_steps["preprocessor"])
+```
+
+```{python}
 # Optional: downsample training-set negatives to 5 per positive for class balance.
 # Only touch the training frame — val and test keep the real class distribution
 # so tuning and evaluation stay honest.
@@ -316,15 +336,6 @@ val_metrics_cv = model_cv.evaluate(pipeline_cv, val_df, threshold=threshold_cv)
 test_metrics_cv = model_cv.evaluate(pipeline_cv, test_df, threshold=threshold_cv)
 print("cv val :", val_metrics_cv)
 print("cv test:", test_metrics_cv)
-```
-
-### Direct fit with chosen params
-
-If you already know the hyperparameters you want, skip tuning entirely and call `train()` with a params dict (same key shape as `best_params`):
-
-```{python}
-# pipeline_manual = model.train(train_down, params=best_params)
-# print("manual pipeline:", [s[0] for s in pipeline_manual.steps])
 ```
 
 ------------------------------------------------------------------------
