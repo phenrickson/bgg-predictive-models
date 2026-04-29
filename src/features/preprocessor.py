@@ -3,7 +3,17 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 
-from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer, CorrelationFilter
+from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer, CorrelationFilter, RowNormalizer
+
+
+_ROW_NORM_FAMILY_PREFIXES = {
+    "mechanics": "mechanic_",
+    "categories": "category_",
+    "families": "family_",
+    "designers": "designer_",
+    "artists": "artist_",
+    "publishers": "publisher_",
+}
 
 
 def create_bgg_preprocessor(
@@ -19,6 +29,7 @@ def create_bgg_preprocessor(
     ],
     remove_correlated: bool = False,
     correlation_threshold: float = 0.95,
+    normalize_row_families: list = None,
     **kwargs,
 ) -> Pipeline:
     """
@@ -87,6 +98,18 @@ def create_bgg_preprocessor(
             ("correlation_filter", CorrelationFilter(threshold=correlation_threshold))
         )
 
+    # Resolve which prefix blocks to row-normalize. Unknown family names are
+    # an error rather than a silent skip — typos shouldn't fail open.
+    row_norm_prefixes: list = []
+    if normalize_row_families:
+        unknown = [f for f in normalize_row_families if f not in _ROW_NORM_FAMILY_PREFIXES]
+        if unknown:
+            raise ValueError(
+                f"Unknown row-norm families: {unknown}. "
+                f"Allowed: {sorted(_ROW_NORM_FAMILY_PREFIXES)}"
+            )
+        row_norm_prefixes = [_ROW_NORM_FAMILY_PREFIXES[f] for f in normalize_row_families]
+
     # Add additional steps for linear models
     if model_type == "linear":
         pipeline_steps.extend(
@@ -100,12 +123,16 @@ def create_bgg_preprocessor(
                     ),
                 ),
                 ("variance_selector", VarianceThreshold(threshold=0)),
-                ("scaler", StandardScaler()),
             ]
         )
+        if row_norm_prefixes:
+            pipeline_steps.append(("row_normalizer", RowNormalizer(prefixes=row_norm_prefixes)))
+        pipeline_steps.append(("scaler", StandardScaler()))
     elif model_type == "tree":
         # Minimal preprocessing for tree-based models
         pipeline_steps.extend([("variance_selector", VarianceThreshold(threshold=0))])
+        if row_norm_prefixes:
+            pipeline_steps.append(("row_normalizer", RowNormalizer(prefixes=row_norm_prefixes)))
 
     pipeline = Pipeline(pipeline_steps)
     pipeline.set_output(transform="pandas")

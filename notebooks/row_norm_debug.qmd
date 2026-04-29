@@ -1,0 +1,341 @@
+---
+title: "Row-Wise Mechanic Normalization Debug"
+author: Phil Henrickson
+format:
+  html:
+    code-fold: true
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    echo: true
+execute:
+  enabled: true
+jupyter:
+  kernelspec:
+    name: bgg-predictive-models
+    language: python
+    display_name: Python 3 (bgg-predictive-models .venv)
+---
+
+# About
+
+Inspect how over-tagged games (games with many mechanics) flow through the current preprocessor, then apply a standalone `RowNormalizer` to the mechanic block and compare. Goal is to eyeball whether row-wise normalization does what we expect on real data before promoting it into `BGGFeatureTransformer`.
+
+```{python}
+#| tags: [setup]
+USERNAME = "phenrickson"
+print(f"username: {USERNAME}")
+```
+
+```{python}
+#| tags: [setup]
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path().resolve()
+if (PROJECT_ROOT / "src").is_dir():
+    ROOT = PROJECT_ROOT
+else:
+    ROOT = PROJECT_ROOT.parent
+sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)
+
+import logging
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+import polars as pl
+import pandas as pd
+import numpy as np
+```
+
+## 1. Load splits
+
+Same loading path as `collection_walkthrough.qmd` — universe + collection, joined and labeled for `own`, then time-based split.
+
+```{python}
+from src.utils.config import load_config
+from src.collection.collection_processor import CollectionProcessor
+from src.collection.outcomes import load_outcomes, apply_outcome
+from src.data.loader import BGGDataLoader
+from src.collection.collection_split import (
+    CollectionSplitter,
+    ClassificationSplitConfig,
+    RegressionSplitConfig,
+)
+
+project_config = load_config()
+bq_config = project_config.get_bigquery_config()
+
+processor = CollectionProcessor(config=bq_config, environment="dev")
+processed = processor.process(USERNAME)
+outcomes = load_outcomes(project_config.raw_config)
+
+universe_loader = BGGDataLoader(bq_config)
+universe_df = universe_loader.load_features(
+    use_predicted_complexity=True,
+    use_embeddings=False,
+)
+
+joined = universe_df.join(processed, on="game_id", how="left")
+labeled_own = apply_outcome(joined, outcomes["own"])
+
+time_splitter = CollectionSplitter(
+    classification_config=ClassificationSplitConfig(
+        split_mode="time_based",
+        train_through=2022,
+        prediction_window=2,
+        test_window=1,
+        random_seed=1999,
+    ),
+    regression_config=RegressionSplitConfig(random_seed=42),
+)
+train_df, val_df, test_df = time_splitter.split(labeled_own, outcomes["own"])
+upcoming = apply_outcome(
+    labeled_own.filter(pl.col("year_published") >= 2026),
+    outcomes["own"],
+)
+print(f"train: {train_df.height}, val: {val_df.height}, test: {test_df.height}, upcoming: {upcoming.height}")
+```
+
+## 2. Build the current preprocessor
+
+Use the same `CollectionModel` setup as the walkthrough so the preprocessor matches what we actually train on. We don't need to fit a model — `transform_features` only needs the preprocessor stage.
+
+```{python}
+from src.collection.collection_model import (
+    CollectionModel,
+    ClassificationModelConfig,
+)
+from src.collection.collection_split import downsample_negatives
+
+model = CollectionModel(
+    username=USERNAME,
+    outcome=outcomes["own"],
+    classification_config=ClassificationModelConfig(
+        model_type="logistic",
+        tuning_metric="log_loss",
+        preprocessor_kwargs={
+            "preserve_columns": ["year_published", "predicted_complexity"]
+        },
+        patience=5,
+    ),
+)
+
+train_down = downsample_negatives(train_df, protect_min_ratings=25, ratio=100)
+# Fit the preprocessor (and a model) so transform_features works.
+model.tune(train_down, val_df)
+```
+
+```{python}
+X_train = model.transform_features(train_down)
+print(f"post-preprocess shape: {X_train.shape}")
+```
+
+## 3. Identify mechanic columns
+
+Mechanic features come out of `BGGFeatureTransformer` with a known prefix. Confirm what we're looking at and how many there are.
+
+```{python}
+mechanic_cols = [c for c in X_train.columns if c.startswith("mechanic_")]
+print(f"mechanic columns: {len(mechanic_cols)}")
+print("first 10:", mechanic_cols[:10])
+```
+
+If that prefix is wrong for the current preprocessor, adjust here before continuing.
+
+## 4. Find the over-tagged games
+
+Compute per-row mechanic count from the *raw* universe (just `len(mechanics)`), so we can spot kitchen-sink games independent of the preprocessor's filtering.
+
+```{python}
+pl.Config.set_tbl_cols(-1)
+pl.Config.set_tbl_rows(50)
+pl.Config.set_fmt_str_lengths(200)
+
+def mechanic_count(mechs):
+    if mechs is None:
+        return 0
+    if isinstance(mechs, list):
+        return len(mechs)
+    if hasattr(mechs, "__len__"):
+        return len(mechs)
+    return 0
+
+def with_mech_count(df: pl.DataFrame) -> pl.DataFrame:
+    counts = [mechanic_count(m) for m in df["mechanics"].to_list()]
+    return df.with_columns(pl.Series("raw_mechanic_count", counts))
+
+val_with = with_mech_count(val_df)
+upcoming_with = with_mech_count(upcoming)
+
+print("val — top 10 by raw mechanic count:")
+print(
+    val_with.select(["game_id", "name", "year_published", "raw_mechanic_count"])
+    .sort("raw_mechanic_count", descending=True)
+    .head(10)
+)
+
+print("\nupcoming — top 10 by raw mechanic count:")
+print(
+    upcoming_with.select(["game_id", "name", "year_published", "raw_mechanic_count"])
+    .sort("raw_mechanic_count", descending=True)
+    .head(10)
+)
+```
+
+## 5. Look at mechanic columns for kitchen-sink games (current preprocessing)
+
+Pick the top-N over-tagged games from the upcoming set, transform them through the fitted preprocessor, then look at just their mechanic columns. We expect to see lots of `1.0`s on a single row.
+
+```{python}
+SUSPECTS_N = 5
+
+suspects = (
+    upcoming_with.sort("raw_mechanic_count", descending=True)
+    .head(SUSPECTS_N)
+)
+print("suspects:")
+print(suspects.select(["game_id", "name", "raw_mechanic_count"]))
+
+X_suspects = model.transform_features(suspects)
+mech_block = X_suspects[mechanic_cols]
+
+# how much mechanic signal does each suspect carry?
+mech_summary = pd.DataFrame({
+    "name": suspects["name"].to_list(),
+    "raw_mechanic_count": suspects["raw_mechanic_count"].to_list(),
+    "nonzero_mechanic_cols": (mech_block != 0).sum(axis=1).to_numpy(),
+    "sum_mechanic_values": mech_block.sum(axis=1).to_numpy(),
+    "l2_mechanic_values": np.sqrt((mech_block ** 2).sum(axis=1)).to_numpy(),
+})
+mech_summary
+```
+
+For comparison, the same view across a normal slice of the upcoming set:
+
+```{python}
+X_upcoming = model.transform_features(upcoming_with)
+upcoming_mech = X_upcoming[mechanic_cols]
+
+print("upcoming mechanic-signal distribution (current preprocessing):")
+print(pd.DataFrame({
+    "nonzero": (upcoming_mech != 0).sum(axis=1),
+    "sum": upcoming_mech.sum(axis=1),
+    "l2": np.sqrt((upcoming_mech ** 2).sum(axis=1)),
+}).describe(percentiles=[0.5, 0.9, 0.95, 0.99]))
+```
+
+## 6. Train a second model with row-normalization on
+
+`RowNormalizer` is now wired into `create_bgg_preprocessor` via the
+`normalize_row_families` kwarg. It runs *before* `StandardScaler`, while
+the indicator columns are still 0/1, so the L2 norm of each row's
+mechanic/category/family block is bounded to 1.
+
+```{python}
+model_rn = CollectionModel(
+    username=USERNAME,
+    outcome=outcomes["own"],
+    classification_config=ClassificationModelConfig(
+        model_type="logistic",
+        tuning_metric="log_loss",
+        preprocessor_kwargs={
+            "preserve_columns": ["year_published", "predicted_complexity"],
+            "normalize_row_families": ["mechanics", "categories", "families"],
+        },
+        patience=5,
+    ),
+)
+model_rn.tune(train_down, val_df)
+```
+
+## 7. Compare suspects: before vs. after
+
+Same kitchen-sink games, transformed through the row-normalized
+preprocessor. Compare against the `mech_summary` from section 5.
+
+```{python}
+X_suspects_rn = model_rn.transform_features(suspects)
+mech_block_rn = X_suspects_rn[mechanic_cols]
+
+mech_summary_rn = pd.DataFrame({
+    "name": suspects["name"].to_list(),
+    "raw_mechanic_count": suspects["raw_mechanic_count"].to_list(),
+    "nonzero_mechanic_cols": (mech_block_rn != 0).sum(axis=1).to_numpy(),
+    "sum_mechanic_values": mech_block_rn.sum(axis=1).to_numpy(),
+    "l2_mechanic_values": np.sqrt((mech_block_rn ** 2).sum(axis=1)).to_numpy(),
+})
+
+# Side-by-side: before (current) vs. after (row-normalized).
+# Note: both pass through StandardScaler, so neither column shows the raw
+# 0/1 indicator math directly — what we're looking for is whether the
+# kitchen-sink games' total mechanic signal moves toward the population
+# rather than staying inflated.
+compare = mech_summary.add_suffix("_before").join(
+    mech_summary_rn.add_suffix("_after").drop(
+        columns=["name_after", "raw_mechanic_count_after"]
+    )
+)
+compare
+```
+
+## 8. Compare predictions on the suspects
+
+Score the same suspect games through both pipelines and look at the
+probability change. If row-normalization is doing its job, the
+kitchen-sink games' probabilities should drop relative to the original
+model.
+
+```{python}
+def score_suspects(m: CollectionModel, frame: pl.DataFrame) -> pl.DataFrame:
+    preds = m.predict_with_labels(frame)
+    return preds.select(["game_id", "name", "proba"])
+
+before = score_suspects(model, suspects).rename({"proba": "proba_before"})
+after = score_suspects(model_rn, suspects).rename({"proba": "proba_after"})
+
+(
+    before.join(after, on=["game_id", "name"])
+    .join(
+        suspects.select(["game_id", "raw_mechanic_count"]),
+        on="game_id",
+    )
+    .with_columns((pl.col("proba_after") - pl.col("proba_before")).alias("delta"))
+    .sort("delta")
+)
+```
+
+## 9. Top games on the upcoming set: before vs. after
+
+The headline view. If the kitchen-sink games were dominating the upcoming
+list under the original model, they should now drop in rank under
+row-normalization.
+
+```{python}
+print("upcoming top-25 — original:")
+print(model.top_games(upcoming, n=25))
+
+print("\nupcoming top-25 — row-normalized:")
+print(model_rn.top_games(upcoming, n=25))
+```
+
+## 10. Validation metrics
+
+Confirm we're not paying for it on val.
+
+```{python}
+model.find_threshold(val_df)
+model_rn.find_threshold(val_df)
+
+val_before = model.evaluate(val_df)
+val_after = model_rn.evaluate(val_df)
+
+pd.DataFrame({"before": val_before, "after": val_after}).round(4)
+```
+
+## Next
+
+If the suspect games drop appropriately and val metrics hold (or improve),
+this is ready to promote into a `CollectionCandidate` for proper
+side-by-side comparison via `train_candidates`.

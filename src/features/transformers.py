@@ -36,6 +36,64 @@ class ColumnTransformerNoPrefix(ColumnTransformer):
         return np.array([name.split("__")[-1] for name in raw_names])
 
 
+class RowNormalizer(BaseEstimator, TransformerMixin):
+    """
+    Row-wise L2-normalize one or more blocks of columns identified by prefix.
+
+    For each row, divides the values in the matched columns by the row's L2
+    norm so the per-row total signal across that block is bounded regardless
+    of how many indicators are active. Each prefix block is normalized
+    independently. All other columns pass through unchanged.
+
+    Use after one-hot indicators are produced and before scaling. Applied to
+    standardized values it does not produce the bounding effect, since the
+    "absent" cells are no longer zero.
+
+    Parameters
+    ----------
+    prefixes : list of str
+        Column-name prefixes identifying each block to normalize (e.g.
+        ``["mechanic_", "category_", "family_"]``).
+    """
+
+    def __init__(self, prefixes: List[str]):
+        self.prefixes = prefixes
+        self._output_config = None
+
+    def fit(self, X, y=None):
+        self.column_groups_ = {
+            prefix: [c for c in X.columns if c.startswith(prefix)]
+            for prefix in self.prefixes
+        }
+        self.feature_names_in_ = list(X.columns)
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+        for prefix, cols in self.column_groups_.items():
+            if not cols:
+                continue
+            block = X[cols].to_numpy(dtype=float)
+            denom = np.sqrt((block ** 2).sum(axis=1, keepdims=True))
+            denom[denom == 0] = 1.0
+            X[cols] = block / denom
+        return X
+
+    def set_output(self, *, transform=None):
+        if transform is not None and transform not in ["default", "pandas"]:
+            raise ValueError(
+                f"Invalid transform parameter: {transform}. Must be 'default' or 'pandas'."
+            )
+        self._output_config = transform
+        return self
+
+    def get_feature_names_out(self, input_features=None):
+        # Pass-through transformer — output columns are exactly the input columns.
+        if input_features is not None:
+            return np.asarray(list(input_features))
+        return np.asarray(self.feature_names_in_)
+
+
 class LogTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer to apply log(1+x) transformation to specified columns.

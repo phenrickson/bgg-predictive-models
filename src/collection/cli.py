@@ -7,9 +7,8 @@ import sys
 
 from src.utils.logging import setup_logging
 from src.collection.collection_pipeline import CollectionPipeline, PipelineConfig
-from src.collection.collection_artifact_storage import ArtifactStorageConfig
-from src.collection.collection_split import SplitConfig
-from src.collection.collection_model import ModelConfig
+from src.collection.collection_split import ClassificationSplitConfig
+from src.collection.collection_model import ClassificationModelConfig
 from src.collection.collection_analyzer import AnalyzerConfig
 
 
@@ -66,41 +65,38 @@ Examples:
         help="Don't refresh collection from BGG API",
     )
     run_parser.add_argument(
+        "--outcome",
+        action="append",
+        default=None,
+        help="Restrict training to this outcome (repeatable). If omitted, trains all outcomes.",
+    )
+    run_parser.add_argument(
         "--model-type",
         default="lightgbm",
         choices=["lightgbm", "catboost", "logistic"],
-        help="Model type to use (default: lightgbm)",
+        help="Classification model type (default: lightgbm). Regression uses lightgbm.",
     )
     run_parser.add_argument(
         "--train-through",
         type=int,
         default=None,
-        help="Last year to include in training data (inclusive, for time-based splits)",
-    )
-    run_parser.add_argument(
-        "--negative-ratio",
-        type=float,
-        default=5.0,
-        help="Ratio of negative to positive samples (default: 5.0)",
-    )
-    run_parser.add_argument(
-        "--sampling-strategy",
-        default="popularity_weighted",
-        choices=["random", "popularity_weighted", "uniform"],
-        help="Negative sampling strategy (default: popularity_weighted)",
+        help=(
+            "Last year to include in training data (inclusive). If set, classification "
+            "splits switch to time_based mode."
+        ),
     )
 
     # Predict only
     predict_parser = subparsers.add_parser(
         "predict",
         parents=[common],
-        help="Refresh predictions with existing model",
+        help="Refresh predictions with existing models",
     )
     predict_parser.add_argument(
-        "--model-version",
-        type=int,
+        "--outcome",
+        action="append",
         default=None,
-        help="Model version to use (default: latest)",
+        help="Restrict refresh to this outcome (repeatable). If omitted, refreshes all.",
     )
 
     # Status
@@ -119,94 +115,92 @@ Examples:
 
 
 def run_full_pipeline(args: argparse.Namespace) -> int:
-    """Run the full pipeline."""
+    """Run the full pipeline — trains one model per outcome."""
     logger = logging.getLogger(__name__)
     logger.info(f"Running full pipeline for user '{args.username}'")
 
-    # Build configuration
-    config = PipelineConfig(
-        storage_config=ArtifactStorageConfig(
-            environment=args.environment,
-        ),
-        split_config=SplitConfig(
-            negative_sampling_ratio=args.negative_ratio,
-            negative_sampling_strategy=args.sampling_strategy,
-        ),
-        model_config=ModelConfig(
-            model_type=args.model_type,
-        ),
-        analyzer_config=AnalyzerConfig(),
+    split_mode = "time_based" if args.train_through is not None else "stratified_random"
+    classification_split = ClassificationSplitConfig(
+        split_mode=split_mode,
         train_through=args.train_through,
     )
 
-    # Run pipeline
+    config = PipelineConfig(
+        environment=args.environment,
+        classification_split_config=classification_split,
+        classification_model_config=ClassificationModelConfig(
+            model_type=args.model_type
+        ),
+    )
+
     pipeline = CollectionPipeline(args.username, config)
 
     try:
         results = pipeline.run_full_pipeline(
             refresh_collection=not args.no_refresh,
+            outcome_filter=args.outcome,
         )
-
-        # Print summary
-        print("\n" + "=" * 60)
-        print(f"Pipeline completed for user: {args.username}")
-        print("=" * 60)
-
-        if "steps" in results:
-            for step_name, step_data in results["steps"].items():
-                status = step_data.get("status", "unknown")
-                print(f"\n{step_name.upper()}: {status}")
-                for key, value in step_data.items():
-                    if key != "status":
-                        print(f"  {key}: {value}")
-
-        if "artifacts" in results:
-            print("\nARTIFACTS:")
-            for artifact_name, path in results["artifacts"].items():
-                if isinstance(path, dict):
-                    for sub_name, sub_path in path.items():
-                        print(f"  {artifact_name}/{sub_name}: {sub_path}")
-                else:
-                    print(f"  {artifact_name}: {path}")
-
-        if "duration_seconds" in results:
-            print(f"\nDuration: {results['duration_seconds']:.1f}s")
-
-        return 0
-
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         return 1
 
+    print("\n" + "=" * 60)
+    print(f"Pipeline completed for user: {args.username}")
+    print(f"Collection rows: {results.get('collection_rows', 0)}")
+    print("=" * 60)
+
+    outcomes = results.get("outcomes", {})
+    for name, outcome_result in outcomes.items():
+        print(f"\n[{name}]")
+        if "error" in outcome_result:
+            print(f"  FAILED: {outcome_result['error']}")
+            continue
+        print(f"  task: {outcome_result['task']}")
+        print(f"  version: v{outcome_result['version']}")
+        sizes = outcome_result.get("split_sizes", {})
+        print(
+            f"  splits: train={sizes.get('train')} "
+            f"val={sizes.get('val')} test={sizes.get('test')}"
+        )
+        if outcome_result.get("threshold") is not None:
+            print(f"  threshold: {outcome_result['threshold']:.3f}")
+        print("  metrics:")
+        for k, v in outcome_result.get("metrics", {}).items():
+            print(f"    {k}: {v:.4f}" if isinstance(v, float) else f"    {k}: {v}")
+
+    if "duration_seconds" in results:
+        print(f"\nDuration: {results['duration_seconds']:.1f}s")
+
+    any_error = any("error" in r for r in outcomes.values())
+    return 1 if any_error else 0
+
 
 def run_predict_only(args: argparse.Namespace) -> int:
-    """Refresh predictions with existing model."""
+    """Refresh predictions for the latest model(s) per outcome."""
     logger = logging.getLogger(__name__)
     logger.info(f"Refreshing predictions for user '{args.username}'")
 
     config = PipelineConfig(
-        storage_config=ArtifactStorageConfig(
-            environment=args.environment,
-        ),
+        environment=args.environment,
     )
 
     pipeline = CollectionPipeline(args.username, config)
 
     try:
-        paths = pipeline.refresh_predictions_only(
-            model_version=args.model_version,
-        )
-
-        print("\nPredictions refreshed successfully!")
-        print("\nArtifacts:")
-        for name, path in paths.items():
-            print(f"  {name}: {path}")
-
-        return 0
-
+        results = pipeline.refresh_predictions_only(outcome_filter=args.outcome)
     except Exception as e:
         logger.error(f"Prediction refresh failed: {e}")
         return 1
+
+    if not results:
+        print("\nNo trained models found to refresh.")
+        return 0
+
+    print("\nPredictions refreshed:")
+    for name, info in results.items():
+        print(f"  {name} v{info['version']}: {info['rows']} rows")
+
+    return 0
 
 
 def show_status(args: argparse.Namespace) -> int:
@@ -215,7 +209,7 @@ def show_status(args: argparse.Namespace) -> int:
 
     storage = CollectionArtifactStorage(
         args.username,
-        ArtifactStorageConfig(environment=args.environment),
+        environment=args.environment,
     )
 
     status = storage.get_artifact_status()
@@ -225,14 +219,22 @@ def show_status(args: argparse.Namespace) -> int:
     else:
         print(f"\nPipeline Status for: {status['username']}")
         print(f"Base path: {status['base_path']}")
-        print(f"\nModel versions: {status['model_versions']}")
-        if status.get('latest_model_version'):
-            print(f"Latest model: v{status['latest_model_version']}")
 
-        print("\nArtifacts:")
-        for name, info in status['artifacts'].items():
-            exists = "✓" if info['exists'] else "✗"
-            print(f"  [{exists}] {name}")
+        collection_mark = "+" if status.get("collection_exists") else "-"
+        print(f"\n  [{collection_mark}] collection/latest.parquet")
+
+        outcomes = status.get("outcomes", {})
+        if outcomes:
+            print("\nOutcomes:")
+            for outcome, info in outcomes.items():
+                latest = info.get("latest_version")
+                versions = info.get("versions", [])
+                version_list = ", ".join(f"v{v}" for v in versions)
+                print(f"  {outcome}:")
+                print(f"    latest version : {f'v{latest}' if latest is not None else 'none'}")
+                print(f"    versions       : [{version_list}]")
+        else:
+            print("\nNo outcome artifacts found.")
 
     return 0
 

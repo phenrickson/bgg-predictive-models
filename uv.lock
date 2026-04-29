@@ -134,6 +134,11 @@ embeddings = [
     { name = "torch" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ipykernel" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "black", specifier = ">=25.1.0" },
@@ -177,7 +182,7 @@ requires-dist = [
 provides-extras = ["embeddings"]
 
 [package.metadata.requires-dev]
-dev = []
+dev = [{ name = "ipykernel", specifier = ">=6.29.5" }]
 
 [[package]]
 name = "black"

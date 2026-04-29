@@ -307,3 +307,21 @@ streamlit-stop:  ## Stop Streamlit container
 	else \
 		echo "No running Streamlit container found"; \
 	fi
+
+# Collection models
+.PHONY: train-collection refresh-collection collection-status collections-dashboard
+
+collections-dashboard:  ## Launch the Collections Streamlit page
+	uv run streamlit run "src/streamlit/pages/7 Collections.py"
+
+train-collection:  ## Train all (or --outcome) collection models for USERNAME
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make train-collection USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli run --username $(USERNAME) $(if $(OUTCOME),--outcome $(OUTCOME),)
+
+refresh-collection:  ## Refresh predictions for USERNAME (optionally one OUTCOME)
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make refresh-collection USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli predict --username $(USERNAME) $(if $(OUTCOME),--outcome $(OUTCOME),)
+
+collection-status:  ## Show pipeline artifact status for USERNAME
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make collection-status USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli status --username $(USERNAME)
