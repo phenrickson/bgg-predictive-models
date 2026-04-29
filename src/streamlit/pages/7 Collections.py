@@ -641,43 +641,107 @@ with tab_topn:
         st.info(f"No `{topn_split}` predictions for `{topn_candidate}`.")
     elif "proba" not in topn_preds.columns:
         st.info("Top-N currently surfaces classification proba; this is a regression run.")
+    elif "year_published" not in topn_preds.columns or "name" not in topn_preds.columns:
+        st.info("Predictions parquet is missing `year_published` or `name`; cannot pivot by year.")
     else:
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            top_n = st.slider("Top N", 5, 200, 25, key="topn_n")
-
-        with c2:
-            year_options: list[str] = ["(all)"]
-            if "year_published" in topn_preds.columns:
-                years = (
-                    topn_preds["year_published"]
-                    .drop_nulls()
-                    .unique()
-                    .sort(descending=True)
-                    .to_list()
-                )
-                year_options += [str(int(y)) for y in years]
-            year_choice = st.selectbox("Year", year_options, index=0, key="topn_year")
-
-        view = topn_preds
-        if year_choice != "(all)" and "year_published" in view.columns:
-            view = view.filter(pl.col("year_published") == int(year_choice))
-
-        view = view.sort("proba", descending=True).head(top_n)
-
-        preferred = [
-            c for c in ["proba", "pred", "label", "name", "year_published",
-                        "users_rated", "game_id", "fold"]
-            if c in view.columns
-        ]
-        rest = [c for c in view.columns if c not in preferred]
-        view = view.select(preferred + rest)
-
-        st.caption(
-            f"top {view.height:,} of `{topn_candidate}` · split = `{topn_split}` · "
-            + (f"year = {year_choice}" if year_choice != "(all)" else "all years")
+        all_years = sorted(
+            int(y) for y in topn_preds["year_published"].drop_nulls().unique().to_list()
         )
-        st.dataframe(view.to_pandas(), use_container_width=True)
+        if not all_years:
+            st.info("No year_published values in this prediction set.")
+        else:
+            min_year = all_years[0]
+            max_year = all_years[-1]
+            default_lo = max(2015, min_year)
+            default_hi = max_year
+
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                top_n = st.slider("Top N", 5, 100, 25, key="topn_n")
+            with c2:
+                year_range = st.slider(
+                    "Year range",
+                    min_value=min_year,
+                    max_value=max_year,
+                    value=(default_lo, default_hi),
+                    step=1,
+                    key="topn_year_range",
+                )
+
+            lo, hi = int(year_range[0]), int(year_range[1])
+            view = topn_preds.filter(
+                (pl.col("year_published") >= lo) & (pl.col("year_published") <= hi)
+            )
+
+            # Per year: take top-N rows by proba.
+            view = view.with_columns(
+                pl.col("proba")
+                .rank(method="ordinal", descending=True)
+                .over("year_published")
+                .alias("_rank")
+            ).filter(pl.col("_rank") <= top_n)
+
+            if view.height == 0:
+                st.info("No rows in the selected year range.")
+            else:
+                # Build name and label tables: rows = rank (1..N), cols = year.
+                year_cols = sorted(
+                    int(y) for y in view["year_published"].unique().to_list()
+                )
+
+                name_pivot = view.pivot(
+                    values="name", index="_rank", on="year_published"
+                ).sort("_rank").rename({"_rank": "rank"})
+                # Make sure column order is ascending year and all selected years appear.
+                ordered = ["rank"] + [str(y) for y in year_cols]
+                name_pivot = name_pivot.select(
+                    [c for c in ordered if c in name_pivot.columns]
+                )
+
+                if "label" in view.columns:
+                    label_pivot = view.pivot(
+                        values="label", index="_rank", on="year_published"
+                    ).sort("_rank").rename({"_rank": "rank"})
+                    label_pivot = label_pivot.select(
+                        [c for c in ordered if c in label_pivot.columns]
+                    )
+                else:
+                    label_pivot = None
+
+                name_pdf = name_pivot.to_pandas().set_index("rank")
+
+                if label_pivot is not None:
+                    label_pdf = label_pivot.to_pandas().set_index("rank")
+                    # Only color the year columns, not "rank".
+                    year_str_cols = [c for c in name_pdf.columns]
+
+                    def _style_cell(_value, row, col):
+                        truth = label_pdf.at[row, col] if col in label_pdf.columns else None
+                        if truth is True:
+                            return "background-color: #1f4e79; color: white"
+                        if truth is False:
+                            return "background-color: #555555; color: white"
+                        return ""
+
+                    styler = name_pdf.style.apply(
+                        lambda row: [
+                            _style_cell(row[c], row.name, c) for c in year_str_cols
+                        ],
+                        axis=1,
+                        subset=year_str_cols,
+                    )
+                    st.caption(
+                        f"`{topn_candidate}` · split = `{topn_split}` · "
+                        f"top {top_n} per year · {lo}–{hi} · "
+                        "blue = true positive, grey = false positive"
+                    )
+                    st.dataframe(styler, use_container_width=True)
+                else:
+                    st.caption(
+                        f"`{topn_candidate}` · split = `{topn_split}` · "
+                        f"top {top_n} per year · {lo}–{hi}"
+                    )
+                    st.dataframe(name_pdf, use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # Tab 5 — Finalized Model
