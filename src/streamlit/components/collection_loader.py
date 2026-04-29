@@ -59,11 +59,39 @@ def list_candidates(storage: CollectionArtifactStorage, outcome: str) -> List[st
     return storage.list_candidates(outcome)
 
 
-def load_runs(
+def list_splits_versions(
     storage: CollectionArtifactStorage, outcome: str
+) -> List[int]:
+    """All canonical splits versions present for an outcome, ascending."""
+    return storage._list_split_versions(outcome)
+
+
+def load_runs(
+    storage: CollectionArtifactStorage,
+    outcome: str,
+    splits_version: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Latest registration per candidate for an outcome."""
-    return load_candidate_runs(storage, outcome=outcome, versions="latest")
+    """Latest registration per candidate for an outcome.
+
+    When ``splits_version`` is given, returns only candidates whose latest
+    run was trained against that splits version. Candidates with no matching
+    run are dropped.
+    """
+    runs = load_candidate_runs(storage, outcome=outcome, versions="all")
+    by_candidate: Dict[str, Dict[str, Any]] = {}
+    for r in runs:
+        cand = r.get("candidate")
+        if not cand:
+            continue
+        if splits_version is not None and r.get("splits_version") != splits_version:
+            continue
+        prev = by_candidate.get(cand)
+        if prev is None or (r.get("version") or 0) > (prev.get("version") or 0):
+            by_candidate[cand] = r
+    return sorted(
+        by_candidate.values(),
+        key=lambda r: (r.get("candidate", ""), r.get("version", 0)),
+    )
 
 
 def comparison_frame(runs: List[Dict[str, Any]]) -> pl.DataFrame:

@@ -35,6 +35,7 @@ from src.streamlit.components.collection_loader import (  # noqa: E402
     list_candidates,
     list_finalized_candidates,
     list_outcomes,
+    list_splits_versions,
     list_users,
     load_feature_importance,
     load_finalized_run,
@@ -127,18 +128,34 @@ if not outcomes:
 with col2:
     outcome = st.selectbox("Outcome", outcomes, index=0)
 
-candidates = list_candidates(storage, outcome)
+splits_versions = sorted(list_splits_versions(storage, outcome), reverse=True)
+splits_filter: int | None = None
+if splits_versions:
+    splits_choice = st.selectbox(
+        "Splits version",
+        [f"v{v}" for v in splits_versions],
+        index=0,
+        key="splits_filter",
+    )
+    splits_filter = int(splits_choice[1:])
+
+filtered_runs = load_runs(storage, outcome, splits_version=splits_filter)
+candidates = sorted({r.get("candidate") for r in filtered_runs if r.get("candidate")})
 if not candidates:
     st.warning(
-        f"No candidate runs found for `{username}` / `{outcome}`. "
+        f"No candidate runs found for `{username}` / `{outcome}` against "
+        f"splits v{splits_filter}."
+        if splits_filter is not None
+        else f"No candidate runs found for `{username}` / `{outcome}`. "
         f"Run `python -m src.collection.train --username {username} --outcome {outcome}`."
     )
     render_footer()
     st.stop()
 
+splits_caption = f"splits v{splits_filter}" if splits_filter is not None else "—"
 st.caption(
     f"User: **{username}** &nbsp;·&nbsp; Outcome: **{outcome}** "
-    f"&nbsp;·&nbsp; {len(candidates)} candidate(s)"
+    f"&nbsp;·&nbsp; {splits_caption} &nbsp;·&nbsp; {len(candidates)} candidate(s)"
 )
 
 tab_collection, tab_overview, tab_detail, tab_finalized = st.tabs(
@@ -232,7 +249,7 @@ with tab_collection:
 # ---------------------------------------------------------------------------
 
 with tab_overview:
-    runs = load_runs(storage, outcome)
+    runs = filtered_runs
     if not runs:
         st.info("No registrations on disk for this outcome yet.")
     else:
@@ -303,10 +320,19 @@ with tab_overview:
 
 with tab_detail:
     candidate = st.selectbox("Candidate", candidates, key="detail_candidate")
-    version = storage.latest_candidate_version(outcome, candidate)
-    registration = storage.load_candidate_registration(
-        outcome, candidate, version=version
-    ) or {}
+    # Use the version of this candidate's run that matches the chosen splits filter
+    # (filtered_runs already enforces that). Fall back to storage's latest if missing.
+    matched_run = next(
+        (r for r in filtered_runs if r.get("candidate") == candidate), None
+    )
+    if matched_run is not None:
+        version = matched_run.get("version")
+        registration = matched_run
+    else:
+        version = storage.latest_candidate_version(outcome, candidate)
+        registration = storage.load_candidate_registration(
+            outcome, candidate, version=version
+        ) or {}
 
     st.subheader(f"{candidate} (v{version})")
 
