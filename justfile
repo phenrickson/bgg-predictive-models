@@ -138,6 +138,17 @@ sweep outcome="own":
     just username={{username}} compare {{outcome}}
     exit $train_status
 
+# Train all candidates and compare against the most recent existing split.
+# Same as `sweep` but skips the split step — use when iterating on candidates
+# against a fixed split.
+train-compare outcome="own":
+    #!/usr/bin/env bash
+    set +e
+    just username={{username}} train-all {{outcome}}
+    train_status=$?
+    just username={{username}} compare {{outcome}}
+    exit $train_status
+
 # Sweep across a list of users. Skips users who already have at least
 # one trained candidate for the outcome. Continue-on-error.
 #   just users-sweep "alice bob carol"

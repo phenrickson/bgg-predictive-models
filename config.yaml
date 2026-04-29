@@ -23,16 +23,16 @@ ml_project:
   # Models stored at: gs://bgg-predictive-models/{environment}/models/...
   # Predictions at: gs://bgg-predictive-models/{environment}/predictions/...
 
-# Default environment
+  # Default environment
 default_environment: dev
 
 # Year Configuration
 # All years are inclusive (e.g., train_through: 2021 means include 2021)
 years:
   current: 2026
-  recent_year_threshold: 2  # years to exclude from current when finalizing
+  recent_year_threshold: 2 # years to exclude from current when finalizing
   training:
-    train_through: 2022  # train on data through this year (inclusive)
+    train_through: 2022 # train on data through this year (inclusive)
     tune_start: 2023
     tune_through: 2023
     test_start: 2024
@@ -43,8 +43,8 @@ years:
     end: 2024
   # data to score with trained model
   score:
-    start: 2025   # current - 1
-    end: 2030     # current + 4
+    start: 2025 # current - 1
+    end: 2030 # current + 4
 
 # Model Configuration
 models:
@@ -73,8 +73,8 @@ models:
   geek_rating:
     type: ard
     experiment_name: ard-geek_rating
-    mode: direct  # or "stacking"
-    min_ratings: 25  # only used for direct mode
+    mode: direct # or "stacking"
+    min_ratings: 25 # only used for direct mode
     use_embeddings: true # only used for direct mode
     include_predictions: true
 
@@ -85,7 +85,7 @@ evaluate:
 # Simulation Configuration
 # Settings for simulation-based uncertainty estimation
 simulation:
-  n_samples: 500  # Number of posterior samples per game
+  n_samples: 500 # Number of posterior samples per game
   geek_rating_mode: direct # bayesian, stacking, or direct
   output_dir: "./models/simulation"
   save_predictions: true
@@ -93,24 +93,24 @@ simulation:
 
 # Embeddings Configuration
 embeddings:
-  algorithm: svd  # pca, svd, umap, autoencoder
+  algorithm: svd # pca, svd, umap, autoencoder
   embedding_dim: 64
   experiment_name: game-embeddings
-  min_ratings: 5  # Minimum users_rated for training data
+  min_ratings: 5 # Minimum users_rated for training data
   algorithms:
     pca:
       whiten: true
     svd:
       n_iter: 5
     autoencoder:
-      hidden_layers: [512, 256, 128]
+      hidden_layers: [ 512, 256, 128 ]
       epochs: 200
       batch_size: 256
       learning_rate: 0.001
       patience: 15
       min_delta: 0.000001
     vae:
-      hidden_layers: [512, 256, 128]
+      hidden_layers: [ 512, 256, 128 ]
       epochs: 150
       batch_size: 256
       learning_rate: 0.001
@@ -127,15 +127,15 @@ embeddings:
     dataset: analytics
     table: game_similarity_search
   search:
-    default_distance_type: cosine  # cosine, euclidean, dot_product
+    default_distance_type: cosine # cosine, euclidean, dot_product
     default_top_k: 10
 
 # Text Embeddings Configuration (word embeddings from descriptions)
 text_embeddings:
-  algorithm: pmi  # pmi, word2vec
+  algorithm: pmi # pmi, word2vec
   embedding_dim: 100
   experiment_name: text-embeddings
-  document_method: sif  # mean, tfidf, sif
+  document_method: sif # mean, tfidf, sif
   algorithms:
     pmi:
       window_size: 5
@@ -143,7 +143,7 @@ text_embeddings:
     word2vec:
       window_size: 5
       min_count: 5
-      sg: 1  # 1 for skip-gram, 0 for CBOW
+      sg: 1 # 1 for skip-gram, 0 for CBOW
       epochs: 10
   # Upload configuration for BigQuery (same pattern as game_embeddings)
   upload:
@@ -160,9 +160,9 @@ collections:
     # split_mode: stratified_random | time_based
     classification:
       split_mode: time_based
-      train_through: 2022       # last year (inclusive) in training
-      prediction_window: 2      # validation window in years (val = 2023-2024)
-      test_window: 1            # test window in years (test = 2025)
+      train_through: 2022 # last year (inclusive) in training
+      prediction_window: 2 # validation window in years (val = 2023-2024)
+      test_window: 1 # test window in years (test = 2025)
       time_column: year_published
       random_seed: 1999
       # stratified_random fallback ratios — used only when split_mode=stratified_random
@@ -177,7 +177,7 @@ collections:
     type: lightgbm
     use_sample_weights: false
     handle_imbalance: scale_pos_weight
-    threshold_optimization_metric: f2  # f1, f2, precision, recall
+    threshold_optimization_metric: f2 # f1, f2, precision, recall
     tuning_metric: log_loss
   analysis:
     top_n_recommendations: 100
@@ -195,17 +195,17 @@ collections:
       label_from: owned
     ever_owned:
       task: classification
-      label_from: {any_of: [owned, prev_owned]}
+      label_from: { any_of: [ owned, prev_owned ] }
     rated:
       task: classification
-      label_from: {column: user_rating, predicate: "> 0"}
+      label_from: { column: user_rating, predicate: "> 0" }
     rating:
       task: regression
       label_from: user_rating
       require: "user_rating > 0"
     love:
       task: classification
-      label_from: {column: user_rating, predicate: ">= 8"}
+      label_from: { column: user_rating, predicate: ">= 8" }
       require: "user_rating > 0"
   candidates:
     - name: logistic_default
@@ -225,7 +225,8 @@ collections:
       tuning: holdout
       downsample_negatives_ratio: 500
       downsample_protect_min_ratings: 25
-      notes: "Logistic with row-wise L2 normalization on mechanic/category/family blocks"
+      notes: "Logistic with row-wise L2 normalization on mechanic/category/family
+        blocks"
       classification_config:
         model_type: logistic
         tuning_metric: log_loss
@@ -238,6 +239,26 @@ collections:
             - mechanics
             - categories
             - families
+    - name: logistic_designer_heavy
+      tuning: holdout
+      downsample_negatives_ratio: 500
+      downsample_protect_min_ratings: 25
+      notes: "Logistic with row-wise L2 normalization on mechanic/category/family
+        blocks"
+      classification_config:
+        model_type: logistic
+        tuning_metric: log_loss
+        threshold_optimization_metric: f2
+        preprocessor_kwargs:
+          preserve_columns:
+            - year_published
+            - predicted_complexity
+          normalize_row_families:
+            - mechanics
+            - categories
+            - families
+          designer_min_freq: 3
+          max_family_features: 100
     - name: lgbm_default
       tuning: holdout
       downsample_negatives_ratio: 500
@@ -255,7 +276,8 @@ collections:
       tuning: holdout
       downsample_negatives_ratio: 500
       downsample_protect_min_ratings: 25
-      notes: "LightGBM with row-wise L2 normalization on mechanic/category/family blocks"
+      notes: "LightGBM with row-wise L2 normalization on mechanic/category/family
+        blocks"
       classification_config:
         model_type: lightgbm
         tuning_metric: log_loss
@@ -272,7 +294,7 @@ collections:
 # Scoring Configuration
 scoring:
   models:
-    hurdle: hurdle-v2026  # Name of registered model to use
+    hurdle: hurdle-v2026 # Name of registered model to use
     complexity: complexity-v2026
     rating: rating-v2026
     users_rated: users_rated-v2026
