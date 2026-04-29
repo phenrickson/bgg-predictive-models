@@ -269,7 +269,47 @@ with tab_overview:
     else:
         wide = comparison_frame(runs)
         st.subheader("Comparison")
-        st.dataframe(wide.to_pandas(), use_container_width=True)
+
+        # Sort by split (val -> oof -> test), then candidate.
+        wide_pdf = wide.to_pandas()
+        if "split" in wide_pdf.columns:
+            split_order = {"val": 0, "oof": 1, "test": 2}
+            wide_pdf = wide_pdf.assign(
+                _split_order=wide_pdf["split"].map(split_order).fillna(99)
+            ).sort_values(
+                ["_split_order", "candidate"]
+            ).drop(columns="_split_order").reset_index(drop=True)
+
+        # Highlight the best value within each (split, metric) cell.
+        higher_is_better = {"precision", "recall", "f1", "f2", "roc_auc", "pr_auc"}
+        lower_is_better = {"log_loss"}
+        metric_cols = [c for c in wide_pdf.columns if c in higher_is_better | lower_is_better]
+
+        def _highlight_best(df):
+            import pandas as pd
+            out = pd.DataFrame("", index=df.index, columns=df.columns)
+            if "split" not in df.columns:
+                return out
+            for split_value, group in df.groupby("split"):
+                for metric in metric_cols:
+                    if metric not in group.columns:
+                        continue
+                    series = pd.to_numeric(group[metric], errors="coerce")
+                    if series.notna().sum() == 0:
+                        continue
+                    if metric in higher_is_better:
+                        winner_idx = series.idxmax()
+                    else:
+                        winner_idx = series.idxmin()
+                    out.at[winner_idx, metric] = (
+                        "background-color: #1f4e79; color: white; font-weight: bold"
+                    )
+            return out
+
+        styler = wide_pdf.style.apply(_highlight_best, axis=None).format(
+            {c: "{:.4f}" for c in metric_cols + (["threshold"] if "threshold" in wide_pdf.columns else [])}
+        )
+        st.dataframe(styler, use_container_width=True)
 
         long_df = long_metrics_frame(runs)
         if long_df.height:
