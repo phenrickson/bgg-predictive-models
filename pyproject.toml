@@ -84,4 +84,6 @@ filterwarnings = [
     # note the use of single quote below to denote "raw" strings in TOML
     'ignore:function ham\\(\\) is deprecated:DeprecationWarning',
     "ignore:Skipping features without any observed values:UserWarning:sklearn.impute._base",
+    # scipy L-BFGS-B deprecation in sklearn LogisticRegression (scipy >= 1.18 warning)
+    'ignore:scipy.optimize.*disp.*iprint.*deprecated:DeprecationWarning',
 ]

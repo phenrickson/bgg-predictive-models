@@ -8,9 +8,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 import polars as pl
+from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import (
     accuracy_score,
@@ -414,6 +417,136 @@ class CollectionModel:
             return df.with_columns(pl.Series("pred", pred))
         raise ValueError(f"Unsupported task: {self.outcome.task!r}")
 
+    def oof_predict_cv(
+        self,
+        train_df: pl.DataFrame,
+        n_folds: int,
+        random_seed: int = 42,
+    ) -> Tuple[pl.DataFrame, list, Dict[str, float]]:
+        """Out-of-fold cross-validation using the fitted pipeline's params.
+
+        Re-trains the pipeline on each fold's training rows (preprocessor
+        refit per fold to avoid leakage) using the hyperparameters already
+        captured on ``self.fitted_pipeline``. Predicts on the held-out fold;
+        OOF predictions are reassembled into one row per training row.
+        Per-fold metrics are computed via the same evaluators used for
+        val/test; the overall metrics are pooled across all OOF rows.
+
+        For classification, ``self.threshold`` must be set; the same
+        threshold is used for every fold's hard predictions.
+        """
+        if self.fitted_pipeline is None:
+            raise RuntimeError(
+                "Model is not fit. Call train(), tune(), or tune_cv() first."
+            )
+        if self.outcome.task == "classification" and self.threshold is None:
+            raise RuntimeError(
+                "Classification OOF requires a threshold. Call find_threshold() first."
+            )
+        if n_folds < 2:
+            raise ValueError(f"n_folds must be >= 2, got {n_folds}")
+        if train_df.height < n_folds * 2:
+            raise ValueError(
+                f"OOF CV needs too few rows: train_df has {train_df.height} rows "
+                f"but {n_folds} folds requires at least {n_folds * 2}"
+            )
+
+        params = self.fitted_pipeline.named_steps["model"].get_params(deep=False)
+
+        X, y = self._prepare(train_df)
+        y_arr = np.asarray(y)
+
+        if self.outcome.task == "classification":
+            splitter = StratifiedKFold(
+                n_splits=n_folds, shuffle=True, random_state=random_seed
+            )
+        else:
+            splitter = KFold(
+                n_splits=n_folds, shuffle=True, random_state=random_seed
+            )
+
+        n_rows = train_df.height
+        fold_assign = np.full(n_rows, -1, dtype=np.int64)
+        proba_oof = (
+            np.full(n_rows, np.nan, dtype=np.float64)
+            if self.outcome.task == "classification"
+            else None
+        )
+        pred_oof = np.full(n_rows, np.nan, dtype=np.float64)
+
+        per_fold: list = []
+        for fold_idx, (tr_idx, vl_idx) in enumerate(splitter.split(X, y_arr)):
+            pipeline = self.build_pipeline()
+            pipeline.named_steps["model"].set_params(**params)
+
+            X_tr, X_vl = X.iloc[tr_idx], X.iloc[vl_idx]
+            y_tr = y.iloc[tr_idx] if hasattr(y, "iloc") else y_arr[tr_idx]
+            y_vl = y_arr[vl_idx]
+            pipeline.fit(X_tr, y_tr)
+
+            fold_assign[vl_idx] = fold_idx
+
+            if self.outcome.task == "classification":
+                proba = pipeline.predict_proba(X_vl)[:, 1]
+                preds = (proba >= float(self.threshold)).astype(int)
+                proba_oof[vl_idx] = proba
+                pred_oof[vl_idx] = preds.astype(np.float64)
+
+                fold_df = (
+                    train_df.with_row_index("__row__")
+                    .filter(pl.col("__row__").is_in(vl_idx.tolist()))
+                    .drop("__row__")
+                )
+                fold_metrics = self._evaluate_classification(
+                    pipeline, fold_df, threshold=float(self.threshold)
+                )
+                fold_metrics["fold"] = int(fold_idx)
+                fold_metrics["n_rows"] = int(len(vl_idx))
+                fold_metrics["n_pos"] = int(np.sum(y_vl == 1))
+            else:
+                preds = pipeline.predict(X_vl)
+                pred_oof[vl_idx] = preds.astype(np.float64)
+
+                fold_df = (
+                    train_df.with_row_index("__row__")
+                    .filter(pl.col("__row__").is_in(vl_idx.tolist()))
+                    .drop("__row__")
+                )
+                fold_metrics = self._evaluate_regression(pipeline, fold_df)
+                fold_metrics["fold"] = int(fold_idx)
+                fold_metrics["n_rows"] = int(len(vl_idx))
+
+            per_fold.append(fold_metrics)
+
+        if np.any(fold_assign < 0):
+            raise RuntimeError(
+                f"OOF assignment is incomplete: "
+                f"{int((fold_assign < 0).sum())} rows unassigned"
+            )
+
+        if self.outcome.task == "classification":
+            oof_predictions = train_df.with_columns([
+                pl.Series("fold", fold_assign),
+                pl.Series("proba", proba_oof),
+                pl.Series("pred", pred_oof.astype(np.int64)),
+            ])
+        else:
+            oof_predictions = train_df.with_columns([
+                pl.Series("fold", fold_assign),
+                pl.Series("pred", pred_oof),
+            ])
+
+        if self.outcome.task == "classification":
+            overall = _classification_metrics_from_arrays(
+                y_arr.astype(int), proba_oof, threshold=float(self.threshold)
+            )
+        else:
+            overall = _regression_metrics_from_arrays(
+                y_arr.astype(float), pred_oof
+            )
+
+        return oof_predictions, per_fold, overall
+
     # --- classification path ---
 
     def _tune_classification(
@@ -738,3 +871,48 @@ class CollectionModel:
     def _prepare(self, df: pl.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         """Extract X, y from a labeled dataframe. Target column is 'label'."""
         return select_X_y(df, y_column="label")
+
+
+def _classification_metrics_from_arrays(
+    y_true: "np.ndarray", proba: "np.ndarray", threshold: float
+) -> Dict[str, float]:
+    """Pooled classification metrics from arrays. Mirrors the metric set of
+    :meth:`CollectionModel._evaluate_classification` for consistency in
+    val/test/oof reporting.
+    """
+    preds = (proba >= float(threshold)).astype(int)
+    return {
+        "threshold": float(threshold),
+        "accuracy": accuracy_score(y_true, preds),
+        "precision": precision_score(y_true, preds, zero_division=0),
+        "recall": recall_score(y_true, preds, zero_division=0),
+        "f1": f1_score(y_true, preds, zero_division=0),
+        "f2": fbeta_score(y_true, preds, beta=2, zero_division=0),
+        "roc_auc": (
+            roc_auc_score(y_true, proba) if len(set(y_true)) > 1 else float("nan")
+        ),
+        "pr_auc": (
+            average_precision_score(y_true, proba)
+            if len(set(y_true)) > 1
+            else float("nan")
+        ),
+        "log_loss": (
+            log_loss(y_true, proba, labels=[0, 1])
+            if len(set(y_true)) > 1
+            else float("nan")
+        ),
+    }
+
+
+def _regression_metrics_from_arrays(
+    y_true: "np.ndarray", preds: "np.ndarray"
+) -> Dict[str, float]:
+    """Pooled regression metrics from arrays. Mirrors the metric set of
+    :meth:`CollectionModel._evaluate_regression`.
+    """
+    mse = mean_squared_error(y_true, preds)
+    return {
+        "rmse": mse ** 0.5,
+        "mae": mean_absolute_error(y_true, preds),
+        "r2": r2_score(y_true, preds),
+    }
