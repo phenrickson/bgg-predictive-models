@@ -76,6 +76,24 @@ promote outcome="own" candidate="lgbm_default" version="latest" description="":
         --local-root {{local_root}} \
         --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}/{{outcome}}")"
 
+# Register one candidate across multiple outcomes in one shot.
+#   just promote-many outcomes="own,ever_owned,rated" candidate=lgbm_row_norm
+promote-many outcomes candidate="lgbm_default" version="latest" description="":
+    uv run python -m services.collections.register_all \
+        --username {{username}} --environment {{environment}} \
+        --outcomes "{{outcomes}}" \
+        --candidate {{candidate}} --version {{version}} \
+        --local-root {{local_root}} \
+        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}")"
+
+# List registered collection models for a user from GCS.
+#   just verify
+#   just verify outcome=own
+verify outcome="":
+    uv run python -m services.collections.verify_models \
+        --username {{username}} \
+        $([ -n "{{outcome}}" ] && echo "--outcome {{outcome}}")
+
 # End-to-end experiment cycle: split → train all → compare.
 # Always runs `compare` if `split` succeeded, even when some candidates fail.
 # Exits non-zero if any candidate failed, so cron/CI still notices.
