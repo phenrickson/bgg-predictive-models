@@ -746,12 +746,20 @@ with tab_topn:
                         f"`{topn_candidate}` · top {top_n} per year · "
                         f"{lo}–{hi} · blue = true positive"
                     )
-                    st.dataframe(styler, use_container_width=True)
+                    column_config = {
+                        c: st.column_config.TextColumn(c, width=180, pinned=False)
+                        for c in name_pdf.columns
+                    }
+                    st.dataframe(styler, column_config=column_config)
                 else:
                     st.caption(
                         f"`{topn_candidate}` · top {top_n} per year · {lo}–{hi}"
                     )
-                    st.dataframe(name_pdf, use_container_width=True)
+                    column_config = {
+                        c: st.column_config.TextColumn(c, width=180, pinned=False)
+                        for c in name_pdf.columns
+                    }
+                    st.dataframe(name_pdf, column_config=column_config)
 
 # ---------------------------------------------------------------------------
 # Tab 5 — Finalized Model
