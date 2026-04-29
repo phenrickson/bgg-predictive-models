@@ -654,21 +654,27 @@ with tab_topn:
             max_year = all_years[-1]
             default_lo = max(2015, min_year)
             default_hi = max_year
+            if default_lo > default_hi:
+                default_lo = min_year
 
             c1, c2 = st.columns([1, 2])
             with c1:
                 top_n = st.slider("Top N", 5, 100, 25, key="topn_n")
             with c2:
-                year_range = st.slider(
-                    "Year range",
-                    min_value=min_year,
-                    max_value=max_year,
-                    value=(default_lo, default_hi),
-                    step=1,
-                    key="topn_year_range",
-                )
+                if min_year == max_year:
+                    st.caption(f"Year: **{min_year}** (only year in this prediction set)")
+                    lo = hi = min_year
+                else:
+                    year_range = st.slider(
+                        "Year range",
+                        min_value=min_year,
+                        max_value=max_year,
+                        value=(default_lo, default_hi),
+                        step=1,
+                        key="topn_year_range",
+                    )
+                    lo, hi = int(year_range[0]), int(year_range[1])
 
-            lo, hi = int(year_range[0]), int(year_range[1])
             view = topn_preds.filter(
                 (pl.col("year_published") >= lo) & (pl.col("year_published") <= hi)
             )
