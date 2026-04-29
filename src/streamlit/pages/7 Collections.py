@@ -650,8 +650,15 @@ with tab_topn:
         if not all_years:
             st.info("No year_published values in this prediction set.")
         else:
-            min_year = all_years[0]
-            max_year = all_years[-1]
+            data_min_year = all_years[0]
+            data_max_year = all_years[-1]
+            # OOF spans the full training set; fix the slider bounds at 1990
+            # (or the data's min, whichever is later) → present.
+            if topn_split == "oof":
+                min_year = max(1990, data_min_year)
+            else:
+                min_year = data_min_year
+            max_year = data_max_year
             default_lo = max(2015, min_year)
             default_hi = max_year
             if default_lo > default_hi:
