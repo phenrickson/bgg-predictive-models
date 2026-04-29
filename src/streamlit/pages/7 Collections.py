@@ -506,6 +506,7 @@ with tab_detail:
                 top_neg=top_n,
                 interactive=True,
             )
+            fig.update_layout(height=450)
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:  # noqa: BLE001
             st.error(f"Could not render feature importance: {e}")
