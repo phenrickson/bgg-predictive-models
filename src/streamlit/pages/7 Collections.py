@@ -744,17 +744,13 @@ with tab_topn:
                                     out.at[idx, col] = (
                                         "background-color: #1f4e79; color: white"
                                     )
-                                elif truth is False or truth == 0:
-                                    out.at[idx, col] = (
-                                        "background-color: #555555; color: white"
-                                    )
                         return out
 
                     styler = name_pdf.style.apply(_style_all, axis=None)
                     st.caption(
                         f"`{topn_candidate}` · split = `{topn_split}` · "
                         f"top {top_n} per year · {lo}–{hi} · "
-                        "blue = true positive, grey = false positive"
+                        "blue = true positive"
                     )
                     st.dataframe(styler, use_container_width=True)
                 else:
