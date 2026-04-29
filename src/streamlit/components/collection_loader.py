@@ -85,10 +85,10 @@ def load_predictions(
 ) -> Optional[pl.DataFrame]:
     """Load predictions parquet for a candidate run.
 
-    ``split`` is ``"test"`` or ``"val"``.
+    ``split`` is ``"test"``, ``"val"``, or ``"oof"``.
     """
-    if split not in ("test", "val"):
-        raise ValueError(f"split must be 'test' or 'val', got {split!r}")
+    if split not in ("test", "val", "oof"):
+        raise ValueError(f"split must be 'test', 'val', or 'oof', got {split!r}")
     if version is None:
         version = storage.latest_candidate_version(outcome, candidate)
         if version is None:

@@ -246,12 +246,20 @@ with tab_overview:
             default_idx = (
                 metric_options.index("roc_auc") if "roc_auc" in metric_options else 0
             )
-            split_options = ["val", "test"]
+            split_options = sorted(
+                long_df["split"].unique().to_list(),
+                key=lambda s: {"val": 0, "oof": 1, "test": 2}.get(s, 99),
+            )
             mc1, mc2 = st.columns([1, 1])
             with mc1:
                 metric_choice = st.selectbox("Metric", metric_options, index=default_idx)
             with mc2:
-                split_choice = st.selectbox("Split", split_options, index=1)
+                default_split_idx = (
+                    split_options.index("test") if "test" in split_options else 0
+                )
+                split_choice = st.selectbox(
+                    "Split", split_options, index=default_split_idx
+                )
 
             chart_df = long_df.filter(
                 (pl.col("metric") == metric_choice) & (pl.col("split") == split_choice)
@@ -305,15 +313,19 @@ with tab_detail:
     # Headline metrics
     m_val = registration.get("val_metrics") or {}
     m_test = registration.get("metrics") or {}
+    m_oof = (registration.get("oof_metrics") or {}).get("overall") or {}
     if m_val or m_test:
         cols = st.columns(4)
         for i, key in enumerate(["roc_auc", "pr_auc", "f1", "log_loss"]):
             with cols[i]:
                 val_v = m_val.get(key)
                 test_v = m_test.get(key)
+                oof_v = m_oof.get(key)
                 val_s = f"{val_v:.4f}" if isinstance(val_v, (int, float)) else "—"
                 test_s = f"{test_v:.4f}" if isinstance(test_v, (int, float)) else "—"
-                st.metric(label=f"{key} (test)", value=test_s, delta=f"val: {val_s}", delta_color="off")
+                oof_s = f"{oof_v:.4f}" if isinstance(oof_v, (int, float)) else None
+                delta_text = f"val: {val_s}" + (f"  ·  oof: {oof_s}" if oof_s else "")
+                st.metric(label=f"{key} (test)", value=test_s, delta=delta_text, delta_color="off")
 
     with st.expander("Best params + spec"):
         st.json({
@@ -364,9 +376,30 @@ with tab_detail:
         except Exception as e:  # noqa: BLE001
             st.error(f"Could not render feature importance: {e}")
 
+    # OOF metrics (when present) — separate section since they describe a
+    # different read on the same model than val/test.
+    oof_block = registration.get("oof_metrics") or {}
+    if oof_block:
+        st.subheader("OOF cross-validation")
+        st.caption(
+            f"{oof_block.get('n_folds', '?')} folds · "
+            f"seed {oof_block.get('seed', '?')} · "
+            f"stratified on `{oof_block.get('stratified_on') or 'none'}` · "
+            f"threshold {oof_block.get('threshold')}"
+        )
+        per_fold = oof_block.get("per_fold") or []
+        overall = oof_block.get("overall") or {}
+        if per_fold:
+            rows = list(per_fold)
+            if overall:
+                rows = rows + [{"fold": "overall", **overall}]
+            st.dataframe(pl.DataFrame(rows).to_pandas(), use_container_width=True)
+
     # Predictions
     st.subheader("Predictions")
-    split = st.radio("Split", ["test", "val"], index=0, horizontal=True, key="pred_split")
+    split = st.radio(
+        "Split", ["test", "val", "oof"], index=0, horizontal=True, key="pred_split"
+    )
     preds = load_predictions(storage, outcome, candidate, split=split, version=version)
     if preds is None or preds.height == 0:
         st.info(f"No {split} predictions saved for this run.")
@@ -384,7 +417,7 @@ with tab_detail:
         # Surface predicted score next to the name so the descending sort
         # is visible without scrolling.
         preferred = [
-            c for c in ["proba", "pred", "prediction", "actual",
+            c for c in ["fold", "proba", "pred", "prediction", "actual",
                         "game_id", "name", "year_published", "users_rated", "label"]
             if c in view.columns
         ]
