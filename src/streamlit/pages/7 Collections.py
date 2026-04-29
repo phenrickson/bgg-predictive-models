@@ -158,8 +158,22 @@ st.caption(
     f"&nbsp;·&nbsp; {splits_caption} &nbsp;·&nbsp; {len(candidates)} candidate(s)"
 )
 
-tab_collection, tab_overview, tab_detail, tab_finalized = st.tabs(
-    ["Collection", "Overview", "Candidate Detail", "Finalized Model"]
+(
+    tab_collection,
+    tab_overview,
+    tab_detail,
+    tab_compare,
+    tab_topn,
+    tab_finalized,
+) = st.tabs(
+    [
+        "Collection",
+        "Overview",
+        "Candidate Detail",
+        "Compare Predictions",
+        "Top N",
+        "Finalized Model",
+    ]
 )
 
 # ---------------------------------------------------------------------------
@@ -454,7 +468,169 @@ with tab_detail:
         st.dataframe(view.head(500).to_pandas(), use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Tab 3 — Finalized Model
+# Tab 3 — Compare Predictions
+# ---------------------------------------------------------------------------
+
+with tab_compare:
+    compare_split = st.radio(
+        "Split",
+        ["test", "val", "oof"],
+        index=0,
+        horizontal=True,
+        key="compare_split",
+    )
+
+    candidate_choices = st.multiselect(
+        "Candidates",
+        candidates,
+        default=candidates,
+        key="compare_candidates",
+    )
+
+    if not candidate_choices:
+        st.info("Pick at least one candidate.")
+    else:
+        per_candidate: dict[str, pl.DataFrame] = {}
+        missing: list[str] = []
+        meta_columns_seen: dict[str, pl.DataFrame] = {}
+        for cand in candidate_choices:
+            run = next((r for r in filtered_runs if r.get("candidate") == cand), None)
+            if run is None:
+                missing.append(cand)
+                continue
+            preds = load_predictions(
+                storage, outcome, cand, split=compare_split, version=run.get("version")
+            )
+            if preds is None or preds.height == 0:
+                missing.append(cand)
+                continue
+            if "proba" not in preds.columns:
+                missing.append(f"{cand} (no proba column — regression?)")
+                continue
+            per_candidate[cand] = preds
+            meta_columns_seen[cand] = preds
+
+        if missing:
+            st.caption(
+                f"Skipped (no `{compare_split}` predictions or missing proba): "
+                + ", ".join(missing)
+            )
+
+        if not per_candidate:
+            st.info(f"No candidates have saved `{compare_split}` predictions.")
+        else:
+            # Build the wide frame: meta columns + one proba_<cand> per candidate.
+            # Use the first candidate's frame as the spine; left-join the rest by game_id.
+            spine_cand, spine = next(iter(per_candidate.items()))
+            meta_cols = [
+                c for c in ["game_id", "name", "year_published", "users_rated", "label"]
+                if c in spine.columns
+            ]
+            spine_view = spine.select(
+                meta_cols + ["proba"]
+            ).rename({"proba": f"proba_{spine_cand}"})
+
+            wide = spine_view
+            for cand, df in per_candidate.items():
+                if cand == spine_cand:
+                    continue
+                if "game_id" not in df.columns:
+                    continue
+                slim = df.select(["game_id", "proba"]).rename(
+                    {"proba": f"proba_{cand}"}
+                )
+                wide = wide.join(slim, on="game_id", how="left")
+
+            proba_cols = [f"proba_{c}" for c in per_candidate.keys()]
+            rank_options = ["mean across candidates"] + proba_cols
+            rank_choice = st.selectbox(
+                "Rank by", rank_options, index=0, key="compare_rank_by"
+            )
+
+            search = st.text_input("Search game name", key="compare_search").strip().lower()
+            if search and "name" in wide.columns:
+                wide = wide.filter(
+                    pl.col("name").str.to_lowercase().str.contains(search)
+                )
+
+            if rank_choice == "mean across candidates":
+                wide = wide.with_columns(
+                    pl.mean_horizontal(*proba_cols).alias("_rank")
+                )
+                wide = wide.sort("_rank", descending=True, nulls_last=True).drop("_rank")
+            else:
+                wide = wide.sort(rank_choice, descending=True, nulls_last=True)
+
+            st.caption(f"{wide.height:,} rows · split = `{compare_split}`")
+            st.dataframe(wide.head(500).to_pandas(), use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Tab 4 — Top N picks for a selected candidate
+# ---------------------------------------------------------------------------
+
+with tab_topn:
+    topn_candidate = st.selectbox("Candidate", candidates, key="topn_candidate")
+    matched_run = next(
+        (r for r in filtered_runs if r.get("candidate") == topn_candidate), None
+    )
+    topn_version = matched_run.get("version") if matched_run else None
+
+    topn_split = st.radio(
+        "Split",
+        ["test", "val", "oof"],
+        index=0,
+        horizontal=True,
+        key="topn_split",
+    )
+
+    topn_preds = load_predictions(
+        storage, outcome, topn_candidate, split=topn_split, version=topn_version
+    )
+
+    if topn_preds is None or topn_preds.height == 0:
+        st.info(f"No `{topn_split}` predictions for `{topn_candidate}`.")
+    elif "proba" not in topn_preds.columns:
+        st.info("Top-N currently surfaces classification proba; this is a regression run.")
+    else:
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            top_n = st.slider("Top N", 5, 200, 25, key="topn_n")
+
+        with c2:
+            year_options: list[str] = ["(all)"]
+            if "year_published" in topn_preds.columns:
+                years = (
+                    topn_preds["year_published"]
+                    .drop_nulls()
+                    .unique()
+                    .sort(descending=True)
+                    .to_list()
+                )
+                year_options += [str(int(y)) for y in years]
+            year_choice = st.selectbox("Year", year_options, index=0, key="topn_year")
+
+        view = topn_preds
+        if year_choice != "(all)" and "year_published" in view.columns:
+            view = view.filter(pl.col("year_published") == int(year_choice))
+
+        view = view.sort("proba", descending=True).head(top_n)
+
+        preferred = [
+            c for c in ["proba", "pred", "label", "name", "year_published",
+                        "users_rated", "game_id", "fold"]
+            if c in view.columns
+        ]
+        rest = [c for c in view.columns if c not in preferred]
+        view = view.select(preferred + rest)
+
+        st.caption(
+            f"top {view.height:,} of `{topn_candidate}` · split = `{topn_split}` · "
+            + (f"year = {year_choice}" if year_choice != "(all)" else "all years")
+        )
+        st.dataframe(view.to_pandas(), use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Tab 5 — Finalized Model
 # ---------------------------------------------------------------------------
 
 with tab_finalized:
