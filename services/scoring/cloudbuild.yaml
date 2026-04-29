@@ -46,5 +46,5 @@ artifacts:
   objects:
     location: 'gs://$PROJECT_ID-build-artifacts/bgg-model-scoring/'
     paths:
-    - 'scoring_service/pyproject.toml'
-    - 'scoring_service/Dockerfile'
+    - 'services/scoring/pyproject.toml'
+    - 'services/scoring/Dockerfile'

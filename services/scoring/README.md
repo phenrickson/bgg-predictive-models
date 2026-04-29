@@ -21,7 +21,7 @@ Models must be registered before they can be used for scoring. The registration 
 Use the `register_model.py` script to register a model:
 
 ```bash
-python -m scoring_service.register_model \
+python -m services.scoring.register_model \
     --model-type rating \
     --experiment best_rating_model \
     --name production_rating_model \
@@ -124,7 +124,7 @@ models/registered/
 
 1. Register a model:
 ```bash
-python -m scoring_service.register_model \
+python -m services.scoring.register_model \
     --model-type rating \
     --experiment best_rating_model \
     --name production_rating_model \
@@ -177,14 +177,14 @@ export GCS_BUCKET_NAME=bgg-models
 
 2. Start the service:
 ```bash
-cd scoring_service
+cd services/scoring
 uvicorn main:app --reload
 ```
 
 ### Running Tests
 
 ```bash
-pytest tests/scoring_service/
+pytest tests/services/scoring/
 ```
 
 ### Deployment

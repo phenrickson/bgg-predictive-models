@@ -9,7 +9,7 @@ import tempfile
 import json
 
 from src.utils.config import load_config, BigQueryConfig
-from scoring_service.auth import GCPAuthenticator, AuthenticationError
+from services.scoring.auth import GCPAuthenticator, AuthenticationError
 
 
 class TestBigQueryAuthentication:
@@ -87,7 +87,7 @@ class TestGCPAuthenticator:
         auth = GCPAuthenticator()
         assert auth.project_id == "env-project"
 
-    @patch("scoring_service.auth.default")
+    @patch("services.scoring.auth.default")
     def test_authenticator_init_from_credentials(self, mock_default):
         """Test authenticator initialization from default credentials."""
         mock_default.return_value = (MagicMock(), "creds-project")
@@ -106,7 +106,7 @@ class TestGCPAuthenticator:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "scoring_service.auth.default", side_effect=DefaultCredentialsError()
+                "services.scoring.auth.default", side_effect=DefaultCredentialsError()
             ):
                 auth = GCPAuthenticator()
                 assert auth.project_id == "metadata-project"
@@ -115,7 +115,7 @@ class TestGCPAuthenticator:
         """Test authenticator initialization failure when no project ID found."""
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "scoring_service.auth.default", side_effect=DefaultCredentialsError()
+                "services.scoring.auth.default", side_effect=DefaultCredentialsError()
             ):
                 with patch("requests.get", side_effect=Exception()):
                     with pytest.raises(
@@ -123,7 +123,7 @@ class TestGCPAuthenticator:
                     ):
                         GCPAuthenticator()
 
-    @patch("scoring_service.auth.storage.Client")
+    @patch("services.scoring.auth.storage.Client")
     def test_get_storage_client_success(self, mock_storage_client):
         """Test successful storage client creation."""
         mock_client = MagicMock()
@@ -136,7 +136,7 @@ class TestGCPAuthenticator:
         assert client == mock_client
         mock_storage_client.assert_called_once_with(project="test-project")
 
-    @patch("scoring_service.auth.storage.Client")
+    @patch("services.scoring.auth.storage.Client")
     def test_get_storage_client_auth_failure(self, mock_storage_client):
         """Test storage client creation with authentication failure."""
         # Client creation itself fails
@@ -147,7 +147,7 @@ class TestGCPAuthenticator:
         with pytest.raises(AuthenticationError, match="Failed to authenticate to GCP"):
             auth.get_storage_client()
 
-    @patch("scoring_service.auth.storage.Client")
+    @patch("services.scoring.auth.storage.Client")
     def test_verify_bucket_access_success(self, mock_storage_client):
         """Test successful bucket access verification."""
         mock_client = MagicMock()
@@ -163,7 +163,7 @@ class TestGCPAuthenticator:
         assert result is True
         mock_bucket.list_blobs.assert_called_once_with(max_results=1)
 
-    @patch("scoring_service.auth.storage.Client")
+    @patch("services.scoring.auth.storage.Client")
     def test_verify_bucket_access_failure(self, mock_storage_client):
         """Test bucket access verification failure."""
         mock_client = MagicMock()
@@ -344,7 +344,7 @@ class TestAuthenticationErrorHandling:
 
         os.unlink(f.name)
 
-    @patch("scoring_service.auth.storage.Client")
+    @patch("services.scoring.auth.storage.Client")
     def test_storage_client_creation_failure(self, mock_storage_client):
         """Test storage client creation failure."""
         mock_storage_client.side_effect = Exception("Storage client creation failed")

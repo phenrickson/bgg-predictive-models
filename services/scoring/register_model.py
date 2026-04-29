@@ -1,4 +1,4 @@
-"""Command line interface for registering embedding models."""
+"""Command line interface for registering models."""
 
 import argparse
 import os
@@ -8,13 +8,14 @@ from dotenv import load_dotenv
 import logging
 
 # Add project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
 from src.models.experiments import ExperimentTracker  # noqa: E402
-from embeddings_service.registered_model import RegisteredEmbeddingModel  # noqa: E402
+from services.scoring.registered_model import RegisteredModel  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
+# load environment variables
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,10 +23,12 @@ logger = logging.getLogger(__name__)
 
 def get_project_id():
     """Get the ML project ID from environment or config."""
+    # Try environment variables first
     project_id = os.getenv("ML_PROJECT_ID") or os.getenv("GCP_PROJECT_ID")
     if project_id:
         return project_id
 
+    # Fall back to config
     config = load_config()
     return config.ml_project_id
 
@@ -40,33 +43,37 @@ def validate_environment():
 
 
 def register_model(
+    model_type: str,
     experiment_name: str,
     registered_name: str,
     description: str,
     bucket_name: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Register an embedding model for production use.
+    """Register a model for production use.
 
     Args:
-        experiment_name: Name of experiment to register.
-        registered_name: Name to give the registered model.
-        description: Description of the model.
-        bucket_name: GCS bucket for storing registered models.
-        metadata: Optional additional metadata.
+        model_type: Type of model to register
+        experiment_name: Name of experiment to register
+        registered_name: Name to give the registered model
+        description: Description of the model
+        bucket_name: GCS bucket for storing registered models
+        metadata: Optional additional metadata
 
     Returns:
-        Registration details.
+        Registration details
     """
+    # Validate environment variables
     validate_environment()
 
+    # Get bucket name from config if not provided
     if bucket_name is None:
         config = load_config()
         bucket_name = config.get_bucket_name()
         logger.info(f"Using bucket from config: {bucket_name}")
 
-    # Load experiment from embeddings tracker
-    tracker = ExperimentTracker("embeddings")
+    # Load experiment
+    tracker = ExperimentTracker(model_type)
     experiments = tracker.list_experiments()
     matching_experiments = [
         exp for exp in experiments if exp["name"] == experiment_name
@@ -83,11 +90,12 @@ def register_model(
 
     # Create registered model manager
     project_id = get_project_id()
-    registered_model = RegisteredEmbeddingModel(
-        bucket_name=bucket_name, project_id=project_id
+    registered_model = RegisteredModel(
+        model_type=model_type, bucket_name=bucket_name, project_id=project_id
     )
 
     try:
+        # Register the model
         registration = registered_model.register(
             experiment=experiment,
             name=registered_name,
@@ -111,39 +119,34 @@ def register_model(
         raise
 
 
-def get_default_model_name() -> str:
-    """Get default model name from config."""
-    config = load_config()
-    current_year = config.years.current
-    return f"embeddings-v{current_year}"
-
-
 def main():
-    config = load_config()
-    default_name = get_default_model_name()
+    parser = argparse.ArgumentParser(description="Register a model for production use")
 
-    parser = argparse.ArgumentParser(description="Register an embedding model for production use")
+    parser.add_argument(
+        "--model-type",
+        required=True,
+        choices=["hurdle", "rating", "complexity", "users_rated", "geek_rating"],
+        help="Type of model to register",
+    )
 
     parser.add_argument(
         "--experiment", required=True, help="Name of experiment to register"
     )
 
     parser.add_argument(
-        "--name", default=default_name, help=f"Name to give the registered model (default: {default_name})"
+        "--name", required=True, help="Name to give the registered model"
     )
 
-    parser.add_argument(
-        "--description",
-        default=f"Production (v{config.years.current}) SVD embeddings for game similarity",
-        help="Description of the model"
-    )
+    parser.add_argument("--description", required=True, help="Description of the model")
 
     parser.add_argument("--bucket", help="GCS bucket for storing registered models")
 
     args = parser.parse_args()
 
     try:
-        registration = register_model(
+        # Register the model
+        registration = register_model(  # noqa: F841
+            model_type=args.model_type,
             experiment_name=args.experiment,
             registered_name=args.name,
             description=args.description,

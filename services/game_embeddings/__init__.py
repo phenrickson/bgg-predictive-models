@@ -1,4 +1,4 @@
-"""Embeddings service for generating and querying game embeddings."""
+"""Game embeddings service for generating and querying game embeddings."""
 
 from .registered_model import RegisteredEmbeddingModel
 

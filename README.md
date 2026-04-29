@@ -26,12 +26,14 @@ bgg-predictive-models/
 ├── data/                      # Data storage and predictions
 ├── docker/                    # Dockerfiles (training, scoring, streamlit, embeddings)
 ├── docs/                      # Design documents and plans
-├── embeddings_service/        # Game embedding inference service (FastAPI)
 ├── figures/                   # Visualization outputs
 ├── models/                    # Trained models and experiments
 ├── references/                # Reference materials
-├── scoring_service/           # Production scoring service (FastAPI)
 ├── scripts/                   # Utility scripts
+├── services/                  # Production services (FastAPI)
+│   ├── scoring/               # Scoring and prediction service
+│   ├── game_embeddings/       # Game embedding inference service
+│   └── text_embeddings/       # Text embedding inference service
 ├── src/                       # Primary source code
 │   ├── collection/            # User collection modeling
 │   ├── data/                  # Data loading and BigQuery integration
@@ -39,14 +41,12 @@ bgg-predictive-models/
 │   ├── features/              # Feature engineering and preprocessing
 │   ├── models/                # ML models (outcomes, embeddings, text embeddings)
 │   ├── monitor/               # Experiment and prediction monitoring dashboards
-│   ├── pipeline/              # Pipeline orchestration (train, evaluate, score, finalize)
+│   ├── pipeline/              # Pipeline orchestration (train, evaluate, score, finalize, register)
 │   ├── streamlit/             # Interactive Streamlit app with multiple pages
 │   ├── utils/                 # Configuration, logging, experiment sync
 │   └── visualizations/        # Data visualization scripts
 ├── terraform/                 # Infrastructure as Code (GCP resources)
 ├── tests/                     # Unit and integration tests
-├── text_embeddings_service/   # Text embedding inference service
-├── register.py                # Model registration script
 └── Makefile                   # Automated workflow commands
 ```
 
@@ -325,7 +325,7 @@ make scoring-service-upload  # Score and upload to BigQuery
 make stop-scoring         # Stop container
 
 # Deploy to Google Cloud Run
-gcloud builds submit --config scoring_service/cloudbuild.yaml
+gcloud builds submit --config services/scoring/cloudbuild.yaml
 ```
 
 ### API Endpoints

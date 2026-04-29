@@ -1,18 +1,15 @@
 """
-Tests for register.py script functionality
+Tests for src/pipeline/register.py script functionality
 """
+
+from pathlib import Path
 
 import pytest
 import yaml
 import subprocess
-from pathlib import Path
 from unittest.mock import patch, MagicMock
-import sys
-import os
 
-# Add the project root to the path so we can import register
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import register
+from src.pipeline import register
 
 
 @pytest.fixture
@@ -104,7 +101,7 @@ class TestCommandExecution:
 class TestModelRegistrationFunctions:
     """Test individual model registration functions"""
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_register_complexity(self, mock_run_command, sample_config):
         """Test complexity model registration command generation"""
         register.register_complexity(sample_config)
@@ -113,7 +110,7 @@ class TestModelRegistrationFunctions:
             "uv",
             "run",
             "-m",
-            "scoring_service.register_model",
+            "services.scoring.register_model",
             "--model-type",
             "complexity",
             "--experiment",
@@ -128,7 +125,7 @@ class TestModelRegistrationFunctions:
             expected_cmd, "Registering complexity model"
         )
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_register_rating(self, mock_run_command, sample_config):
         """Test rating model registration command generation"""
         register.register_rating(sample_config)
@@ -136,7 +133,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "rating" in cmd
         assert "--experiment" in cmd
@@ -144,7 +141,7 @@ class TestModelRegistrationFunctions:
         assert "--name" in cmd
         assert "rating-v2025" in cmd
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_register_users_rated(self, mock_run_command, sample_config):
         """Test users_rated model registration command generation"""
         register.register_users_rated(sample_config)
@@ -152,7 +149,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "users_rated" in cmd
         assert "--experiment" in cmd
@@ -160,7 +157,7 @@ class TestModelRegistrationFunctions:
         assert "--name" in cmd
         assert "users_rated-v2025" in cmd
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_register_hurdle(self, mock_run_command, sample_config):
         """Test hurdle model registration command generation"""
         register.register_hurdle(sample_config)
@@ -168,7 +165,7 @@ class TestModelRegistrationFunctions:
         call_args = mock_run_command.call_args[0]
         cmd = call_args[0]
 
-        assert "scoring_service.register_model" in cmd
+        assert "services.scoring.register_model" in cmd
         assert "--model-type" in cmd
         assert "hurdle" in cmd
         assert "--experiment" in cmd
@@ -184,11 +181,11 @@ class TestModelRegistrationFunctions:
 class TestMainPipeline:
     """Test the main registration pipeline"""
 
-    @patch("register.load_registration_config")
-    @patch("register.register_complexity")
-    @patch("register.register_rating")
-    @patch("register.register_users_rated")
-    @patch("register.register_hurdle")
+    @patch("src.pipeline.register.load_registration_config")
+    @patch("src.pipeline.register.register_complexity")
+    @patch("src.pipeline.register.register_rating")
+    @patch("src.pipeline.register.register_users_rated")
+    @patch("src.pipeline.register.register_hurdle")
     def test_main_pipeline_success(
         self,
         mock_register_hurdle,
@@ -209,7 +206,7 @@ class TestMainPipeline:
         mock_register_users_rated.assert_called_once_with(sample_config)
         mock_register_hurdle.assert_called_once_with(sample_config)
 
-    @patch("register.load_registration_config")
+    @patch("src.pipeline.register.load_registration_config")
     @patch("sys.exit")
     def test_main_pipeline_config_error(self, mock_exit, mock_load_config):
         """Test main pipeline with config loading error"""
@@ -219,8 +216,8 @@ class TestMainPipeline:
 
         mock_exit.assert_called_once_with(1)
 
-    @patch("register.load_registration_config")
-    @patch("register.register_complexity")
+    @patch("src.pipeline.register.load_registration_config")
+    @patch("src.pipeline.register.register_complexity")
     @patch("sys.exit")
     def test_main_pipeline_registration_error(
         self, mock_exit, mock_register_complexity, mock_load_config, sample_config
@@ -237,7 +234,7 @@ class TestMainPipeline:
 class TestModelVersioning:
     """Test model versioning functionality"""
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_model_names_include_year(self, mock_run_command, sample_config):
         """Test that all model names include the current year"""
         # Test complexity model
@@ -256,7 +253,7 @@ class TestModelVersioning:
         name_idx = cmd.index("--name") + 1
         assert "v2025" in cmd[name_idx]
 
-    @patch("register.run_command")
+    @patch("src.pipeline.register.run_command")
     def test_model_descriptions_include_year(self, mock_run_command, sample_config):
         """Test that all model descriptions include the current year"""
         register.register_complexity(sample_config)
@@ -309,11 +306,11 @@ class TestIntegration:
         # This test ensures our main() function follows the same order
 
         with (
-            patch("register.load_registration_config") as mock_load_config,
-            patch("register.register_complexity") as mock_complexity,
-            patch("register.register_rating") as mock_rating,
-            patch("register.register_users_rated") as mock_users_rated,
-            patch("register.register_hurdle") as mock_hurdle,
+            patch("src.pipeline.register.load_registration_config") as mock_load_config,
+            patch("src.pipeline.register.register_complexity") as mock_complexity,
+            patch("src.pipeline.register.register_rating") as mock_rating,
+            patch("src.pipeline.register.register_users_rated") as mock_users_rated,
+            patch("src.pipeline.register.register_hurdle") as mock_hurdle,
         ):
             mock_load_config.return_value = {
                 "current_year": 2025,
@@ -337,8 +334,8 @@ class TestIntegration:
 class TestErrorHandling:
     """Test error handling scenarios"""
 
-    @patch("register.load_registration_config")
-    @patch("register.register_complexity")
+    @patch("src.pipeline.register.load_registration_config")
+    @patch("src.pipeline.register.register_complexity")
     @patch("sys.exit")
     def test_handles_subprocess_error(
         self, mock_exit, mock_register_complexity, mock_load_config, sample_config
@@ -351,7 +348,7 @@ class TestErrorHandling:
 
         mock_exit.assert_called_once_with(1)
 
-    @patch("register.load_registration_config")
+    @patch("src.pipeline.register.load_registration_config")
     @patch("sys.exit")
     def test_handles_yaml_error(self, mock_exit, mock_load_config):
         """Test that YAML parsing errors are handled properly"""

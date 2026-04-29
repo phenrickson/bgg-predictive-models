@@ -162,7 +162,7 @@ text_embeddings_pmi:
 TEXT_EMBEDDINGS_CANDIDATE ?= text-embeddings
 
 register_text_embeddings:
-	uv run -m text_embeddings_service.register_model \
+	uv run -m services.text_embeddings.register_model \
 	--experiment $(TEXT_EMBEDDINGS_CANDIDATE) \
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
@@ -171,14 +171,14 @@ register_text_embeddings:
 ### register models (reads from config.yaml)
 .PHONY: register register-dry-run
 register:
-	uv run python register.py
+	uv run -m src.pipeline.register
 
 register-dry-run:
-	uv run python register.py --dry-run
+	uv run -m src.pipeline.register --dry-run
 
 EMBEDDINGS_CANDIDATE ?= svd-embeddings
 register_embeddings:
-	uv run -m embeddings_service.register_model \
+	uv run -m services.game_embeddings.register_model \
 	--experiment $(EMBEDDINGS_CANDIDATE) \
 	--name embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
@@ -271,14 +271,14 @@ stop-scoring:
 
 # run scoring service locally
 scoring-service:
-	uv run -m scoring_service.score \
+	uv run -m services.scoring.score \
     --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
     --download
 
 scoring-service-upload:
-	uv run -m scoring_service.score \
+	uv run -m services.scoring.score \
     --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \

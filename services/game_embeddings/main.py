@@ -19,7 +19,7 @@ sys.path.insert(0, project_root)
 
 from src.utils.config import load_config  # noqa: E402
 from src.models.embeddings.data import EmbeddingDataLoader  # noqa: E402
-from embeddings_service.registered_model import RegisteredEmbeddingModel  # noqa: E402
+from services.game_embeddings.registered_model import RegisteredEmbeddingModel  # noqa: E402
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)

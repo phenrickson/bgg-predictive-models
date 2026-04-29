@@ -6,7 +6,7 @@ on:
       - main
       - develop
     paths:
-      - 'embeddings_service/**'
+      - 'services/game_embeddings/**'
       - 'docker/embeddings.Dockerfile'
       - '.github/workflows/build-embeddings.yml'
   workflow_dispatch:
