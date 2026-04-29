@@ -685,6 +685,9 @@ with tab_topn:
             view = topn_preds.filter(
                 (pl.col("year_published") >= lo) & (pl.col("year_published") <= hi)
             )
+            # year_published is sometimes Float64 in saved predictions; cast to
+            # Int64 so pivoted column names render as "2024" not "2024.0".
+            view = view.with_columns(pl.col("year_published").cast(pl.Int64))
 
             # Per year: take top-N rows by proba.
             view = view.with_columns(
