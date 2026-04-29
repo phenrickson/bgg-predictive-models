@@ -403,11 +403,13 @@ with tab_overview:
             ]
             fig.update_layout(
                 shapes=shapes,
-                height=240,
-                margin={"t": 40, "b": 30, "l": 50, "r": 20},
-                xaxis_title="rank (proba descending)",
-                yaxis_title="proba",
+                height=110,
+                margin={"t": 22, "b": 24, "l": 40, "r": 12},
+                xaxis_title=None,
+                yaxis_title=None,
+                title={"text": cand, "x": 0.0, "xanchor": "left", "font": {"size": 13}},
             )
+            fig.update_yaxes(showticklabels=False, range=[0, 1])
             st.plotly_chart(fig, use_container_width=True)
 
         # Splits + run metadata
