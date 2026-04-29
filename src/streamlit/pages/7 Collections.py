@@ -625,20 +625,18 @@ with tab_topn:
     )
     topn_version = matched_run.get("version") if matched_run else None
 
-    topn_split = st.radio(
-        "Split",
-        ["test", "val", "oof"],
-        index=0,
-        horizontal=True,
-        key="topn_split",
-    )
+    parts: list[pl.DataFrame] = []
+    for s in ("oof", "val", "test"):
+        df = load_predictions(
+            storage, outcome, topn_candidate, split=s, version=topn_version
+        )
+        if df is not None and df.height > 0:
+            parts.append(df.with_columns(pl.lit(s).alias("split")))
 
-    topn_preds = load_predictions(
-        storage, outcome, topn_candidate, split=topn_split, version=topn_version
-    )
+    topn_preds = pl.concat(parts, how="diagonal_relaxed") if parts else None
 
     if topn_preds is None or topn_preds.height == 0:
-        st.info(f"No `{topn_split}` predictions for `{topn_candidate}`.")
+        st.info(f"No predictions saved for `{topn_candidate}`.")
     elif "proba" not in topn_preds.columns:
         st.info("Top-N currently surfaces classification proba; this is a regression run.")
     elif "year_published" not in topn_preds.columns or "name" not in topn_preds.columns:
@@ -652,12 +650,9 @@ with tab_topn:
         else:
             data_min_year = all_years[0]
             data_max_year = all_years[-1]
-            # OOF spans the full training set; fix the slider bounds at 1990
-            # (or the data's min, whichever is later) → present.
-            if topn_split == "oof":
-                min_year = max(1990, data_min_year)
-            else:
-                min_year = data_min_year
+            # Union of oof/val/test spans the full historical range; fix the
+            # slider lower bound at 1990 to keep the slider usable.
+            min_year = max(1990, data_min_year)
             max_year = data_max_year
             default_lo = max(2015, min_year)
             default_hi = max_year
@@ -748,15 +743,13 @@ with tab_topn:
 
                     styler = name_pdf.style.apply(_style_all, axis=None)
                     st.caption(
-                        f"`{topn_candidate}` · split = `{topn_split}` · "
-                        f"top {top_n} per year · {lo}–{hi} · "
-                        "blue = true positive"
+                        f"`{topn_candidate}` · top {top_n} per year · "
+                        f"{lo}–{hi} · blue = true positive"
                     )
                     st.dataframe(styler, use_container_width=True)
                 else:
                     st.caption(
-                        f"`{topn_candidate}` · split = `{topn_split}` · "
-                        f"top {top_n} per year · {lo}–{hi}"
+                        f"`{topn_candidate}` · top {top_n} per year · {lo}–{hi}"
                     )
                     st.dataframe(name_pdf, use_container_width=True)
 
