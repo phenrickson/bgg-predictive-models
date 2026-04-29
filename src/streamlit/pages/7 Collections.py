@@ -62,6 +62,74 @@ def _feature_group_label(name: str) -> str:
     return feature_group(name)
 
 
+def _finalized_feature_names(pipeline, storage, outcome: str) -> "list[str] | None":
+    """Recover post-preprocessing feature names by transforming a tiny slice of
+    canonical training data through the fitted preprocessor. This is what the
+    training code does (sklearn's get_feature_names_out is unreliable on this
+    stack). Returns None if splits aren't available.
+    """
+    splits = storage.load_canonical_splits(outcome)
+    if not splits or "train" not in splits:
+        return None
+    train_df = splits["train"]
+    try:
+        sample = train_df.head(5).to_pandas()
+    except AttributeError:
+        sample = train_df.head(5)
+    preprocessor = pipeline.named_steps["preprocessor"]
+    transformed = preprocessor.transform(sample)
+    if hasattr(transformed, "columns"):
+        return list(transformed.columns)
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def _extract_finalized_importance(
+    _pipeline,
+    _storage,
+    username: str,
+    outcome: str,
+    candidate: str,
+    version: int,
+) -> "pd.DataFrame | None":
+    """Pull a feature-importance frame from a fitted sklearn Pipeline.
+
+    Cached on ``(username, outcome, candidate, version)`` — the leading
+    underscores on ``_pipeline`` and ``_storage`` tell Streamlit to skip
+    hashing them. Mirrors ``CollectionModel.feature_importance()`` but
+    operates on the raw pickled pipeline (the wrapper isn't persisted).
+    Returns None if the model exposes neither ``feature_importances_`` nor
+    ``coef_``.
+    """
+    import numpy as np
+    import pandas as pd
+
+    model_step = _pipeline.named_steps["model"]
+    if hasattr(model_step, "feature_importances_"):
+        values = np.asarray(model_step.feature_importances_)
+    elif hasattr(model_step, "coef_"):
+        values = np.asarray(model_step.coef_).ravel()
+    else:
+        return None
+
+    names: list[str] | None = None
+    try:
+        names = _finalized_feature_names(_pipeline, _storage, outcome)
+    except Exception:
+        names = None
+    if names is None:
+        try:
+            names = list(_pipeline[:-1].get_feature_names_out())
+        except Exception:
+            names = None
+    if names is None or len(names) != len(values):
+        names = [f"f{i}" for i in range(len(values))]
+
+    out = pd.DataFrame({"feature": names, "value": values})
+    out["abs_value"] = out["value"].abs()
+    return out.sort_values("abs_value", ascending=False).reset_index(drop=True)
+
+
 @st.cache_data(show_spinner=False)
 def _load_universe(min_year: int) -> pl.DataFrame:
     from src.data.loader import BGGDataLoader
@@ -980,15 +1048,11 @@ with tab_finalized:
             f"--outcome {outcome} --candidate <name>`."
         )
     else:
-        if len(finalized) == 1:
-            cand_name, cand_version = finalized[0]
-            st.caption(f"Finalized: **{cand_name}** (v{cand_version})")
-        else:
-            label_to_pair = {f"{c} (v{v})": (c, v) for c, v in finalized}
-            choice = st.selectbox(
-                "Finalized candidate", list(label_to_pair.keys()), key="finalized_pick"
-            )
-            cand_name, cand_version = label_to_pair[choice]
+        label_to_pair = {f"{c} (v{v})": (c, v) for c, v in finalized}
+        choice = st.selectbox(
+            "Finalized candidate", list(label_to_pair.keys()), key="finalized_pick"
+        )
+        cand_name, cand_version = label_to_pair[choice]
 
         try:
             pipeline, registration = load_finalized_run(
@@ -1012,6 +1076,50 @@ with tab_finalized:
 
             with st.expander("Run registration"):
                 st.json(registration)
+
+            with st.expander("Feature importance", expanded=False):
+                importance = _extract_finalized_importance(
+                    pipeline, storage, username, outcome, cand_name, cand_version
+                )
+                if importance is None or not len(importance):
+                    st.caption("No feature importance available for this model.")
+                else:
+                    groups_present = sorted(
+                        {
+                            _feature_group_label(name)
+                            for name in importance["feature"].tolist()
+                        }
+                    )
+                    fc1, fc2 = st.columns([1, 1])
+                    with fc1:
+                        fi_group = st.selectbox(
+                            "Group filter",
+                            ["(all)"] + groups_present,
+                            key="final_fi_group",
+                        )
+                    with fc2:
+                        fi_top_n = st.slider(
+                            "Top N (each direction)", 5, 50, 20, key="final_fi_top_n"
+                        )
+
+                    try:
+                        fi_title = (
+                            fi_group if fi_group != "(all)" else "Feature Importance"
+                        )
+                        fi_subtitle = (
+                            f"{username} · {cand_name} v{cand_version} · finalized"
+                        )
+                        fig = plot_feature_importance(
+                            importance,
+                            group=None if fi_group == "(all)" else fi_group,
+                            top_pos=fi_top_n,
+                            top_neg=fi_top_n,
+                            interactive=True,
+                            title=f"{fi_title}<br><sub>{fi_subtitle}</sub>",
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:  # noqa: BLE001
+                        st.error(f"Could not render feature importance: {e}")
 
             st.subheader("Score upcoming games")
 
