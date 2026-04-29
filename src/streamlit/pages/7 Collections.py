@@ -724,25 +724,30 @@ with tab_topn:
                 name_pdf = name_pivot.to_pandas().set_index("rank")
 
                 if label_pivot is not None:
+                    import pandas as pd
+
                     label_pdf = label_pivot.to_pandas().set_index("rank")
-                    # Only color the year columns, not "rank".
-                    year_str_cols = [c for c in name_pdf.columns]
 
-                    def _style_cell(_value, row, col):
-                        truth = label_pdf.at[row, col] if col in label_pdf.columns else None
-                        if truth is True:
-                            return "background-color: #1f4e79; color: white"
-                        if truth is False:
-                            return "background-color: #555555; color: white"
-                        return ""
+                    def _style_all(df):
+                        out = pd.DataFrame("", index=df.index, columns=df.columns)
+                        for col in df.columns:
+                            if col not in label_pdf.columns:
+                                continue
+                            for idx in df.index:
+                                if idx not in label_pdf.index:
+                                    continue
+                                truth = label_pdf.at[idx, col]
+                                if truth is True or truth == 1:
+                                    out.at[idx, col] = (
+                                        "background-color: #1f4e79; color: white"
+                                    )
+                                elif truth is False or truth == 0:
+                                    out.at[idx, col] = (
+                                        "background-color: #555555; color: white"
+                                    )
+                        return out
 
-                    styler = name_pdf.style.apply(
-                        lambda row: [
-                            _style_cell(row[c], row.name, c) for c in year_str_cols
-                        ],
-                        axis=1,
-                        subset=year_str_cols,
-                    )
+                    styler = name_pdf.style.apply(_style_all, axis=None)
                     st.caption(
                         f"`{topn_candidate}` · split = `{topn_split}` · "
                         f"top {top_n} per year · {lo}–{hi} · "
