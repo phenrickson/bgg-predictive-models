@@ -17,7 +17,11 @@ from typing import List, Optional
 
 import polars as pl
 
-from src.collection.candidate_comparison import compare_runs, load_candidate_runs
+from src.collection.candidate_comparison import (
+    compare_runs,
+    load_candidate_runs,
+    summarize_runs,
+)
 from src.collection.collection_artifact_storage import CollectionArtifactStorage
 from src.utils.logging import setup_logging
 
@@ -52,6 +56,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional output file (.csv or .parquet); default: stdout",
     )
     p.add_argument(
+        "--format",
+        default="wide",
+        choices=["wide", "long"],
+        help="Wide: one row per (candidate, split). Long: one row per metric. "
+        "Default: wide for stdout; --out always writes long form.",
+    )
+    p.add_argument(
         "--local-root",
         default="models/collections",
         help="Storage root (default: models/collections)",
@@ -78,28 +89,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         candidate_names=candidate_names,
         versions=args.versions,
     )
-    df = compare_runs(runs)
+    long_df = compare_runs(runs)
 
     if args.out:
         out_path = Path(args.out)
         suffix = out_path.suffix.lower()
         if suffix == ".csv":
-            df.write_csv(out_path)
+            long_df.write_csv(out_path)
         elif suffix == ".parquet":
-            df.write_parquet(out_path)
+            long_df.write_parquet(out_path)
         else:
             print(
                 f"--out must end in .csv or .parquet (got {out_path.name!r})",
                 file=sys.stderr,
             )
             return 1
-        print(f"wrote {out_path} ({df.height} rows)", file=sys.stderr)
+        print(f"wrote {out_path} ({long_df.height} rows)", file=sys.stderr)
     else:
+        df = long_df if args.format == "long" else summarize_runs(runs)
+        df = df.with_columns(pl.col(pl.Float64).round(4))
+        if "split" in df.columns and "candidate" in df.columns:
+            df = df.sort(["split", "candidate"], descending=[True, False])
         with pl.Config(tbl_rows=-1, tbl_cols=-1):
             print(df)
 
     print(
-        f"compared {len(runs)} candidates, {df.height} rows", file=sys.stderr
+        f"compared {len(runs)} candidates, {long_df.height} rows",
+        file=sys.stderr,
     )
     return 0
 

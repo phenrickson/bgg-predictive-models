@@ -74,6 +74,9 @@ def load_candidate_runs(
     )
 
 
+EXCLUDED_METRICS: frozenset[str] = frozenset({"accuracy"})
+
+
 def compare_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
     """Build a tall metrics frame from a list of run registrations.
 
@@ -116,6 +119,8 @@ def compare_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
             metrics = r.get(metric_dict_key) or {}
             for metric_name, value in metrics.items():
                 if not isinstance(value, (int, float)):
+                    continue
+                if metric_name in EXCLUDED_METRICS:
                     continue
                 rows.append(
                     {

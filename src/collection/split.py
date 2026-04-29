@@ -87,7 +87,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     universe_df = BGGDataLoader(bq_config).load_features(
-        use_predicted_complexity=False,
+        use_predicted_complexity=True,
         use_embeddings=False,
     )
 

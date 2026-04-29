@@ -309,7 +309,10 @@ streamlit-stop:  ## Stop Streamlit container
 	fi
 
 # Collection models
-.PHONY: train-collection refresh-collection collection-status
+.PHONY: train-collection refresh-collection collection-status collections-dashboard
+
+collections-dashboard:  ## Launch the Collections Streamlit page
+	uv run streamlit run "src/streamlit/pages/7 Collections.py"
 
 train-collection:  ## Train all (or --outcome) collection models for USERNAME
 	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make train-collection USERNAME=phenrickson"; exit 1; fi

@@ -1,13 +1,13 @@
 """Local-filesystem storage layer for user collection artifacts.
 
-Writes everything under ``{local_root}/{environment}/{username}/``. This mirrors
+Writes everything under ``{local_root}/{username}/``. This mirrors
 the pattern used by :class:`~src.models.experiments.ExperimentTracker` for
 universe-level models. GCS round-trips are handled separately by a
 ``sync_collections`` utility — not this module.
 
 Path layout per user::
 
-    {local_root}/{env}/{username}/
+    {local_root}/{username}/
         metadata.json                           # global user metadata, outcome-agnostic
         collection/latest.parquet               # raw snapshot, outcome-agnostic
         {outcome}/v{N}/                         # production-winner path (single best model)
@@ -25,8 +25,9 @@ Path layout per user::
             registration.json                   # candidate spec + metrics + splits_version
             tuning_results.parquet              # full hyperparameter search trace
             train_used.parquet                  # actual training frame after downsampling/slicing
-            predictions/...
-            analysis/...
+            feature_importance.parquet          # feature, value, abs_value
+            predictions/val.parquet             # val frame with proba/pred columns
+            predictions/test.parquet            # test frame with proba/pred columns
 """
 
 import json
@@ -47,10 +48,10 @@ class CollectionArtifactStorage:
     """Handles local-filesystem storage for user collection artifacts.
 
     Stores model pipelines, predictions, and analysis artifacts on the local
-    filesystem, organized by environment, username, and outcome. Each
-    ``(user, outcome)`` pair gets its own versioned subdirectory::
+    filesystem, organized by username and outcome. Each ``(user, outcome)``
+    pair gets its own versioned subdirectory::
 
-        {local_root}/{environment}/{username}/
+        {local_root}/{username}/
             ├── metadata.json
             ├── collection/latest.parquet
             ├── {outcome}/v{N}/
@@ -87,7 +88,7 @@ class CollectionArtifactStorage:
         self.environment = environment
 
         self.local_root = Path(local_root)
-        self.base_dir: Path = self.local_root / self.environment / username
+        self.base_dir: Path = self.local_root / username
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initialized artifact storage for user '{username}'")
@@ -747,6 +748,9 @@ class CollectionArtifactStorage:
         tuning_results: Optional[pl.DataFrame] = None,
         train_used: Optional[pl.DataFrame] = None,
         threshold: Optional[float] = None,
+        feature_importance: Optional[pl.DataFrame] = None,
+        val_predictions: Optional[pl.DataFrame] = None,
+        test_predictions: Optional[pl.DataFrame] = None,
         version: Optional[int] = None,
     ) -> str:
         """Persist all artifacts for one candidate run.
@@ -796,6 +800,21 @@ class CollectionArtifactStorage:
 
         if train_used is not None:
             self._upload_parquet(version_rel / "train_used.parquet", train_used)
+
+        if feature_importance is not None:
+            self._upload_parquet(
+                version_rel / "feature_importance.parquet", feature_importance
+            )
+
+        if val_predictions is not None:
+            self._upload_parquet(
+                version_rel / "predictions" / "val.parquet", val_predictions
+            )
+
+        if test_predictions is not None:
+            self._upload_parquet(
+                version_rel / "predictions" / "test.parquet", test_predictions
+            )
 
         version_dir = self.base_dir / version_rel
         logger.info(

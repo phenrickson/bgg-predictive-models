@@ -217,6 +217,9 @@ class CandidateRunResult:
     train_n: int
     val_n: int
     test_n: int
+    val_predictions: pl.DataFrame
+    test_predictions: pl.DataFrame
+    feature_importance: pl.DataFrame
     splits_version: Optional[int] = None
     tuning_results: Optional[pl.DataFrame] = None
 
@@ -284,6 +287,10 @@ def train_candidate(
     val_metrics = model.evaluate(val_df)
     test_metrics = model.evaluate(test_df)
 
+    val_predictions = model.predict_with_labels(val_df)
+    test_predictions = model.predict_with_labels(test_df)
+    feature_importance = pl.from_pandas(model.feature_importance())
+
     tuning_results_pl: Optional[pl.DataFrame] = None
     if tuning_results is not None and len(tuning_results) > 0:
         tuning_results_pl = _coerce_tuning_results(tuning_results)
@@ -299,6 +306,9 @@ def train_candidate(
         train_n=train_used.height,
         val_n=val_df.height,
         test_n=test_df.height,
+        val_predictions=val_predictions,
+        test_predictions=test_predictions,
+        feature_importance=feature_importance,
         splits_version=splits_version,
         tuning_results=tuning_results_pl,
     )
@@ -361,6 +371,9 @@ def save_candidate_run(
         tuning_results=result.tuning_results,
         train_used=result.train_used,
         threshold=result.model.threshold,
+        feature_importance=result.feature_importance,
+        val_predictions=result.val_predictions,
+        test_predictions=result.test_predictions,
     )
 
 

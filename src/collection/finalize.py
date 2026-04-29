@@ -149,7 +149,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     model.fitted_pipeline = pipeline
     model.threshold = threshold
-    model.finalize(union, finalize_through=finalize_through)
+    model.finalize(
+        union,
+        finalize_through=finalize_through,
+        downsample_ratio=candidate.downsample_negatives_ratio,
+        protect_min_ratings=(
+            candidate.downsample_protect_min_ratings
+            if candidate.downsample_protect_min_ratings is not None
+            else 25
+        ),
+    )
 
     finalized_path = storage.save_finalized_pipeline(
         outcome=args.outcome,

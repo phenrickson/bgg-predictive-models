@@ -272,8 +272,10 @@ class CollectionModel:
         df: pl.DataFrame,
         finalize_through: int,
         time_column: str = "year_published",
+        downsample_ratio: Optional[int] = None,
+        protect_min_ratings: int = 25,
     ) -> None:
-        """Refit the tuned model on every row through ``finalize_through``.
+        """Refit the tuned model on rows through ``finalize_through``.
 
         Workflow: tune on train, validate on val, evaluate on test, then call
         ``finalize`` with the union of train/val/test. The refit uses the same
@@ -288,6 +290,14 @@ class CollectionModel:
             finalize_through: Last year (inclusive) to include.
             time_column: Year column to filter on. Defaults to
                 ``year_published``.
+            downsample_ratio: If set and the outcome is classification, apply
+                the same negative-downsampling used during training so the
+                refit class balance matches what hyperparameters were tuned
+                for. Pass the candidate's
+                ``downsample_negatives_ratio`` here.
+            protect_min_ratings: Threshold for the protected pool when
+                downsampling — games with at least this many ratings are
+                kept regardless. Mirrors the train-time default.
         """
         if self.fitted_pipeline is None:
             raise RuntimeError(
@@ -306,6 +316,19 @@ class CollectionModel:
                 f"No rows with {time_column} <= {finalize_through} in df "
                 f"(df has {df.height} rows)"
             )
+
+        if downsample_ratio is not None and self.outcome.task == "classification":
+            from src.collection.collection_split import downsample_negatives
+
+            before = keep.height
+            keep = downsample_negatives(
+                keep, ratio=downsample_ratio, protect_min_ratings=protect_min_ratings
+            )
+            logger.info(
+                f"Finalize downsampled negatives: {before} -> {keep.height} rows "
+                f"(ratio={downsample_ratio}, protect_min_ratings={protect_min_ratings})"
+            )
+
         logger.info(
             f"Finalizing through {finalize_through}: refitting on "
             f"{keep.height}/{df.height} rows"
