@@ -349,6 +349,67 @@ with tab_overview:
             else:
                 st.info(f"No values for metric={metric_choice}, split={split_choice}.")
 
+        # Separation plots (one per candidate, stacked vertically).
+        st.subheader("Separation plots")
+        sep_split_options = ["val", "oof", "test"]
+        sep_split = st.radio(
+            "Split", sep_split_options, index=1, horizontal=True, key="sep_split"
+        )
+
+        for r in runs:
+            cand = r.get("candidate")
+            if not cand:
+                continue
+            preds = load_predictions(
+                storage, outcome, cand, split=sep_split, version=r.get("version")
+            )
+            if preds is None or preds.height == 0:
+                st.caption(f"`{cand}`: no `{sep_split}` predictions saved.")
+                continue
+            if "proba" not in preds.columns or "label" not in preds.columns:
+                st.caption(f"`{cand}`: predictions missing proba/label.")
+                continue
+
+            sorted_preds = preds.sort("proba", descending=True).with_row_index(
+                "rank", offset=1
+            )
+            sep_pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+            true_ranks = sep_pdf.loc[sep_pdf["label"].astype(bool), "rank"].tolist()
+
+            fig = px.area(
+                sep_pdf,
+                x="rank",
+                y="proba",
+                title=cand,
+            )
+            fig.update_traces(
+                line={"color": "#444444", "width": 1},
+                fillcolor="rgba(80,80,80,0.25)",
+                hovertemplate="rank=%{x}<br>proba=%{y:.4f}<extra></extra>",
+            )
+            # Vertical blue strokes for every true label.
+            shapes = [
+                {
+                    "type": "line",
+                    "x0": x,
+                    "x1": x,
+                    "y0": 0,
+                    "y1": 1,
+                    "yref": "y domain",
+                    "line": {"color": "#4fc3f7", "width": 1},
+                    "opacity": 0.6,
+                }
+                for x in true_ranks
+            ]
+            fig.update_layout(
+                shapes=shapes,
+                height=240,
+                margin={"t": 40, "b": 30, "l": 50, "r": 20},
+                xaxis_title="rank (proba descending)",
+                yaxis_title="proba",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
         # Splits + run metadata
         with st.expander("Run metadata"):
             meta_rows = []
