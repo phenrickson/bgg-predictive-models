@@ -10,6 +10,13 @@ local_root := "models/collections"
 default:
     @just --list
 
+# Fetch a user's collection from BGG and upsert into BigQuery.
+# Run this before `sweep` for a user whose collection has not been
+# loaded yet.
+load:
+    uv run python -m src.collection.load \
+        --username {{username}} --environment {{environment}}
+
 # Persist canonical train/val/test splits for an outcome.
 split outcome="own":
     uv run python -m src.collection.split \

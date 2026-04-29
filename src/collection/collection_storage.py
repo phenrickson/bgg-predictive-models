@@ -93,7 +93,11 @@ class CollectionStorage:
             df = df.with_columns(pl.lit(None).alias(col))
 
         df = df.select(TABLE_COLUMNS)
-        pdf = df.to_pandas()
+        # use_pyarrow_extension_array preserves nullable Int64 -> pandas
+        # int64[pyarrow]. Without it, pandas demotes int columns containing
+        # nulls to float64, which emits e.g. wishlist_priority=4.0 and is
+        # rejected by BigQuery's INTEGER column.
+        pdf = df.to_pandas(use_pyarrow_extension_array=True)
 
         if "last_modified" in pdf.columns:
             pdf["last_modified"] = pd.to_datetime(

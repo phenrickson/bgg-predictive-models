@@ -92,6 +92,21 @@ class PipelineConfig:
     for uniform sampling over all negatives."""
 
 
+def fetch_and_persist(username: str, environment: str) -> int:
+    """Fetch a user's collection from the BGG API and upsert into BigQuery.
+
+    Returns the number of rows persisted.
+    """
+    loader = BGGCollectionLoader(username)
+    raw = loader.get_collection()
+    if raw is None:
+        raise ValueError(f"Could not fetch collection for user '{username}'")
+    bq_storage = CollectionStorage(environment=environment)
+    bq_storage.save_collection(username, raw)
+    logger.info(f"Persisted {raw.height} raw collection rows for '{username}'")
+    return raw.height
+
+
 class CollectionPipeline:
     """End-to-end pipeline for user collection modeling.
 
@@ -274,15 +289,7 @@ class CollectionPipeline:
 
     def _fetch_and_persist_collection(self) -> None:
         """Fetch raw collection from BGG and persist to BQ."""
-        loader = BGGCollectionLoader(self.username)
-        raw = loader.get_collection()
-        if raw is None:
-            raise ValueError(
-                f"Could not fetch collection for user '{self.username}'"
-            )
-        bq_storage = CollectionStorage(environment=self._environment)
-        bq_storage.save_collection(self.username, raw)
-        logger.info(f"Persisted {raw.height} raw collection rows for '{self.username}'")
+        fetch_and_persist(self.username, self._environment)
 
     def _process_collection(self) -> pl.DataFrame:
         """Load + canonicalize + join collection with game universe."""
