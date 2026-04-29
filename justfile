@@ -67,12 +67,14 @@ finalize outcome="own" candidate="lgbm_default" version="latest" finalize_throug
         $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}") \
         --local-root {{local_root}}
 
-# Copy a candidate run into the production-winner path.
-promote outcome="own" candidate="lgbm_default" version="latest":
-    uv run python -m src.collection.promote \
+# Register a trained collection model to GCS for the standalone scoring
+# service. Prefers the finalized refit if present.
+promote outcome="own" candidate="lgbm_default" version="latest" description="":
+    uv run python -m services.collections.register_model \
         --username {{username}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} --version {{version}} \
-        --local-root {{local_root}}
+        --local-root {{local_root}} \
+        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}/{{outcome}}")"
 
 # End-to-end experiment cycle: split → train all → compare.
 # Always runs `compare` if `split` succeeded, even when some candidates fail.
@@ -80,11 +82,11 @@ promote outcome="own" candidate="lgbm_default" version="latest":
 sweep outcome="own":
     #!/usr/bin/env bash
     set -e
-    just split {{outcome}}
+    just username={{username}} split {{outcome}}
     set +e
-    just train-all {{outcome}}
+    just username={{username}} train-all {{outcome}}
     train_status=$?
-    just compare {{outcome}}
+    just username={{username}} compare {{outcome}}
     exit $train_status
 
 # Sweep across a list of users. Skips users who already have at least
