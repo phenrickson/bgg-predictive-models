@@ -600,12 +600,21 @@ with tab_compare:
                             x=x_col,
                             y=y_col,
                             color=color_col,
-                            color_discrete_map={"True": "#1f4e79", "False": "#999999"},
-                            category_orders={color_col: ["True", "False"]} if color_col else None,
+                            color_discrete_map={"True": "#4fc3f7", "False": "#666666"},
+                            category_orders={color_col: ["False", "True"]} if color_col else None,
                             hover_data=hover or None,
-                            opacity=0.55,
                             title=f"{x_cand} vs {y_cand} (proba)",
                         )
+                        # True trues are rare and important — bigger, opaque, on top.
+                        # False trues are the bulk — small, muted, behind.
+                        for trace in fig.data:
+                            if trace.name == "True":
+                                trace.marker.size = 9
+                                trace.marker.opacity = 1.0
+                                trace.marker.line = dict(width=0)
+                            elif trace.name == "False":
+                                trace.marker.size = 5
+                                trace.marker.opacity = 0.35
                         # 45-degree reference line so agreement is the diagonal.
                         fig.add_shape(
                             type="line", x0=0, y0=0, x1=1, y1=1,
