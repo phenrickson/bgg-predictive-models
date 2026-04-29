@@ -35,7 +35,7 @@ bgg-predictive-models/
 │   ├── game_embeddings/       # Game embedding inference service
 │   └── text_embeddings/       # Text embedding inference service
 ├── src/                       # Primary source code
-│   ├── collection/            # User collection modeling
+│   ├── collection/            # User collection modeling (outcomes, splitter, processor, pipeline)
 │   ├── data/                  # Data loading and BigQuery integration
 │   ├── debug/                 # Debugging utilities
 │   ├── features/              # Feature engineering and preprocessing
@@ -179,6 +179,24 @@ make streamlit
 make experiments              # Experiment comparison dashboard
 make predictions_dashboard    # Geek rating analysis dashboard
 make unsupervised_dashboard   # Unsupervised learning dashboard
+```
+
+#### 9. User Collection Models
+
+Predict which games a specific BGG user is likely to own, rate, or love.
+
+```bash
+# Train a collection model for a BGG user across all configured outcomes
+make train-collection USERNAME=your_bgg_username
+
+# Or restrict to a single outcome (own, ever_owned, rated, rating, love)
+make train-collection USERNAME=your_bgg_username OUTCOME=own
+
+# Refresh predictions for an existing collection model
+make refresh-collection USERNAME=your_bgg_username
+
+# Show stored collection artifacts and versions
+make collection-status USERNAME=your_bgg_username
 ```
 
 ## Model Architecture
@@ -466,6 +484,7 @@ The Streamlit app (`src/streamlit/Home.py`) provides multiple pages:
 4. **Game Embeddings**: Explore dimensionality reduction (PCA/UMAP/SVD)
 5. **Text Embeddings**: Analyze word embeddings from game descriptions
 6. **Rankings**: View coefficient rankings and feature importance
+7. **Collections**: Predict which games a specific BGG user is likely to own / love / rate
 
 ```bash
 # Launch locally
