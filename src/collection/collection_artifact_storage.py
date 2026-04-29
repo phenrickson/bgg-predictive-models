@@ -751,6 +751,7 @@ class CollectionArtifactStorage:
         feature_importance: Optional[pl.DataFrame] = None,
         val_predictions: Optional[pl.DataFrame] = None,
         test_predictions: Optional[pl.DataFrame] = None,
+        oof_predictions: Optional[pl.DataFrame] = None,
         version: Optional[int] = None,
     ) -> str:
         """Persist all artifacts for one candidate run.
@@ -814,6 +815,11 @@ class CollectionArtifactStorage:
         if test_predictions is not None:
             self._upload_parquet(
                 version_rel / "predictions" / "test.parquet", test_predictions
+            )
+
+        if oof_predictions is not None:
+            self._upload_parquet(
+                version_rel / "predictions" / "oof.parquet", oof_predictions
             )
 
         version_dir = self.base_dir / version_rel

@@ -131,6 +131,21 @@ def compare_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
                     }
                 )
 
+        oof_overall = (r.get("oof_metrics") or {}).get("overall") or {}
+        for metric_name, value in oof_overall.items():
+            if not isinstance(value, (int, float)):
+                continue
+            if metric_name in EXCLUDED_METRICS:
+                continue
+            rows.append(
+                {
+                    **common,
+                    "split": "oof",
+                    "metric": metric_name,
+                    "value": float(value),
+                }
+            )
+
     if len(splits_versions_seen) > 1:
         raise ValueError(
             f"Cannot compare runs across different splits_versions: "
@@ -181,10 +196,13 @@ def summarize_runs(runs: List[Dict[str, Any]]) -> pl.DataFrame:
         return pl.DataFrame(schema={"candidate": pl.Utf8, "split": pl.Utf8})
 
     wide = tall.pivot(values="value", index=["candidate", "split"], on="metric")
-    return wide.sort(
-        ["candidate", "split"],
-        descending=[False, True],  # val before test alphabetically
+    split_order = pl.DataFrame(
+        {"split": ["val", "oof", "test"], "__split_order": [0, 1, 2]}
     )
+    wide = wide.join(split_order, on="split", how="left").with_columns(
+        pl.col("__split_order").fill_null(99)
+    )
+    return wide.sort(["candidate", "__split_order"]).drop("__split_order")
 
 
 def compare_top_games(

@@ -115,6 +115,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     artifact_dir = save_candidate_run(result, storage)
     version = storage.latest_candidate_version(args.outcome, candidate.name)
 
+    oof_overall = (result.oof_metrics or {}).get("overall")
     print(
         json.dumps(
             {
@@ -125,6 +126,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "threshold": result.model.threshold,
                 "val_metrics": result.val_metrics,
                 "test_metrics": result.test_metrics,
+                "oof_metrics_overall": oof_overall,
                 "n_train": result.train_n,
                 "n_val": result.val_n,
                 "n_test": result.test_n,

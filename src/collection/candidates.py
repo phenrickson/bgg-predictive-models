@@ -233,6 +233,8 @@ class CandidateRunResult:
     feature_importance: pl.DataFrame
     splits_version: Optional[int] = None
     tuning_results: Optional[pl.DataFrame] = None
+    oof_predictions: Optional[pl.DataFrame] = None
+    oof_metrics: Optional[Dict[str, Any]] = None
 
 
 def train_candidate(
@@ -295,6 +297,21 @@ def train_candidate(
     if outcome.task == "classification":
         model.find_threshold(val_df)  # stashes onto model.threshold
 
+    oof_predictions: Optional[pl.DataFrame] = None
+    oof_metrics: Optional[Dict[str, Any]] = None
+    if candidate.oof_cv_folds and candidate.oof_cv_folds > 0:
+        oof_predictions, per_fold, overall = model.oof_predict_cv(
+            train_used, n_folds=candidate.oof_cv_folds
+        )
+        oof_metrics = {
+            "n_folds": int(candidate.oof_cv_folds),
+            "seed": 42,
+            "stratified_on": "label" if outcome.task == "classification" else None,
+            "threshold": model.threshold,
+            "overall": overall,
+            "per_fold": per_fold,
+        }
+
     val_metrics = model.evaluate(val_df)
     test_metrics = model.evaluate(test_df)
 
@@ -322,6 +339,8 @@ def train_candidate(
         feature_importance=feature_importance,
         splits_version=splits_version,
         tuning_results=tuning_results_pl,
+        oof_predictions=oof_predictions,
+        oof_metrics=oof_metrics,
     )
 
 
@@ -368,6 +387,7 @@ def save_candidate_run(
         "best_params": result.best_params,
         "metrics": result.test_metrics,
         "val_metrics": result.val_metrics,
+        "oof_metrics": result.oof_metrics,
         "n_train_used": int(result.train_n),
         "n_val": int(result.val_n),
         "n_test": int(result.test_n),
@@ -385,6 +405,7 @@ def save_candidate_run(
         feature_importance=result.feature_importance,
         val_predictions=result.val_predictions,
         test_predictions=result.test_predictions,
+        oof_predictions=result.oof_predictions,
     )
 
 
