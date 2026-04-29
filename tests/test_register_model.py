@@ -4,7 +4,7 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock
 
-from scoring_service.register_model import validate_environment, register_model
+from services.scoring.register_model import validate_environment, register_model
 
 
 class TestEnvironmentValidation:
@@ -47,10 +47,10 @@ def mock_experiment():
 class TestModelRegistration:
     """Test model registration functionality."""
 
-    @patch("scoring_service.register_model.get_project_id")
-    @patch("scoring_service.register_model.load_config")
-    @patch("scoring_service.register_model.ExperimentTracker")
-    @patch("scoring_service.register_model.RegisteredModel")
+    @patch("services.scoring.register_model.get_project_id")
+    @patch("services.scoring.register_model.load_config")
+    @patch("services.scoring.register_model.ExperimentTracker")
+    @patch("services.scoring.register_model.RegisteredModel")
     def test_register_model_with_config_bucket(
         self, mock_registered_model_cls, mock_tracker_cls, mock_load_config, mock_get_project_id
     ):
@@ -93,10 +93,10 @@ class TestModelRegistration:
         assert result["name"] == "test-model"
         assert result["version"] == 1
 
-    @patch("scoring_service.register_model.get_project_id")
-    @patch("scoring_service.register_model.load_config")
-    @patch("scoring_service.register_model.ExperimentTracker")
-    @patch("scoring_service.register_model.RegisteredModel")
+    @patch("services.scoring.register_model.get_project_id")
+    @patch("services.scoring.register_model.load_config")
+    @patch("services.scoring.register_model.ExperimentTracker")
+    @patch("services.scoring.register_model.RegisteredModel")
     def test_register_model_with_provided_bucket(
         self, mock_registered_model_cls, mock_tracker_cls, mock_load_config, mock_get_project_id
     ):
@@ -134,7 +134,7 @@ class TestModelRegistration:
         assert result["name"] == "test-model"
         assert result["version"] == 1
 
-    @patch("scoring_service.register_model.get_project_id")
+    @patch("services.scoring.register_model.get_project_id")
     def test_register_model_missing_project_id(self, mock_get_project_id):
         """Test model registration fails without project ID."""
         mock_get_project_id.return_value = None

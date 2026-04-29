@@ -1,414 +1,300 @@
-"""Train/val/test splitting for user collection ownership prediction."""
+"""Train/val/test splitting for user collection models.
+
+The splitter takes a single labeled feature frame — produced by joining
+the game universe (features) with the user's collection (status) and
+applying an outcome to derive the ``label`` column — and divides it into
+train/val/test.
+
+Dispatches on :class:`OutcomeDefinition.task`:
+
+- classification (`stratified_random` or `time_based`): same frame,
+  same logic for both classes; the label distribution is preserved by
+  splitting positives and negatives independently in `stratified_random`.
+- regression: shuffle-and-slice on whatever rows the caller passed in
+  (typically already filtered to qualifying rows by the outcome's
+  ``require``).
+
+Downsampling the negative class for training-time class balance is NOT
+this module's concern. The split preserves the real class distribution;
+class balancing is a training-time concern (see :func:`downsample_negatives`).
+"""
 
 import logging
-from dataclasses import dataclass
-from typing import Dict, Optional, Set, Tuple, Union
+from dataclasses import dataclass, fields
+from typing import Any, Dict, Literal, Optional, Tuple
 
-import numpy as np
 import polars as pl
+
+from src.collection.outcomes import OutcomeDefinition
+from src.models.splitting import time_based_split
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SplitConfig:
-    """Configuration for collection data splits."""
+class ClassificationSplitConfig:
+    """Config for classification splitting.
 
-    negative_sampling_ratio: float = 5.0
-    """Ratio of negative samples to positive samples (owned games)."""
+    ``split_mode`` selects how the labeled frame is bucketed:
 
-    negative_sampling_strategy: str = "popularity_weighted"
-    """Strategy for sampling negatives: 'random', 'popularity_weighted', or 'uniform'."""
+    - ``stratified_random``: random split per label class (preserves the
+      positive:negative ratio in each of train/val/test).
+    - ``time_based``: year cutoff via :func:`src.models.splitting.time_based_split`.
+    """
 
-    min_ratings_for_negatives: int = 50
-    """Minimum users_rated for a game to be sampled as negative."""
+    split_mode: Literal["stratified_random", "time_based"] = "stratified_random"
 
-    min_year_for_negatives: Optional[int] = None
-    """Minimum year_published for negative samples."""
-
-    max_year_for_negatives: Optional[int] = None
-    """Maximum year_published for negative samples."""
-
+    # stratified_random params
     validation_ratio: float = 0.15
-    """Fraction of owned games to use for validation (when not time-based)."""
-
     test_ratio: float = 0.15
-    """Fraction of owned games to use for test (when not time-based)."""
+
+    # time_based params (train_through required when split_mode == "time_based")
+    train_through: Optional[int] = None
+    """Last year (inclusive) to include in training data. Required for time_based."""
+    prediction_window: int = 2
+    """Validation window in years."""
+    test_window: Optional[int] = None
+    """Test window in years; None means train/val only (2 splits)."""
+    time_column: str = "year_published"
 
     random_seed: int = 42
-    """Random seed for reproducibility."""
 
 
-class CollectionSplit:
-    """Create train/val/test splits for user collection ownership prediction.
+@dataclass
+class RegressionSplitConfig:
+    """Config for regression splitting."""
 
-    This class handles the creation of training data for ownership prediction models.
-    The key challenge is class imbalance: users own ~100-500 games out of ~30,000+
-    available games. This is addressed through negative sampling strategies.
+    validation_ratio: float = 0.15
+    test_ratio: float = 0.15
+    random_seed: int = 42
 
-    Positive class: Games the user owns (owned=True)
-    Negative class: Sampled from games the user doesn't own
 
-    Supports two splitting approaches:
-    1. Time-based: Split owned games by when they were added to collection
-    2. Random: Stratified random split of owned games
+def _coerce(cls, data: Optional[Dict[str, Any]]):
+    """Build ``cls`` from a YAML-loaded dict. Unknown keys are ignored so
+    the config can carry stratified-random fallback ratios on a time-based
+    config (and vice versa) without erroring."""
+    if not data:
+        return cls()
+    known = {f.name for f in fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
 
-    Example usage:
-        >>> splitter = CollectionSplit(collection_df, game_universe_df)
-        >>> train_df, val_df, test_df = splitter.create_ownership_splits()
+
+def load_split_configs(
+    config: Dict[str, Any],
+) -> Tuple[ClassificationSplitConfig, RegressionSplitConfig]:
+    """Read ``collections.split`` from a YAML config and return a
+    ``(ClassificationSplitConfig, RegressionSplitConfig)`` pair.
+
+    Falls back to dataclass defaults when sections are missing.
+    """
+    section = (config.get("collections") or {}).get("split") or {}
+    return (
+        _coerce(ClassificationSplitConfig, section.get("classification")),
+        _coerce(RegressionSplitConfig, section.get("regression")),
+    )
+
+
+SplitTriple = Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]
+
+
+def _shuffle_split(df: pl.DataFrame, val_ratio: float, test_ratio: float, seed: int) -> SplitTriple:
+    """Shuffle ``df`` and slice into (train, val, test)."""
+    if df.height == 0:
+        empty = df.head(0)
+        return empty, empty, empty
+    shuffled = df.sample(fraction=1.0, shuffle=True, seed=seed)
+    n = shuffled.height
+    n_test = int(n * test_ratio)
+    n_val = int(n * val_ratio)
+    test_df = shuffled[:n_test]
+    val_df = shuffled[n_test : n_test + n_val]
+    train_df = shuffled[n_test + n_val :]
+    return train_df, val_df, test_df
+
+
+class _ClassificationSplitter:
+    """Split a labeled classification frame.
+
+    Input: a single ``labeled_df`` with ``game_id``, ``label`` (bool),
+    ``year_published`` (for time_based), and feature columns.
+    """
+
+    def __init__(self, config: ClassificationSplitConfig):
+        self.config = config
+
+    def split(self, labeled_df: pl.DataFrame) -> SplitTriple:
+        if labeled_df.height == 0:
+            raise ValueError("No rows in classification split input")
+
+        if self.config.split_mode == "stratified_random":
+            return self._stratified_random_split(labeled_df)
+        if self.config.split_mode == "time_based":
+            return self._time_based_split(labeled_df)
+        raise ValueError(f"Unknown split_mode: {self.config.split_mode!r}")
+
+    def _stratified_random_split(self, df: pl.DataFrame) -> SplitTriple:
+        """Random split per class so the positive:negative ratio is preserved
+        in each of train/val/test."""
+        cfg = self.config
+        positives = df.filter(pl.col("label").cast(pl.Boolean) == True)
+        negatives = df.filter(pl.col("label").cast(pl.Boolean) == False)
+
+        train_pos, val_pos, test_pos = _shuffle_split(
+            positives, cfg.validation_ratio, cfg.test_ratio, cfg.random_seed
+        )
+        train_neg, val_neg, test_neg = _shuffle_split(
+            negatives, cfg.validation_ratio, cfg.test_ratio, cfg.random_seed
+        )
+        return (
+            pl.concat([train_pos, train_neg], how="vertical_relaxed"),
+            pl.concat([val_pos, val_neg], how="vertical_relaxed"),
+            pl.concat([test_pos, test_neg], how="vertical_relaxed"),
+        )
+
+    def _time_based_split(self, df: pl.DataFrame) -> SplitTriple:
+        cfg = self.config
+        if cfg.train_through is None:
+            raise ValueError("time_based split requires config.train_through")
+        if cfg.time_column not in df.columns:
+            raise ValueError(
+                f"time_based split requires column {cfg.time_column!r}"
+            )
+        result = time_based_split(
+            df,
+            train_through=cfg.train_through,
+            prediction_window=cfg.prediction_window,
+            test_window=cfg.test_window,
+            time_col=cfg.time_column,
+            return_dict=False,
+        )
+        if cfg.test_window is None:
+            train_df, val_df = result
+            test_df = df.head(0)  # empty, same schema
+        else:
+            train_df, val_df, test_df = result
+        return train_df, val_df, test_df
+
+
+class _RegressionSplitter:
+    """Split a labeled regression frame.
+
+    Input: a single ``labeled_df`` with ``label`` (numeric) and feature
+    columns. Caller is responsible for filtering to qualifying rows
+    (e.g. via the outcome's ``require``).
+    """
+
+    def __init__(self, config: RegressionSplitConfig):
+        self.config = config
+
+    def split(self, labeled_df: pl.DataFrame) -> SplitTriple:
+        if labeled_df.height == 0:
+            raise ValueError("No rows in regression split input")
+        return _shuffle_split(
+            labeled_df,
+            self.config.validation_ratio,
+            self.config.test_ratio,
+            self.config.random_seed,
+        )
+
+
+class CollectionSplitter:
+    """Public dispatcher: picks classification or regression strategy from outcome.task.
+
+    Takes a single ``labeled_df`` (universe-joined-to-collection, with the
+    outcome's label applied) and returns a (train, val, test) triple.
     """
 
     def __init__(
         self,
-        collection_df: pl.DataFrame,
-        game_universe_df: pl.DataFrame,
-        config: Optional[SplitConfig] = None,
+        classification_config: Optional[ClassificationSplitConfig] = None,
+        regression_config: Optional[RegressionSplitConfig] = None,
     ):
-        """Initialize splitter with collection and game universe.
-
-        Args:
-            collection_df: User's collection with game features.
-                Required columns: game_id, owned
-                Optional: last_modified (for time-based splits)
-            game_universe_df: All games with features for negative sampling.
-                Required columns: game_id, users_rated, year_published
-            config: Split configuration
-        """
-        self.collection_df = collection_df
-        self.game_universe_df = game_universe_df
-        self.config = config or SplitConfig()
-
-        # Validate required columns
-        self._validate_inputs()
-
-        # Set random seed
-        np.random.seed(self.config.random_seed)
-
-        # Get owned game IDs
-        self.owned_game_ids = set(
-            self.collection_df.filter(pl.col("owned") == True)
-            .select("game_id")
-            .to_series()
-            .to_list()
+        self._classification = _ClassificationSplitter(
+            classification_config or ClassificationSplitConfig()
+        )
+        self._regression = _RegressionSplitter(
+            regression_config or RegressionSplitConfig()
         )
 
-        logger.info(f"Initialized splitter with {len(self.owned_game_ids)} owned games")
-        logger.info(f"Game universe has {len(self.game_universe_df)} games")
+    def split(self, labeled_df: pl.DataFrame, outcome: OutcomeDefinition) -> SplitTriple:
+        if outcome.task == "classification":
+            return self._classification.split(labeled_df)
+        if outcome.task == "regression":
+            return self._regression.split(labeled_df)
+        raise ValueError(f"Unsupported outcome task: {outcome.task!r}")
 
-    def _validate_inputs(self) -> None:
-        """Validate input DataFrames have required columns."""
-        required_collection = {"game_id", "owned"}
-        required_universe = {"game_id", "users_rated", "year_published"}
 
-        missing_collection = required_collection - set(self.collection_df.columns)
-        if missing_collection:
-            raise ValueError(f"Collection missing columns: {missing_collection}")
+def downsample_negatives(
+    df: pl.DataFrame,
+    ratio: float,
+    protect_min_ratings: int = 25,
+    rating_column: str = "users_rated",
+    random_seed: int = 1999,
+) -> pl.DataFrame:
+    """Downsample the negatives (label=False rows) to a target ratio of
+    negatives-per-positive. Positives are preserved.
 
-        missing_universe = required_universe - set(self.game_universe_df.columns)
-        if missing_universe:
-            raise ValueError(f"Game universe missing columns: {missing_universe}")
+    Negatives with ``rating_column >= protect_min_ratings`` are always kept;
+    the low-rating tail (``< protect_min_ratings``) is sampled to fill the
+    remaining budget up to ``n_positives * ratio`` total negatives. If the
+    protected pool alone already exceeds the target, no low-rating negatives
+    are added.
 
-    def create_ownership_splits(
-        self,
-        train_through: Optional[int] = None,
-        time_column: str = "year_published",
-        return_dict: bool = False,
-    ) -> Union[
-        Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame], Dict[str, pl.DataFrame]
-    ]:
-        """Create train/val/test splits for ownership prediction.
+    Set ``protect_min_ratings=0`` to recover the old behavior (uniform
+    sampling over all negatives).
 
-        Args:
-            train_through: For time-based splits, the last year to include in training data
-                (inclusive). If None, uses random stratified splitting.
-            time_column: Column to use for time-based splitting.
-                Default is 'year_published' (splits by game publication year).
-            return_dict: If True, return dict; if False, return tuple.
+    Use this at training time on the training DataFrame only — never on
+    validation or test. The split itself should preserve the real class
+    distribution; downsampling is a training-time class-balance concern.
 
-        Returns:
-            If return_dict is False:
-                (train_df, val_df, test_df)
-            If return_dict is True:
-                {"train": train_df, "validation": val_df, "test": test_df}
-        """
-        # Get owned games with features
-        owned_df = self._get_owned_with_features()
+    Args:
+        df: DataFrame with a boolean ``label`` column.
+        ratio: Target negatives-per-positive (e.g., 5.0 → 5 negatives per positive).
+        protect_min_ratings: Keep every negative with ``rating_column`` at or
+            above this value; only sample the rows below it. Default 25.
+        rating_column: Column used for the protection threshold. Default
+            ``users_rated``.
+        random_seed: Seed for the negative sampling RNG.
 
-        if len(owned_df) == 0:
-            raise ValueError("No owned games found in collection")
-
-        logger.info(f"Creating splits for {len(owned_df)} owned games")
-
-        # Split owned games into train/val/test
-        if train_through is not None and time_column in owned_df.columns:
-            train_owned, val_owned, test_owned = self._time_based_split_owned(
-                owned_df, train_through, time_column
-            )
-        else:
-            train_owned, val_owned, test_owned = self._random_split_owned(owned_df)
-
-        # Sample negatives for each split
-        train_negatives = self._sample_negatives(
-            n_samples=int(len(train_owned) * self.config.negative_sampling_ratio),
-            excluded_ids=self.owned_game_ids,
+    Returns:
+        DataFrame with all positives, all protected high-rating negatives,
+        and a sampled subset of low-rating negatives.
+    """
+    if "label" not in df.columns:
+        raise ValueError("downsample_negatives requires a 'label' column")
+    if ratio <= 0:
+        raise ValueError(f"ratio must be > 0, got {ratio!r}")
+    if protect_min_ratings < 0:
+        raise ValueError(
+            f"protect_min_ratings must be >= 0, got {protect_min_ratings!r}"
+        )
+    if protect_min_ratings > 0 and rating_column not in df.columns:
+        raise ValueError(
+            f"rating_column {rating_column!r} missing from df; "
+            f"available columns start with: {df.columns[:10]}"
         )
 
-        val_negatives = self._sample_negatives(
-            n_samples=int(len(val_owned) * self.config.negative_sampling_ratio),
-            excluded_ids=self.owned_game_ids | set(train_negatives["game_id"].to_list()),
-        )
+    positives = df.filter(pl.col("label").cast(pl.Boolean) == True)
+    negatives = df.filter(pl.col("label").cast(pl.Boolean) == False)
 
-        test_negatives = self._sample_negatives(
-            n_samples=int(len(test_owned) * self.config.negative_sampling_ratio),
-            excluded_ids=self.owned_game_ids
-            | set(train_negatives["game_id"].to_list())
-            | set(val_negatives["game_id"].to_list()),
-        )
+    target = int(positives.height * ratio)
+    if target >= negatives.height:
+        return df
 
-        # Add ownership target column
-        train_owned = train_owned.with_columns(pl.lit(1).alias("target"))
-        val_owned = val_owned.with_columns(pl.lit(1).alias("target"))
-        test_owned = test_owned.with_columns(pl.lit(1).alias("target"))
+    if protect_min_ratings == 0:
+        sampled = negatives.sample(n=target, shuffle=True, seed=random_seed)
+        return pl.concat([positives, sampled], how="vertical_relaxed")
 
-        train_negatives = train_negatives.with_columns(pl.lit(0).alias("target"))
-        val_negatives = val_negatives.with_columns(pl.lit(0).alias("target"))
-        test_negatives = test_negatives.with_columns(pl.lit(0).alias("target"))
+    protected = negatives.filter(pl.col(rating_column) >= protect_min_ratings)
+    tail = negatives.filter(pl.col(rating_column) < protect_min_ratings)
 
-        # Combine positives and negatives
-        train_df = pl.concat([train_owned, train_negatives])
-        val_df = pl.concat([val_owned, val_negatives])
-        test_df = pl.concat([test_owned, test_negatives])
+    remaining = target - protected.height
+    if remaining <= 0:
+        return pl.concat([positives, protected], how="vertical_relaxed")
+    if remaining >= tail.height:
+        return pl.concat([positives, protected, tail], how="vertical_relaxed")
 
-        # Shuffle
-        train_df = train_df.sample(fraction=1.0, seed=self.config.random_seed)
-        val_df = val_df.sample(fraction=1.0, seed=self.config.random_seed + 1)
-        test_df = test_df.sample(fraction=1.0, seed=self.config.random_seed + 2)
-
-        logger.info(f"Train: {len(train_df)} ({train_owned.height} pos, {train_negatives.height} neg)")
-        logger.info(f"Val: {len(val_df)} ({val_owned.height} pos, {val_negatives.height} neg)")
-        logger.info(f"Test: {len(test_df)} ({test_owned.height} pos, {test_negatives.height} neg)")
-
-        if return_dict:
-            return {"train": train_df, "validation": val_df, "test": test_df}
-        return train_df, val_df, test_df
-
-    def _get_owned_with_features(self) -> pl.DataFrame:
-        """Get owned games with features from game universe.
-
-        Returns features from game_universe_df for owned games.
-        Collection-specific columns (user_rating, etc.) are NOT included
-        since they're not used as model features - only for labeling.
-        """
-        owned_ids = list(self.owned_game_ids)
-
-        # Get features from universe for owned games
-        owned_features = self.game_universe_df.filter(
-            pl.col("game_id").is_in(owned_ids)
-        )
-
-        return owned_features
-
-    def _time_based_split_owned(
-        self,
-        owned_df: pl.DataFrame,
-        train_through: int,
-        time_column: str,
-    ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-        """Split owned games by time (e.g., year published).
-
-        Args:
-            owned_df: Owned games with features
-            train_through: Last year to include in training data (inclusive)
-            time_column: Column with year or datetime for splitting
-
-        Returns:
-            (train_df, val_df, test_df)
-        """
-        col_dtype = owned_df[time_column].dtype
-
-        # Handle different column types
-        if col_dtype == pl.Utf8:
-            # String datetime - parse and extract year
-            owned_df = owned_df.with_columns(
-                pl.col(time_column).str.to_datetime().dt.year().alias("_split_year")
-            )
-        elif col_dtype in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]:
-            # Already a numeric year
-            owned_df = owned_df.with_columns(
-                pl.col(time_column).cast(pl.Int64).alias("_split_year")
-            )
-        elif col_dtype == pl.Datetime or str(col_dtype).startswith("Datetime"):
-            # Datetime - extract year
-            owned_df = owned_df.with_columns(
-                pl.col(time_column).dt.year().alias("_split_year")
-            )
-        else:
-            raise ValueError(f"Unsupported dtype for time column: {col_dtype}")
-
-        # Handle nulls - put them in training
-        owned_df = owned_df.with_columns(
-            pl.col("_split_year").fill_null(train_through)
-        )
-
-        # Calculate validation and test years (train_through is inclusive)
-        val_year = train_through + 1
-        test_start_year = val_year + 1
-
-        train_df = owned_df.filter(pl.col("_split_year") <= train_through)
-        val_df = owned_df.filter(pl.col("_split_year") == val_year)
-        test_df = owned_df.filter(pl.col("_split_year") >= test_start_year)
-
-        # Drop helper column
-        train_df = train_df.drop("_split_year")
-        val_df = val_df.drop("_split_year")
-        test_df = test_df.drop("_split_year")
-
-        # If val or test is empty, fall back to random split
-        if len(val_df) == 0 or len(test_df) == 0:
-            logger.warning(
-                "Time-based split produced empty val/test sets. "
-                "Falling back to random split."
-            )
-            return self._random_split_owned(owned_df.drop("_split_year"))
-
-        logger.info(
-            f"Time-based split: train <= {train_through}, "
-            f"val = {val_year}, test >= {test_start_year}"
-        )
-
-        return train_df, val_df, test_df
-
-    def _random_split_owned(
-        self, owned_df: pl.DataFrame
-    ) -> Tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-        """Randomly split owned games into train/val/test.
-
-        Args:
-            owned_df: Owned games with features
-
-        Returns:
-            (train_df, val_df, test_df)
-        """
-        n = len(owned_df)
-        n_val = int(n * self.config.validation_ratio)
-        n_test = int(n * self.config.test_ratio)
-        n_train = n - n_val - n_test
-
-        # Shuffle and split
-        shuffled = owned_df.sample(fraction=1.0, seed=self.config.random_seed)
-
-        train_df = shuffled.head(n_train)
-        val_df = shuffled.slice(n_train, n_val)
-        test_df = shuffled.tail(n_test)
-
-        logger.info(f"Random split: {n_train} train, {n_val} val, {n_test} test")
-
-        return train_df, val_df, test_df
-
-    def _sample_negatives(
-        self,
-        n_samples: int,
-        excluded_ids: Optional[Set[int]] = None,
-    ) -> pl.DataFrame:
-        """Sample negative examples from non-owned games.
-
-        Args:
-            n_samples: Number of negative samples to draw
-            excluded_ids: Game IDs to exclude from sampling
-
-        Returns:
-            DataFrame with sampled negative games
-        """
-        excluded_ids = excluded_ids or set()
-
-        # Filter universe to eligible games
-        eligible = self.game_universe_df.filter(
-            ~pl.col("game_id").is_in(list(excluded_ids))
-            & (pl.col("users_rated") >= self.config.min_ratings_for_negatives)
-        )
-
-        # Apply year filters if specified
-        if self.config.min_year_for_negatives is not None:
-            eligible = eligible.filter(
-                pl.col("year_published") >= self.config.min_year_for_negatives
-            )
-        if self.config.max_year_for_negatives is not None:
-            eligible = eligible.filter(
-                pl.col("year_published") <= self.config.max_year_for_negatives
-            )
-
-        if len(eligible) == 0:
-            raise ValueError("No eligible games for negative sampling after filtering")
-
-        # Ensure we don't sample more than available
-        n_samples = min(n_samples, len(eligible))
-
-        # Apply sampling strategy
-        if self.config.negative_sampling_strategy == "random":
-            sampled = eligible.sample(n=n_samples, seed=self.config.random_seed)
-
-        elif self.config.negative_sampling_strategy == "popularity_weighted":
-            # Weight by inverse popularity (log scale to avoid extreme weights)
-            # More obscure games are more likely to be sampled
-            eligible = eligible.with_columns(
-                (1.0 / (pl.col("users_rated").log() + 1)).alias("_weight")
-            )
-            # Normalize weights
-            total_weight = eligible["_weight"].sum()
-            eligible = eligible.with_columns(
-                (pl.col("_weight") / total_weight).alias("_prob")
-            )
-
-            # Sample with weights
-            probs = eligible["_prob"].to_numpy()
-            indices = np.random.choice(
-                len(eligible),
-                size=n_samples,
-                replace=False,
-                p=probs,
-            )
-            sampled = eligible[indices].drop(["_weight", "_prob"])
-
-        elif self.config.negative_sampling_strategy == "uniform":
-            # Uniform sampling - all games equally likely
-            sampled = eligible.sample(n=n_samples, seed=self.config.random_seed)
-
-        else:
-            raise ValueError(
-                f"Unknown sampling strategy: {self.config.negative_sampling_strategy}"
-            )
-
-        logger.debug(f"Sampled {len(sampled)} negative examples")
-        return sampled
-
-    def get_split_stats(self) -> Dict[str, any]:
-        """Get statistics about the collection for splitting.
-
-        Returns:
-            Dictionary with split statistics
-        """
-        owned_df = self._get_owned_with_features()
-
-        stats = {
-            "total_owned": len(self.owned_game_ids),
-            "owned_with_features": len(owned_df),
-            "total_universe": len(self.game_universe_df),
-            "negative_sampling_ratio": self.config.negative_sampling_ratio,
-            "sampling_strategy": self.config.negative_sampling_strategy,
-        }
-
-        # Year distribution of owned games
-        if "year_published" in owned_df.columns:
-            stats["owned_year_range"] = {
-                "min": owned_df["year_published"].min(),
-                "max": owned_df["year_published"].max(),
-                "median": owned_df["year_published"].median(),
-            }
-
-        # Time-based split availability
-        if "last_modified" in owned_df.columns:
-            non_null = owned_df.filter(pl.col("last_modified").is_not_null())
-            stats["has_last_modified"] = len(non_null)
-            stats["last_modified_coverage"] = len(non_null) / len(owned_df)
-
-        return stats
+    sampled_tail = tail.sample(n=remaining, shuffle=True, seed=random_seed)
+    return pl.concat(
+        [positives, protected, sampled_tail], how="vertical_relaxed"
+    )

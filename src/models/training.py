@@ -13,7 +13,7 @@ import pandas as pd
 import polars as pl
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import KFold, ParameterGrid, StratifiedKFold
 from tqdm import tqdm
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
 import lightgbm as lgb
@@ -375,7 +375,7 @@ def tune_model(
     patience: int = 5,
     min_delta: float = 1e-4,
     sample_weights: Optional[np.ndarray] = None,
-) -> Tuple[Pipeline, Dict[str, Any]]:
+) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
     """
     Tune hyperparameters using a separate tuning set.
 
@@ -391,7 +391,10 @@ def tune_model(
         min_delta: Minimum change in score to be considered an improvement
 
     Returns:
-        Tuple of tuned pipeline and best parameters
+        Tuple of (fitted pipeline, best params, results DataFrame). The
+        results frame has one row per evaluated config (early-stopped configs
+        are not included), columns: ``params``, ``score``, ``metric``,
+        sorted best-first in the metric's natural direction.
     """
     from sklearn.base import clone
     import gc
@@ -664,11 +667,288 @@ def tune_model(
     if best_params is None:
         best_params = {}
 
-    # Create new pipeline with fitted preprocessor and best model
-    final_model = current_best_model if current_best_model is not None else base_model
-    tuned_pipeline = Pipeline([("preprocessor", preprocessor), ("model", final_model)])
+    # Refit the Pipeline as a whole on raw training data so the returned
+    # object is a genuinely fitted sklearn Pipeline. During tuning we fit
+    # preprocessor and model separately on already-transformed arrays for
+    # speed; that leaves the Pipeline wrapper itself in an unfit state and
+    # downstream `pipeline.predict(...)` raises NotFittedError. The refit
+    # here is fast relative to the tuning loop and makes the return value
+    # a proper drop-in sklearn Pipeline.
+    final_model_cls = clone(current_best_model) if current_best_model is not None else clone(base_model)
+    tuned_pipeline = Pipeline([
+        ("preprocessor", clone(preprocessor)),
+        ("model", final_model_cls),
+    ])
+    tuned_pipeline.fit(train_X, train_y)
 
-    return tuned_pipeline, best_params
+    # All metrics that come through here are lower-is-better at scoring time,
+    # since the loop minimizes; sort ascending.
+    results_df = (
+        pd.DataFrame(tuning_results)
+        .sort_values("score", ascending=True)
+        .reset_index(drop=True)
+        if tuning_results
+        else pd.DataFrame(columns=["params", "score", "metric"])
+    )
+
+    return tuned_pipeline, best_params, results_df
+
+
+def tune_model_cv(
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: pd.Series,
+    param_grid: Dict[str, Any],
+    metric: str = "rmse",
+    cv_folds: int = 5,
+    task: str = "classification",
+    random_seed: int = 42,
+    sample_weights: Optional[np.ndarray] = None,
+) -> Tuple[Pipeline, Dict[str, Any], pd.DataFrame]:
+    """Tune hyperparameters via k-fold cross-validation on a single dataset.
+
+    Exhaustive grid search: every parameter combination in ``param_grid`` is
+    evaluated by ``cv_folds`` CV scoring on (X, y). The best-scoring config
+    is then refit on the full (X, y) and returned as a fitted Pipeline.
+
+    Use this when you want CV-based selection on the training set instead of
+    holdout-based selection against a separate val set (see :func:`tune_model`
+    for that).
+
+    Args:
+        pipeline: Pipeline with 'preprocessor' and 'model' steps. The
+            preprocessor is refit inside each fold to avoid leakage.
+        X: Features (pandas DataFrame).
+        y: Target (pandas Series).
+        param_grid: Same dict-of-lists shape as :func:`tune_model` —
+            keys prefixed with 'model__'.
+        metric: Same metric vocabulary as :func:`tune_model`. Lower is
+            better for the loss-style metrics (rmse/mse/mae/log_loss);
+            higher is better for the rest. The function negates the
+            higher-is-better ones internally so the returned best config
+            always corresponds to the best score for that metric in its
+            natural direction.
+        cv_folds: Number of CV folds. Stratified for classification, plain
+            KFold for regression.
+        task: 'classification' or 'regression'. Controls fold strategy and
+            which metrics are valid.
+        random_seed: Seed for fold shuffling.
+        sample_weights: Optional per-row weights, applied during fold fits.
+
+    Returns:
+        (fitted_pipeline, best_params, results_df). ``results_df`` has one
+        row per evaluated config with columns ``params``, ``score``,
+        ``score_std``, ``n_folds``, ``metric`` — sorted best-first in the
+        metric's natural direction.
+    """
+    from sklearn.base import clone
+    from sklearn.metrics import (
+        mean_squared_error,
+        mean_absolute_error,
+        r2_score,
+        mean_absolute_percentage_error,
+        log_loss,
+        f1_score,
+        accuracy_score,
+        precision_score,
+        recall_score,
+        roc_auc_score,
+    )
+
+    logger = logging.getLogger(__name__)
+
+    if not isinstance(X, pd.DataFrame):
+        raise ValueError("X must be a pandas DataFrame")
+    if not isinstance(y, (pd.Series, np.ndarray)):
+        raise ValueError("y must be a pandas Series or numpy array")
+    if len(X) != len(y):
+        raise ValueError(
+            f"X and y must have same length, got {len(X)} and {len(y)}"
+        )
+    if len(X) == 0:
+        raise ValueError("X cannot be empty")
+    if cv_folds < 2:
+        raise ValueError(f"cv_folds must be >= 2, got {cv_folds}")
+    if task not in ("classification", "regression"):
+        raise ValueError(f"task must be 'classification' or 'regression', got {task!r}")
+    if pipeline is None or not isinstance(pipeline, Pipeline):
+        raise ValueError("pipeline must be a scikit-learn Pipeline")
+    if (
+        "preprocessor" not in pipeline.named_steps
+        or "model" not in pipeline.named_steps
+    ):
+        raise ValueError("Pipeline must have 'preprocessor' and 'model' steps")
+
+    # Lower-is-better; everything else is negated so we can always minimize.
+    lower_is_better = {"rmse", "mse", "mae", "mape", "log_loss"}
+    scoring_functions = {
+        "rmse": lambda yt, yp: float(np.sqrt(mean_squared_error(yt, yp))),
+        "mse": mean_squared_error,
+        "mae": mean_absolute_error,
+        "mape": mean_absolute_percentage_error,
+        "r2": r2_score,
+        "log_loss": log_loss,
+        "f1": lambda yt, yp: f1_score(yt, yp, zero_division=0),
+        "accuracy": accuracy_score,
+        "precision": lambda yt, yp: precision_score(yt, yp, zero_division=0),
+        "recall": lambda yt, yp: recall_score(yt, yp, zero_division=0),
+        "auc": roc_auc_score,
+    }
+    if metric not in scoring_functions:
+        raise ValueError(
+            f"Unsupported metric: {metric}. Choose from {list(scoring_functions)}"
+        )
+    score_func = scoring_functions[metric]
+    needs_proba = metric in {"log_loss", "auc"}
+
+    if task == "classification":
+        if metric in {"r2", "rmse", "mse", "mae", "mape"}:
+            raise ValueError(
+                f"metric {metric!r} is a regression metric; not valid for task='classification'"
+            )
+        if not np.all(np.isin(np.asarray(y), [0, 1])):
+            raise ValueError(
+                f"Target values must be binary (0 or 1) for classification metric {metric}"
+            )
+        splitter = StratifiedKFold(
+            n_splits=cv_folds, shuffle=True, random_state=random_seed
+        )
+    else:
+        if metric in {"log_loss", "f1", "accuracy", "precision", "recall", "auc"}:
+            raise ValueError(
+                f"metric {metric!r} is a classification metric; not valid for task='regression'"
+            )
+        splitter = KFold(
+            n_splits=cv_folds, shuffle=True, random_state=random_seed
+        )
+
+    param_combinations = list(ParameterGrid(param_grid)) if param_grid else [{}]
+    n_combinations = len(param_combinations)
+    logger.info(
+        f"CV tuning {n_combinations} combinations × {cv_folds} folds = "
+        f"{n_combinations * cv_folds} fits"
+    )
+
+    base_preprocessor = pipeline.named_steps["preprocessor"]
+    base_model = pipeline.named_steps["model"]
+
+    weights_array = np.asarray(sample_weights) if sample_weights is not None else None
+
+    tuning_results = []
+    best_score = np.inf
+    best_params: Optional[Dict[str, Any]] = None
+
+    for i, params in enumerate(tqdm(param_combinations, desc="CV tuning")):
+        logger.info(f"Evaluating combination {i + 1}/{n_combinations}: {params}")
+        fold_scores: list = []
+
+        try:
+            for fold_idx, (train_idx, val_idx) in enumerate(splitter.split(X, y)):
+                X_tr, X_vl = X.iloc[train_idx], X.iloc[val_idx]
+                y_tr, y_vl = (
+                    y.iloc[train_idx] if isinstance(y, pd.Series) else y[train_idx],
+                    y.iloc[val_idx] if isinstance(y, pd.Series) else y[val_idx],
+                )
+
+                preproc = clone(base_preprocessor)
+                X_tr_t = preproc.fit_transform(X_tr)
+                X_vl_t = preproc.transform(X_vl)
+
+                model_candidate = clone(base_model)
+                if params:
+                    model_candidate.set_params(
+                        **{k.replace("model__", ""): v for k, v in params.items()}
+                    )
+
+                if weights_array is not None:
+                    model_candidate.fit(
+                        X_tr_t, y_tr, sample_weight=weights_array[train_idx]
+                    )
+                else:
+                    model_candidate.fit(X_tr_t, y_tr)
+
+                if needs_proba:
+                    if not hasattr(model_candidate, "predict_proba"):
+                        raise AttributeError(
+                            f"Model {type(model_candidate).__name__} does not support "
+                            f"predict_proba (required for metric={metric})"
+                        )
+                    proba = model_candidate.predict_proba(X_vl_t)
+                    y_pred = proba[:, 1] if metric == "auc" else proba
+                else:
+                    y_pred = model_candidate.predict(X_vl_t)
+
+                score = float(score_func(y_vl, y_pred))
+                if not np.isfinite(score):
+                    raise ValueError(f"Invalid fold score: {score}")
+                fold_scores.append(score)
+
+        except Exception as e:
+            logger.warning(f"Failed CV for params {params}: {e}")
+            continue
+        finally:
+            import gc
+            gc.collect()
+
+        mean_score = float(np.mean(fold_scores))
+        std_score = float(np.std(fold_scores))
+        # Normalize to "lower is better" for selection.
+        selection_score = mean_score if metric in lower_is_better else -mean_score
+
+        tuning_results.append({
+            "params": params,
+            "score": mean_score,
+            "score_std": std_score,
+            "metric": metric,
+            "n_folds": len(fold_scores),
+        })
+        logger.info(
+            f"Params {params}: {metric} mean={mean_score:.4f} std={std_score:.4f}"
+        )
+
+        if selection_score < best_score:
+            best_score = selection_score
+            best_params = dict(params)
+
+    if best_params is None:
+        raise RuntimeError("CV hyperparameter tuning failed for all combinations")
+
+    logger.info("CV tuning results:")
+    for r in sorted(
+        tuning_results,
+        key=lambda x: x["score"] if metric in lower_is_better else -x["score"],
+    ):
+        logger.info(
+            f"  Params: {r['params']}, {metric}: {r['score']:.4f} ± {r['score_std']:.4f}"
+        )
+    natural_best = best_score if metric in lower_is_better else -best_score
+    logger.info(
+        f"Best params: {best_params} ({metric} = {natural_best:.4f})"
+    )
+
+    final_model = clone(base_model)
+    final_model.set_params(
+        **{k.replace("model__", ""): v for k, v in best_params.items()}
+    )
+    tuned_pipeline = Pipeline([
+        ("preprocessor", clone(base_preprocessor)),
+        ("model", final_model),
+    ])
+    if weights_array is not None:
+        tuned_pipeline.fit(X, y, model__sample_weight=weights_array)
+    else:
+        tuned_pipeline.fit(X, y)
+
+    if tuning_results:
+        results_df = pd.DataFrame(tuning_results).sort_values(
+            "score", ascending=metric in lower_is_better
+        ).reset_index(drop=True)
+    else:
+        results_df = pd.DataFrame(
+            columns=["params", "score", "score_std", "n_folds", "metric"]
+        )
+
+    return tuned_pipeline, best_params, results_df
 
 
 def calculate_sample_weights(

@@ -22,9 +22,10 @@ RUN pip install uv
 # Copy required files
 COPY pyproject.toml .
 COPY uv.lock .
-COPY embeddings_service/ /app/embeddings_service/
-COPY scoring_service/auth.py /app/scoring_service/auth.py
-COPY scoring_service/__init__.py /app/scoring_service/__init__.py
+COPY services/__init__.py /app/services/__init__.py
+COPY services/game_embeddings/ /app/services/game_embeddings/
+COPY services/scoring/auth.py /app/services/scoring/auth.py
+COPY services/scoring/__init__.py /app/services/scoring/__init__.py
 COPY src/ /app/src/
 
 # Copy config files
@@ -49,4 +50,4 @@ ENV GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json
 EXPOSE 8080
 
 # Command to run the application
-CMD ["uvicorn", "embeddings_service.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "services.game_embeddings.main:app", "--host", "0.0.0.0", "--port", "8080"]

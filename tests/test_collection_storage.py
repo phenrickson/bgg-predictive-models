@@ -1,90 +1,180 @@
-"""Test collection storage functionality."""
+"""Integration tests for CollectionStorage against dev BigQuery.
 
-import sys
-from pathlib import Path
+Requires ADC (gcloud auth application-default login) and ML_PROJECT_ID set.
+Uses `_test_*` username prefixes and cleans them up at teardown.
+"""
 
-sys.path.insert(0, str(Path(__file__).parent))
+from typing import Iterable
 
-from src.collection.collection_loader import BGGCollectionLoader
+import polars as pl
+import pytest
+
 from src.collection.collection_storage import CollectionStorage
 
 
-def test_storage(username: str = "phenrickson"):
-    """Test collection storage end-to-end."""
-
-    print("=" * 80)
-    print(f"TESTING COLLECTION STORAGE FOR USER: {username}")
-    print("=" * 80)
-
-    # Step 1: Load collection
-    print("\n[1/5] Loading collection from BGG...")
-    loader = BGGCollectionLoader(username=username)
-    collection_df = loader.get_collection()
-
-    if collection_df is None:
-        print("✗ Failed to load collection")
-        return False
-
-    print(f"✓ Loaded {len(collection_df)} items")
-
-    # Step 2: Initialize storage
-    print("\n[2/5] Initializing collection storage...")
-    storage = CollectionStorage(environment="dev")
-    print("✓ Storage initialized")
-
-    # Step 3: Save collection
-    print("\n[3/5] Saving collection to BigQuery...")
-    success = storage.save_collection(username, collection_df)
-
-    if not success:
-        print("✗ Failed to save collection")
-        return False
-
-    print("✓ Collection saved successfully")
-
-    # Step 4: Retrieve collection
-    print("\n[4/5] Retrieving collection from BigQuery...")
-    retrieved_df = storage.get_latest_collection(username)
-
-    if retrieved_df is None:
-        print("✗ Failed to retrieve collection")
-        return False
-
-    print(f"✓ Retrieved {len(retrieved_df)} items")
-
-    # Step 5: Get owned game IDs
-    print("\n[5/5] Getting owned game IDs...")
-    game_ids = storage.get_owned_game_ids(username)
-
-    if game_ids is None:
-        print("✗ Failed to get game IDs")
-        return False
-
-    print(f"✓ Found {len(game_ids)} owned games")
-    print(f"  Sample game IDs: {game_ids[:5]}")
-
-    # Show collection history
-    print("\nCollection History:")
-    history = storage.get_collection_history(username)
-    if history is not None:
-        print(history)
-
-    print("\n" + "=" * 80)
-    print("✓ STORAGE TEST COMPLETE - All steps passed!")
-    print("=" * 80)
-
-    return True
+pytestmark = pytest.mark.integration
 
 
-if __name__ == "__main__":
-    import argparse
+TEST_USER_A = "_test_user_a"
+TEST_USER_B = "_test_user_b"
 
-    parser = argparse.ArgumentParser(description="Test collection storage")
-    parser.add_argument(
-        "--username", type=str, default="phenrickson", help="BGG username to test"
-    )
 
-    args = parser.parse_args()
+def _row(game_id: int, *, name: str = "G", owned: bool = True,
+         user_rating: float | None = None,
+         subtype: str = "boardgame") -> dict:
+    """Build a minimal collection row matching what the loader emits."""
+    return {
+        "game_id": game_id,
+        "game_name": name,
+        "subtype": subtype,
+        "collection_id": None,
+        "owned": owned,
+        "previously_owned": False,
+        "for_trade": False,
+        "want": False,
+        "want_to_play": False,
+        "want_to_buy": False,
+        "wishlist": False,
+        "wishlist_priority": None,
+        "preordered": False,
+        "last_modified": None,
+        "user_rating": user_rating,
+        "user_comment": None,
+    }
 
-    success = test_storage(username=args.username)
-    sys.exit(0 if success else 1)
+
+def _df(rows: Iterable[dict]) -> pl.DataFrame:
+    return pl.DataFrame(list(rows))
+
+
+@pytest.fixture
+def storage():
+    return CollectionStorage(environment="dev")
+
+
+@pytest.fixture(autouse=True)
+def cleanup(storage):
+    yield
+    storage.delete_user_rows(TEST_USER_A)
+    storage.delete_user_rows(TEST_USER_B)
+
+
+def test_initial_load_inserts_all_rows(storage):
+    df = _df([_row(1), _row(2), _row(3)])
+    storage.save_collection(TEST_USER_A, df)
+
+    result = storage.get_latest_collection(TEST_USER_A)
+    assert result is not None
+    assert result.height == 3
+    assert set(result["game_id"].to_list()) == {1, 2, 3}
+    # first_seen_at == updated_at on fresh insert
+    assert result.filter(
+        pl.col("first_seen_at") != pl.col("updated_at")
+    ).height == 0
+
+
+def test_idempotent_repull(storage):
+    df = _df([_row(1), _row(2)])
+    storage.save_collection(TEST_USER_A, df)
+    first = storage.get_latest_collection(TEST_USER_A)
+
+    storage.save_collection(TEST_USER_A, df)
+    second = storage.get_latest_collection(TEST_USER_A)
+
+    # Still 2 rows, same game_ids, no soft-deletes.
+    assert second.height == 2
+    assert set(second["game_id"].to_list()) == {1, 2}
+    # first_seen_at unchanged; updated_at advanced.
+    first_by_id = {row["game_id"]: row for row in first.iter_rows(named=True)}
+    second_by_id = {row["game_id"]: row for row in second.iter_rows(named=True)}
+    for gid in (1, 2):
+        assert first_by_id[gid]["first_seen_at"] == second_by_id[gid]["first_seen_at"]
+        assert second_by_id[gid]["updated_at"] >= first_by_id[gid]["updated_at"]
+
+
+def test_modified_row_updates_data(storage):
+    storage.save_collection(TEST_USER_A, _df([_row(1, user_rating=5.0), _row(2)]))
+    storage.save_collection(TEST_USER_A, _df([_row(1, user_rating=9.5), _row(2)]))
+
+    result = storage.get_latest_collection(TEST_USER_A)
+    rating = result.filter(pl.col("game_id") == 1)["user_rating"].item()
+    assert rating == 9.5
+
+
+def test_new_row_inserts(storage):
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(2)]))
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(2), _row(3)]))
+
+    result = storage.get_latest_collection(TEST_USER_A)
+    assert result.height == 3
+    assert set(result["game_id"].to_list()) == {1, 2, 3}
+
+
+def test_removed_row_soft_deletes(storage):
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(2), _row(3)]))
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(3)]))
+
+    # get_latest_collection filters removed_at IS NULL.
+    visible = storage.get_latest_collection(TEST_USER_A)
+    assert set(visible["game_id"].to_list()) == {1, 3}
+
+    # Raw query to verify game_id=2 has removed_at set.
+    raw = storage.get_all_rows_including_removed(TEST_USER_A)
+    row2 = raw.filter(pl.col("game_id") == 2)
+    assert row2.height == 1
+    assert row2["removed_at"].item() is not None
+
+
+def test_readded_row_clears_removed_at(storage):
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(2)]))
+    storage.save_collection(TEST_USER_A, _df([_row(1)]))  # soft-delete 2
+    storage.save_collection(TEST_USER_A, _df([_row(1), _row(2)]))  # re-add
+
+    visible = storage.get_latest_collection(TEST_USER_A)
+    assert set(visible["game_id"].to_list()) == {1, 2}
+
+    # first_seen_at on game_id=2 should be the original insert, not the re-add.
+    raw = storage.get_all_rows_including_removed(TEST_USER_A)
+    row2 = raw.filter(pl.col("game_id") == 2)
+    assert row2["removed_at"].item() is None
+
+
+def test_cross_user_isolation(storage):
+    storage.save_collection(TEST_USER_A, _df([_row(10), _row(11)]))
+    storage.save_collection(TEST_USER_B, _df([_row(20)]))
+
+    # Re-pull B with a different set.
+    storage.save_collection(TEST_USER_B, _df([_row(21)]))
+
+    # User A untouched by anything that happened to user B.
+    a = storage.get_latest_collection(TEST_USER_A)
+    assert set(a["game_id"].to_list()) == {10, 11}
+
+    b = storage.get_latest_collection(TEST_USER_B)
+    assert set(b["game_id"].to_list()) == {21}
+
+
+def test_empty_dataframe_is_rejected(storage):
+    with pytest.raises(ValueError, match=r"empty"):
+        storage.save_collection(TEST_USER_A, _df([]))
+
+
+def test_duplicate_rows_are_rejected(storage):
+    with pytest.raises(ValueError, match=r"duplicate"):
+        storage.save_collection(TEST_USER_A, _df([_row(1), _row(1)]))
+
+
+def test_expansion_rows_are_filtered_out(storage):
+    df = _df([_row(1), _row(2, subtype="boardgameexpansion"), _row(3)])
+    storage.save_collection(TEST_USER_A, df)
+
+    result = storage.get_latest_collection(TEST_USER_A)
+    assert set(result["game_id"].to_list()) == {1, 3}
+
+
+def test_get_owned_game_ids_filters_to_owned(storage):
+    df = _df([_row(1, owned=True), _row(2, owned=False), _row(3, owned=True)])
+    storage.save_collection(TEST_USER_A, df)
+
+    ids = storage.get_owned_game_ids(TEST_USER_A)
+    assert set(ids) == {1, 3}

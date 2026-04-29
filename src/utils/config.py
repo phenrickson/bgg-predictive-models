@@ -1,7 +1,7 @@
 """Configuration management for BGG predictive models."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -58,6 +58,7 @@ class BigQueryConfig:
     credentials_path: Optional[str] = None
     location: str = "US"
     datasets: Optional[Dict[str, str]] = None
+    collections_dataset: str = "collections"
 
     def get_client(self) -> bigquery.Client:
         """Get authenticated BigQuery client using Google Application Default Credentials."""
@@ -260,6 +261,9 @@ class Config:
     embeddings: Optional[EmbeddingConfig] = None
     text_embeddings: Optional[TextEmbeddingConfig] = None
     simulation: Optional[SimulationConfig] = None
+    raw_config: Dict[str, Any] = field(default_factory=dict)
+    """Parsed YAML as a plain dict. Escape hatch for consumers of sections
+    that do not yet have typed dataclass representations (e.g. collections.outcomes)."""
 
     def get_current_environment(self) -> str:
         """Get the current environment name based on ENVIRONMENT variable or default."""
@@ -292,12 +296,16 @@ class Config:
         return self.predictions
 
     def get_bigquery_config(self) -> BigQueryConfig:
-        """Get BigQuery configuration for data warehouse access."""
+        """Get BigQuery configuration. `project_id` is the data warehouse project
+        (for reads of game features); `collections_dataset` resolves inside
+        `ml_project_id`, which the collection storage reads separately.
+        """
         return BigQueryConfig(
             project_id=self.data_warehouse.project_id,
             dataset=self.data_warehouse.features_dataset,
             table=self.data_warehouse.features_table,
             location=self.data_warehouse.location,
+            collections_dataset="collections",
         )
 
 
@@ -504,4 +512,5 @@ def load_config(config_path: Optional[str] = None) -> Config:
         embeddings=embeddings_config,
         text_embeddings=text_embeddings_config,
         simulation=simulation_config,
+        raw_config=config,
     )

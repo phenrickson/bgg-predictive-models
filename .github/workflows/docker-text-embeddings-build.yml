@@ -6,7 +6,7 @@ on:
       - main
       - develop
     paths:
-      - 'text_embeddings_service/**'
+      - 'services/text_embeddings/**'
       - 'docker/text_embeddings.Dockerfile'
       - '.github/workflows/docker-text-embeddings-build.yml'
   workflow_dispatch:

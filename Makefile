@@ -162,7 +162,7 @@ text_embeddings_pmi:
 TEXT_EMBEDDINGS_CANDIDATE ?= text-embeddings
 
 register_text_embeddings:
-	uv run -m text_embeddings_service.register_model \
+	uv run -m services.text_embeddings.register_model \
 	--experiment $(TEXT_EMBEDDINGS_CANDIDATE) \
 	--name text-embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) text embeddings for game descriptions"
@@ -171,14 +171,14 @@ register_text_embeddings:
 ### register models (reads from config.yaml)
 .PHONY: register register-dry-run
 register:
-	uv run python register.py
+	uv run -m src.pipeline.register
 
 register-dry-run:
-	uv run python register.py --dry-run
+	uv run -m src.pipeline.register --dry-run
 
 EMBEDDINGS_CANDIDATE ?= svd-embeddings
 register_embeddings:
-	uv run -m embeddings_service.register_model \
+	uv run -m services.game_embeddings.register_model \
 	--experiment $(EMBEDDINGS_CANDIDATE) \
 	--name embeddings-v$(CURRENT_YEAR) \
 	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
@@ -271,14 +271,14 @@ stop-scoring:
 
 # run scoring service locally
 scoring-service:
-	uv run -m scoring_service.score \
+	uv run -m services.scoring.score \
     --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
     --download
 
 scoring-service-upload:
-	uv run -m scoring_service.score \
+	uv run -m services.scoring.score \
     --service-url http://localhost:8087 \
     --start-year $(SCORE_START_YEAR) \
     --end-year $(SCORE_END_YEAR) \
@@ -307,3 +307,21 @@ streamlit-stop:  ## Stop Streamlit container
 	else \
 		echo "No running Streamlit container found"; \
 	fi
+
+# Collection models
+.PHONY: train-collection refresh-collection collection-status collections-dashboard
+
+collections-dashboard:  ## Launch the Collections Streamlit page
+	uv run streamlit run "src/streamlit/pages/7 Collections.py"
+
+train-collection:  ## Train all (or --outcome) collection models for USERNAME
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make train-collection USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli run --username $(USERNAME) $(if $(OUTCOME),--outcome $(OUTCOME),)
+
+refresh-collection:  ## Refresh predictions for USERNAME (optionally one OUTCOME)
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make refresh-collection USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli predict --username $(USERNAME) $(if $(OUTCOME),--outcome $(OUTCOME),)
+
+collection-status:  ## Show pipeline artifact status for USERNAME
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make collection-status USERNAME=phenrickson"; exit 1; fi
+	uv run python -m src.collection.cli status --username $(USERNAME)

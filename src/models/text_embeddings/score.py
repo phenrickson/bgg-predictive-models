@@ -78,7 +78,7 @@ def main():
     config = load_config()
 
     # Import here to avoid circular imports
-    from text_embeddings_service.registered_model import RegisteredTextEmbeddingModel
+    from services.text_embeddings.registered_model import RegisteredTextEmbeddingModel
 
     # Load registered model from GCS
     logger.info(f"Loading registered model: {args.model}")

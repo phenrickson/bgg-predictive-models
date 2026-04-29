@@ -2,6 +2,96 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-04-29
+
+### Added
+
+- **Collection Modeling**: User-level prediction of game ownership and ratings (`src/collection/`)
+  - New `src/collection/outcomes.py` defines outcomes declaratively in `config.yaml` under `collections.outcomes` (own, ever_owned, rated, rating, love)
+  - `CollectionProcessor` is outcome-agnostic (canonicalize BGG column names + join with universe); labeling is applied downstream via `apply_outcome`
+  - `CollectionSplitter` dispatches on `outcome.task` with two classification modes (`stratified_random`, `time_based` — the latter reuses `src.models.splitting.time_based_split`) and a regression path without negative sampling
+  - `CollectionModel` dispatches on `outcome.task` with separate classification and regression training + evaluation paths
+  - `CollectionArtifactStorage` paths include the outcome segment: `{username}/{outcome}/v{N}/` with per-outcome versioning
+  - `CollectionPipeline.run_full_pipeline` loops over outcomes; `--outcome` CLI flag restricts training/refresh to a subset
+  - New `Config.raw_config` field exposes the parsed YAML dict for sections that do not yet have typed dataclass representations
+  - New Makefile targets: `train-collection`, `refresh-collection`, `collection-status` (all take `USERNAME=` and optional `OUTCOME=`)
+  - New `justfile` recipes: `finalize-all` (runs finalize over every candidate in `config.collections.candidates`, continue-on-error) and `train-compare` (trains all candidates against an existing split for fast comparison iteration)
+  - New Streamlit page (`7 Collections.py`) for exploring per-user collection predictions; per-chart subtitles show user · candidate · outcome
+  - Feature importance plots in `src/collection/viz.py` promote `player_count_*` and `missingindicator_*` features into dedicated Players and Missingness groups (previously fell into Other)
+  - Training side only; serving (`services/collections/`) is a follow-up
+- **VAE Embedding Algorithm**: Added Variational Autoencoder as embedding algorithm option
+- **Validation Loss Tracking**: Autoencoder and VAE now track validation loss during training
+  - `fit()` accepts optional `X_val` parameter for validation data
+  - Early stopping based on validation loss when validation data provided
+  - Training loss plot shows both training and validation curves
+- **PCA Model Registration**: Registered embedding models now save and load PCA 2D projection models
+  - Mirrors existing UMAP model support for coordinate generation
+- **Feature Transformer**: Added `include_count_features` parameter to `BaseBGGTransformer`
+  - Controls whether `mechanics_count` and `categories_count` features are included
+  - `EmbeddingTransformer` defaults to `False` (excludes count features from embeddings)
+- **Terraform Infrastructure**: GCP resources managed as code (`terraform/` directory)
+  - GitHub Actions workflow for Terraform deployment (`.github/workflows/terraform.yml`)
+  - Artifact Registry cleanup policy: keeps 5 most recent images, deletes untagged after 7 days, deletes old tagged after 14 days
+- **Experiment Loader**: Cloud-based experiment tracking utility (`src/utils/experiment_loader.py`)
+- **BigQuery Prediction Uploader**: Data warehouse prediction uploader with BigQuery landing table (`src/data/bigquery_uploader.py`)
+- **Evaluation Script**: Dedicated `evaluate.py` for time-based model evaluation
+
+### Changed
+
+- **Services Directory Consolidation**: Moved the three service directories under a unified `services/` directory
+  - `scoring_service/` → `services/scoring/`
+  - `embeddings_service/` → `services/game_embeddings/` (renamed)
+  - `text_embeddings_service/` → `services/text_embeddings/`
+  - Python imports updated from `scoring_service.*` / `embeddings_service.*` / `text_embeddings_service.*` to the new `services.*` paths
+  - Dockerfiles, GitHub Actions path triggers, Makefile targets, and cloudbuild.yaml updated to match
+  - No infrastructure changes: same Cloud Run service names, Artifact Registry repos, and image tags
+- **Register Script Location**: Moved top-level `register.py` into `src/pipeline/register.py`
+  - Sits alongside other pipeline orchestration modules (`train.py`, `evaluate.py`, `score.py`, `finalize.py`)
+  - Now invoked via `uv run -m src.pipeline.register` (Makefile and training workflow updated)
+- **Scoring Service Model Version Detection**: Added model version checking to change detection logic
+  - Games are rescored when deployed model versions differ from the versions used for their last predictions
+  - Applies to all 4 prediction models (hurdle, complexity, rating, users_rated)
+  - Matches the existing behavior in the embeddings service
+  - Combined with feature hash checking, ensures games are scored with latest models
+- **Pipeline Event Flow Redesign**: Fixed data dependency bug where embeddings used stale complexity predictions
+  - Complexity scoring now sends `complexity_complete` event to trigger Dataform
+  - Scoring service triggered by `dataform_complexity_ready` (after complexity materialized)
+  - Text embeddings now runs before game embeddings (future-proofing for dependency)
+  - Game embeddings sends `embeddings_complete` to trigger final Dataform run
+  - Removed all cron schedules — pipeline is purely event-driven
+  - See bgg-data-warehouse `docs/plans/2026-01-27-pipeline-event-flow-design.md` for full design
+- **Embedding Training Workflow**: Improved autoencoder/VAE training to follow proper ML workflow
+  - First fit uses tune set as validation for early stopping
+  - Final fit on train+tune uses optimal epochs from tuning (no validation)
+  - Tuning history preserved for loss plot visualization
+- **Embedding Service Change Detection**: Now filters by `embedding_model` name
+  - Promoting a new model triggers full regeneration of embeddings
+  - Previously only checked if any embedding existed for a game
+- **CLI Config Precedence**: Training CLI arguments now default to `None` so `config.yaml` values are used
+  - Explicit CLI args still override config values
+- **Embedding Family Patterns**: Removed `^Series:` from default family patterns
+  - Series families are now excluded from embedding features by default
+- **GCP Project Migration**: Migrated from `gcp-demos-411520` to dedicated two-project architecture
+  - `bgg-data-warehouse`: Data storage, BigQuery tables, prediction landing
+  - `bgg-predictive-models`: ML models, experiment tracking, scoring service
+- **Dataset Naming**: Simplified from environment-suffixed names (`bgg_raw_dev`, `bgg_data_prod`) to clean names (`raw`, `core`, `analytics`)
+- **Configuration**: Centralized config in `config.yaml` replacing multi-environment `bigquery.yaml` complexity
+- **Docker Structure**: Moved Dockerfiles to `docker/` directory with clearer naming
+- **Scoring Service**: Now uploads predictions to both GCS and BigQuery landing table
+- **Streamlit Dashboard**: Reorganized pages, added BGG logo, improved experiment visualization
+
+### Fixed
+
+- **Logging Duplication**: Fixed duplicate log output in embedding training by checking for existing handlers
+
+### Removed
+
+- `src/data/create_view.py` — Materialized views now managed by Dataform
+- `src/data/games_features_materialized_view.sql` — Moved to data warehouse project
+- `Dockerfile.streamlit` — Replaced by `docker/streamlit.Dockerfile`
+- `collection_integration.py` and `tests/test_collection_integration.py` (logic merged into `collection_processor.py`)
+- Environment-based configuration complexity
+
 ## [0.4.1] - 2026-03-06
 
 ### Fixed
@@ -44,84 +134,6 @@ All notable changes to this project are documented in this file.
 
 - **finalize.py**: Fixed geek_rating CLI args to route through `src.pipeline.train` with correct argument names
 - **Scoring service port**: `scoring-service` and `scoring-service-upload` targets now use port 8087 to match Docker mapping
-
-## [Unreleased]
-
-### Added
-
-- **Artifact Registry Cleanup Policy**: Terraform-managed cleanup policies to reduce storage costs
-  - Keeps 5 most recent images per package
-  - Deletes untagged images after 7 days
-  - Deletes old tagged images after 14 days
-  - Repository: `us-central1-docker.pkg.dev/bgg-predictive-models/bgg-predictive-models`
-
-### Changed
-
-- **Scoring Service Model Version Detection**: Added model version checking to change detection logic
-  - Games are now rescored when deployed model versions differ from the versions used for their last predictions
-  - Applies to all 4 prediction models (hurdle, complexity, rating, users_rated)
-  - Matches the existing behavior in the embeddings service
-  - Combined with feature hash checking, ensures games are scored with latest models
-
-- **Pipeline event flow redesign**: Fixed data dependency bug where embeddings used stale complexity predictions
-  - Complexity scoring now sends `complexity_complete` event to trigger Dataform
-  - Scoring service triggered by `dataform_complexity_ready` (after complexity materialized)
-  - Text embeddings now runs before game embeddings (future-proofing for dependency)
-  - Game embeddings sends `embeddings_complete` to trigger final Dataform run
-  - Removed all cron schedules - pipeline is purely event-driven
-  - See bgg-data-warehouse `docs/plans/2026-01-27-pipeline-event-flow-design.md` for full design
-
-### Added
-
-- **VAE Embedding Algorithm**: Added Variational Autoencoder as embedding algorithm option
-- **Validation Loss Tracking**: Autoencoder and VAE now track validation loss during training
-  - `fit()` accepts optional `X_val` parameter for validation data
-  - Early stopping based on validation loss when validation data provided
-  - Training loss plot shows both training and validation curves
-- **Feature Transformer**: Added `include_count_features` parameter to `BaseBGGTransformer`
-  - Controls whether `mechanics_count` and `categories_count` features are included
-  - `EmbeddingTransformer` defaults to `False` (excludes count features from embeddings)
-- **PCA Model Registration**: Registered embedding models now save and load PCA 2D projection models
-  - Mirrors existing UMAP model support for coordinate generation
-- Terraform infrastructure management (`terraform/` directory)
-- GitHub Actions workflow for Terraform deployment (`.github/workflows/terraform.yml`)
-- Collection loader system for user collection predictions (`src/collection/`)
-- Experiment loader utility for cloud-based experiment tracking (`src/utils/experiment_loader.py`)
-- Data warehouse prediction uploader with BigQuery landing table (`src/data/bigquery_uploader.py`)
-- Dedicated evaluation script (`evaluate.py`) for time-based model evaluation
-
-### Changed
-
-- **Embedding Training Workflow**: Improved autoencoder/VAE training to follow proper ML workflow
-  - First fit uses tune set as validation for early stopping
-  - Final fit on train+tune uses optimal epochs from tuning (no validation)
-  - Tuning history preserved for loss plot visualization
-- **Embedding Service Change Detection**: Now filters by `embedding_model` name
-  - Promoting a new model triggers full regeneration of embeddings
-  - Previously only checked if any embedding existed for a game
-- **CLI Config Precedence**: Training CLI arguments now default to `None` so `config.yaml` values are used
-  - Explicit CLI args still override config values
-- **Embedding Family Patterns**: Removed `^Series:` from default family patterns
-  - Series families are now excluded from embedding features by default
-- **GCP Project Migration**: Migrated from `gcp-demos-411520` to dedicated two-project architecture
-  - `bgg-data-warehouse`: Data storage, BigQuery tables, prediction landing
-  - `bgg-predictive-models`: ML models, experiment tracking, scoring service
-- **Dataset Naming**: Simplified from environment-suffixed names (`bgg_raw_dev`, `bgg_data_prod`) to clean names (`raw`, `core`, `analytics`)
-- **Configuration**: Centralized config in `config.yaml` replacing multi-environment `bigquery.yaml` complexity
-- **Docker Structure**: Moved Dockerfiles to `docker/` directory with clearer naming
-- **Scoring Service**: Now uploads predictions to both GCS and BigQuery landing table
-- **Streamlit Dashboard**: Reorganized pages, added BGG logo, improved experiment visualization
-
-### Fixed
-
-- **Logging Duplication**: Fixed duplicate log output in embedding training by checking for existing handlers
-
-### Removed
-
-- `src/data/create_view.py` - Materialized views now managed by Dataform
-- `src/data/games_features_materialized_view.sql` - Moved to data warehouse project
-- `Dockerfile.streamlit` - Replaced by `docker/streamlit.Dockerfile`
-- Environment-based configuration complexity
 
 ---
 

@@ -1,0 +1,746 @@
+---
+title: "Collection Modules Walkthrough"
+author: Phil Henrickson
+format:
+  html:
+    code-fold: true
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    echo: true
+execute:
+  enabled: true
+jupyter:
+  kernelspec:
+    name: bgg-predictive-models
+    language: python
+    display_name: Python 3 (bgg-predictive-models .venv)
+---
+
+# About
+
+Step-by-step walkthrough of the refactored `src/collection/` modules after the collection-modules branch. Each section exercises one piece of the pipeline end-to-end against a real user collection, so we can see shapes, distributions, and model behaviour at each stage before wiring the full CLI loop.
+
+Run cells top-to-bottom. Set `USERNAME` below to the BGG user you want to walk through.
+
+```{python}
+#| tags: [setup]
+USERNAME = "GOBBluth89"
+# USERNAME = "phenrickson"
+# USERNAME = "TomBrewstErr"
+print(f"username: {USERNAME}")
+```
+
+```{python}
+#| tags: [setup]
+
+import os
+import sys
+from pathlib import Path
+
+# Ensure the project root is on sys.path AND is the working directory so
+# `src.*` imports work and relative paths in .env (e.g.
+# GOOGLE_APPLICATION_CREDENTIALS=credentials/service-account-key.json)
+# resolve when Quarto runs from the notebooks/ directory.
+PROJECT_ROOT = Path().resolve()
+if (PROJECT_ROOT / "src").is_dir():
+    ROOT = PROJECT_ROOT
+else:
+    ROOT = PROJECT_ROOT.parent
+sys.path.insert(0, str(ROOT))
+os.chdir(ROOT)
+
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+import polars as pl
+import pandas as pd
+import numpy as np
+```
+
+## 1. Load a collection
+
+Fetch the raw collection for `USERNAME` straight from the BGG XML API via `BGGCollectionLoader`. This is the outcome-agnostic raw snapshot.
+
+```{python}
+from src.collection.collection_loader import BGGCollectionLoader
+
+loader = BGGCollectionLoader(USERNAME)
+raw_collection = loader.get_collection()
+print(f"rows: {raw_collection.height}")
+print(f"columns ({len(raw_collection.columns)}): {raw_collection.columns}")
+raw_collection.head(5)
+```
+
+### Quick sanity checks
+
+```{python}
+# Status flag counts
+for col in ["owned", "previously_owned", "want", "wishlist", "preordered", "for_trade"]:
+    if col in raw_collection.columns:
+        n = raw_collection.filter(pl.col(col) == True).height
+        print(f"{col}: {n}")
+
+# Rating coverage
+rated_df = raw_collection.filter(pl.col("user_rating") > 0)
+print(f"\nrated (user_rating > 0): {rated_df.height}")
+if rated_df.height > 0:
+    print(f"mean rating: {rated_df['user_rating'].mean():.2f}")
+else:
+    print("mean rating: (no rated games)")
+```
+
+------------------------------------------------------------------------
+
+## 2. Store a collection
+
+Upsert the raw snapshot into `collections.user_collections`. The table is managed by Terraform (`terraform/bigquery.tf` + `terraform/schemas/user_collections.json`) so the Python code never creates it — if the table is missing, run `terraform apply` from the `terraform/` directory.
+
+Each pull MERGEs against the existing state for this user: new games are inserted, existing games are updated in place, and games that have disappeared from the collection are soft-deleted via `removed_at`. Re-pulling the same data is a no-op (idempotent).
+
+```{python}
+from src.collection.collection_storage import CollectionStorage
+
+bq_storage = CollectionStorage(environment="dev")
+bq_storage.save_collection(USERNAME, raw_collection)
+
+reloaded = bq_storage.get_latest_collection(USERNAME)
+print(f"active rows: {reloaded.height if reloaded is not None else 0}")
+```
+
+### Inspect lifecycle timestamps
+
+```{python}
+if reloaded is not None:
+    foo = reloaded.select(["game_id", "game_name", "first_seen_at", "updated_at"])
+    print(foo)
+```
+
+------------------------------------------------------------------------
+
+## 3. Process + split the collection
+
+Data flow: **collection = labels, universe = features.** We load each separately, join (universe ⟕ collection by `game_id`) so every game gets the user's status if any, apply the outcome's labeling rule, then split.
+
+### Load the user's collection
+
+The processor reads the stored collection and normalizes column names (e.g. `previously_owned` → `prev_owned`). It does **not** join features — that happens after the universe is loaded.
+
+```{python}
+from src.utils.config import load_config
+from src.collection.collection_processor import CollectionProcessor
+from src.collection.outcomes import load_outcomes, apply_outcome
+
+project_config = load_config()
+bq_config = project_config.get_bigquery_config()
+
+processor = CollectionProcessor(config=bq_config, environment="dev")
+processed = processor.process(USERNAME)
+print(f"processed: {processed.height} rows, {len(processed.columns)} columns")
+print(f"has prev_owned: {'prev_owned' in processed.columns}")
+processed.head(3)
+```
+
+Load the five outcomes declared in `config.yaml`:
+
+```{python}
+outcomes = load_outcomes(project_config.raw_config)
+for name, outcome in outcomes.items():
+    print(f"{name}: task={outcome.task}, rule={type(outcome.label_rule).__name__}, require={outcome.require}")
+```
+
+### Load the game universe (features)
+
+```{python}
+from src.data.loader import BGGDataLoader
+
+universe_loader = BGGDataLoader(bq_config)
+universe_df = universe_loader.load_features(
+    use_predicted_complexity=True,
+    use_embeddings=False,
+)
+print(f"universe: {universe_df.height} games, {len(universe_df.columns)} columns")
+```
+
+### Join, label, split
+
+Universe ⟕ collection by `game_id`: every universe game gets the user's status if any. Then apply the `own` outcome to derive `label`. Games the user owns → True; everything else → False (or null for outcomes with a `require` filter).
+
+```{python}
+joined = universe_df.join(processed, on="game_id", how="left")
+labeled_own = apply_outcome(joined, outcomes["own"])
+print(f"labeled rows: {labeled_own.height}")
+print(f"positives (label=True): {labeled_own.filter(pl.col('label') == True).height}")
+print(f"negatives (label=False): {labeled_own.filter(pl.col('label') == False).height}")
+```
+
+The splitter takes that labeled feature frame and splits it.
+
+```{python}
+from src.collection.collection_split import (
+    CollectionSplitter,
+    ClassificationSplitConfig,
+    RegressionSplitConfig,
+)
+
+# Time-based split: train on everything through 2022, validate on
+# 2023-2024, test on 2025. Anything 2026+ is "upcoming" and gets scored
+# separately from score_universe.
+time_splitter = CollectionSplitter(
+    classification_config=ClassificationSplitConfig(
+        split_mode="time_based",
+        train_through=2022,
+        prediction_window=2,  # val = 2023-2024
+        test_window=1,  # test = 2025
+        random_seed=1999,
+    ),
+    regression_config=RegressionSplitConfig(random_seed=42),
+)
+
+
+def describe_splits(train_df, val_df, test_df, *, label_column: str = "label") -> None:
+    print(f"train: {train_df.height}, val: {val_df.height}, test: {test_df.height}")
+    for name, d in [("train", train_df), ("val", val_df), ("test", test_df)]:
+        if d.height == 0:
+            continue
+        parts = [f"  {name}: rows={d.height}"]
+        if "year_published" in d.columns:
+            yr_min = int(d["year_published"].min())
+            yr_max = int(d["year_published"].max())
+            parts.append(f"years={yr_min}-{yr_max}")
+        if label_column in d.columns:
+            pos = d.filter(pl.col(label_column) == True).height
+            parts.append(f"pos={pos} ({pos / d.height:.1%})")
+        print(", ".join(parts))
+
+
+train_df, val_df, test_df = time_splitter.split(labeled_own, outcomes["own"])
+describe_splits(train_df, val_df, test_df)
+```
+
+------------------------------------------------------------------------
+
+```{python}
+universe_df.columns
+```
+
+# Modeling
+
+## Build the sklearn pipeline
+
+Train `own` via `CollectionModel`. The returned pipeline is a `sklearn.pipeline.Pipeline` with a preprocessor step and a model step.
+
+```{python}
+from src.collection.collection_model import (
+    CollectionModel,
+    ClassificationModelConfig,
+)
+from src.collection.collection_split import downsample_negatives
+
+model = CollectionModel(
+    username=USERNAME,
+    outcome=outcomes["own"],
+    classification_config=ClassificationModelConfig(
+        # model_type defaults to "logistic"; flip to "lightgbm" or "catboost" to try others.
+        model_type="logistic",
+        tuning_metric="log_loss",
+        preprocessor_kwargs={
+            "preserve_columns": ["year_published", "predicted_complexity"]
+        },
+        patience=5,
+    ),
+)
+
+# Inspect the unfit pipeline before training.
+unfit_pipeline = model.build_pipeline()
+print(unfit_pipeline)
+```
+
+`ClassificationModelConfig` and `RegressionModelConfig` both take an open `preprocessor_kwargs` dict that gets passed straight through to `create_preprocessing_pipeline`. Use it to override any of the 25+ knobs in that function's defaults (`designer_min_freq`, `max_publisher_features`, `include_description_embeddings`, etc.) without promoting them to first-class config fields. Typos raise `TypeError` at `build_pipeline()` time — there's no silent fallthrough.
+
+```{python}
+# Optional: downsample training-set negatives to 5 per positive for class balance.
+# Only touch the training frame — val and test keep the real class distribution
+# so tuning and evaluation stay honest.
+downsample_ratio = 100
+train_down = downsample_negatives(
+    train_df, protect_min_ratings=25, ratio=downsample_ratio
+)
+
+print(
+    f"train before: {train_df.height} rows "
+    f"({train_df.filter(pl.col('label') == True).height} pos); "
+    f"train after: {train_down.height} rows "
+    f"({train_down.filter(pl.col('label') == True).height} pos)"
+)
+```
+
+```{python}
+print('train', train_df.shape)
+print('train_down', train_down.shape)
+```
+
+Tune hyperparameters using `train_down` for fitting and `val_df` for scoring. `tune` stashes the fitted best pipeline on `model.fitted_pipeline` and returns the chosen params and a results frame with one row per evaluated config (early-stopped configs are not included).
+
+```{python}
+best_params, tuning_results = model.tune(train_down, val_df)
+print("pipeline steps:", [s[0] for s in model.fitted_pipeline.steps])
+print("best params:", best_params)
+tuning_results.head(10)
+```
+
+### Alternative: tune with k-fold cross-validation
+
+`tune` selects hyperparameters by scoring against `val_df`, which reuses val for both selection and final reporting and mildly leaks information.
+
+`tune_cv` instead runs k-fold CV on the training set only — val/test stay completely untouched until evaluation. The CV path exhaustively searches the full grid (no patience early-stopping), so expect it to be slower than `tune` for the same grid.
+
+```{python}
+# model_cv = CollectionModel(
+#     username=USERNAME,
+#     outcome=outcomes["own"],
+#     classification_config=ClassificationModelConfig(
+#         tuning_metric="log_loss",
+#     ),
+# )
+
+# best_params_cv, cv_results = model_cv.tune_cv(train_down, cv_folds=3)
+# print("cv best params:", best_params_cv)
+# cv_results.head(10)
+```
+
+Compare the two on val/test so you can see whether CV-selected hyperparameters generalize better than holdout-selected ones:
+
+```{python}
+# model_cv.find_threshold(val_df)
+# val_metrics_cv = model_cv.evaluate(val_df)
+# test_metrics_cv = model_cv.evaluate(test_df)
+# print("cv val :", val_metrics_cv)
+# print("cv test:", test_metrics_cv)
+```
+
+------------------------------------------------------------------------
+
+## 6. Inspect preprocessing
+
+Look at what the preprocessor produces: what columns come out, which get transformed, and how many features the model actually trains on.
+
+```{python}
+X_transformed_df = model.transform_features(train_down)
+print(f"post-preprocess features: {X_transformed_df.shape[1]}")
+print("first 30:", list(X_transformed_df.columns[:30]))
+X_transformed_df.head()
+```
+
+------------------------------------------------------------------------
+
+## 7. Train + evaluate
+
+Training already happened above; evaluate on validation and test.
+
+Classification models pick a decision threshold on val (optimizing the configured metric, e.g. F2) and then use that same threshold to report test metrics. `find_threshold(val_df)` stashes the optimized cutoff on `model.threshold`; subsequent `evaluate` / `predict_with_labels` / `evaluate_stratified` calls use it automatically. Skip `find_threshold` and the model falls back to 0.5 — which collapses precision/recall/F1 to \~0 on imbalanced problems even when the probability ranking is fine (AUC / PR-AUC stay sensible).
+
+```{python}
+model.find_threshold(val_df)
+print(f"optimized threshold ({model.classification_config.threshold_optimization_metric}): {model.threshold:.4f}")
+```
+
+```{python}
+val_metrics = model.evaluate(val_df)
+test_metrics = model.evaluate(test_df)
+
+pd.DataFrame({"val": val_metrics, "test": test_metrics}).round(4)
+```
+
+### Inspecting predictions
+
+Before slicing metrics, just look at the predictions: append `proba` and `pred` to the validation frame and sort.
+
+```{python}
+val_preds = model.predict_with_labels(val_df)
+val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
+    "proba", descending=True
+).head(20)
+```
+
+Misclassified positives (model said no, ground truth said yes) — usually the most informative slice for diagnosing what the model misses:
+
+```{python}
+val_preds.filter((pl.col("label") == True) & (pl.col("pred") == 0)).select(
+    "game_id", "name", "users_rated", "proba"
+).sort("proba", descending=True).head(20)
+```
+
+### Stratified by `users_rated`
+
+Overall metrics can look rosy when the negative pool is dominated by obscure games the model rarely needs to separate out. Break val and test metrics down by `users_rated` (default buckets: \<25, 25–99, 100+) to see how the model actually behaves on games people have heard of. NaN in `roc_auc` / `pr_auc` / `log_loss` means a bin had only one class.
+
+```{python}
+val_stratified = model.evaluate_stratified(val_df)
+test_stratified = model.evaluate_stratified(test_df)
+
+print("val stratified:")
+print(val_stratified.round(4))
+print("\ntest stratified:")
+print(test_stratified.round(4))
+```
+
+------------------------------------------------------------------------
+
+## 8. Candidate runs and comparison
+
+The single `model.tune(...)` flow above is great when you've decided on one model. For *experimenting* — comparing logistic vs lightgbm, or lightgbm with different feature subsets — there's a separate flow built around three pieces:
+
+-   **`CollectionCandidate`** — a named experiment spec (model type, tuning strategy, optional feature subset, optional fixed params).
+-   **`train_candidate(...)`** / **`train_candidates(...)`** — pure compute. Fit one or many candidates against the splits and return `CandidateRunResult`s in memory. No disk writes.
+-   **`save_candidate_run(...)`** — persist a result under `{outcome}/{candidate}/v{N}/` via `CollectionArtifactStorage`. Decoupled from training so you can decide which results are worth keeping.
+-   **`compare_runs(...)`** / **`summarize_runs(...)`** — pure reads over what's on disk; never train.
+
+Comparison must happen over the **same val/test splits**, so `save_canonical_splits` writes them to `{outcome}/_splits/v{N}/` and each candidate run records the splits version it consumed.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+from src.collection.candidates import (
+    CollectionCandidate,
+    save_candidate_run,
+    train_candidate,
+    train_candidates,
+)
+from src.collection.candidate_comparison import (
+    load_candidate_runs,
+    compare_runs,
+    summarize_runs,
+)
+from src.collection.collection_artifact_storage import CollectionArtifactStorage
+
+# Notebook artifacts are throwaway — point storage at a temp dir.
+notebook_artifact_dir = Path(tempfile.mkdtemp(prefix="bgg_candidate_demo_"))
+storage = CollectionArtifactStorage(
+    username=USERNAME,
+    local_root=notebook_artifact_dir,
+    environment="notebook",
+)
+print("artifacts under:", storage.base_dir)
+```
+
+### Persist the canonical splits
+
+Every candidate evaluates on these. Save once, then run any number of candidates against them.
+
+```{python}
+splits_paths = storage.save_canonical_splits(
+    outcome="own",
+    train_df=train_df,
+    val_df=val_df,
+    test_df=test_df,
+)
+print("splits version:", splits_paths["version"])
+```
+
+### Define a few candidates
+
+Three deliberately different specs so the comparison frame has something to say:
+
+```{python}
+# Shared preprocessor settings — keep year_published (default) and pass
+# predicted_complexity through untouched so the model sees it as a feature.
+COMMON_PREPROCESSOR_KWARGS = {
+    "preserve_columns": ["year_published", "predicted_complexity"],
+}
+
+ROW_NORM_PREPROCESSOR_KWARGS = {
+    **COMMON_PREPROCESSOR_KWARGS,
+    "normalize_row_families": ["mechanics", "categories", "families"],
+}
+
+candidates = [
+    CollectionCandidate(
+        name="logistic_default",
+        classification_config=ClassificationModelConfig(
+            model_type="logistic",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+    CollectionCandidate(
+        name="logistic_row_norm",
+        classification_config=ClassificationModelConfig(
+            model_type="logistic",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=ROW_NORM_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+    CollectionCandidate(
+        name="lgbm_default",
+        classification_config=ClassificationModelConfig(
+            model_type="lightgbm",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=COMMON_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+    CollectionCandidate(
+        name="lgbm_row_norm",
+        classification_config=ClassificationModelConfig(
+            model_type="lightgbm",
+            tuning_metric="log_loss",
+            preprocessor_kwargs=ROW_NORM_PREPROCESSOR_KWARGS,
+        ),
+        tuning="holdout",
+        downsample_negatives_ratio=downsample_ratio,
+    ),
+]
+
+for c in candidates:
+    print(f"  {c.name}: {c.classification_config.model_type}, tuning={c.tuning}")
+```
+
+### Train candidates
+
+Pure compute — fits each candidate against the splits and returns results in memory. No disk writes; nothing under `{outcome}/{candidate}/v{N}/` yet.
+
+```{python}
+results = train_candidates(
+    candidates, outcomes["own"],
+    train_df=train_df, val_df=val_df, test_df=test_df,
+    username=USERNAME,
+)
+for r in results:
+    print(f"{r.candidate.name}: val={r.val_metrics} test={r.test_metrics}")
+```
+
+Each result carries the trained `CollectionModel` (fitted pipeline + optimized threshold baked in), so all the same helpers you used on the standalone `model` work on `r.model`:
+
+```{python}
+r = results[1]
+val_preds = r.model.predict_with_labels(val_df)
+val_preds.select("game_id", "name", "users_rated", "label", "proba", "pred").sort(
+    "proba", descending=True
+).head(10)
+```
+
+### Persist runs
+
+Decide which results to keep. Each `save_candidate_run` writes to `{outcome}/{candidate}/v{N}/` and bumps the candidate version.
+
+```{python}
+for r in results:
+    artifact_dir = save_candidate_run(r, storage)
+    print(f"saved {r.candidate.name} → {artifact_dir}")
+```
+
+### What's on disk
+
+```{python}
+import os
+
+def show_tree(root: Path, prefix: str = "") -> None:
+    for entry in sorted(root.iterdir()):
+        print(f"{prefix}{entry.name}{'/' if entry.is_dir() else ''}")
+        if entry.is_dir():
+            show_tree(entry, prefix + "  ")
+
+show_tree(storage.base_dir / "own")
+```
+
+### Pure-read comparison
+
+`load_candidate_runs` reads only the registration JSONs — no pipelines loaded, no models touched.
+
+```{python}
+runs = load_candidate_runs(storage, outcome="own")
+for r in runs:
+    print(
+        f"{r['candidate']} v{r['version']}: "
+        f"val={r['val_metrics']} test={r['metrics']}"
+    )
+```
+
+`summarize_runs` is the at-a-glance view: one row per `(candidate, split)`, one column per metric, no metadata clutter.
+
+```{python}
+summarize_runs(runs)
+```
+
+`compare_runs` returns the same data in long form — useful when you want to filter to a single metric, join in metadata, or aggregate.
+
+```{python}
+comparison_df = compare_runs(runs)
+comparison_df.select(
+    "candidate", "split", "metric", "value"
+).filter(pl.col("metric")=='pr_auc')
+```
+
+### Stratified comparison across candidates
+
+The pure comparison only sees the overall metrics that landed in `registration.json`. For per-bin behavior (e.g. "which candidate is best on games with \<25 ratings?"), call `evaluate_stratified` on each candidate's trained model directly:
+
+```{python}
+import polars as pl
+
+stratified_rows = []
+for r in results:
+    val_stratified = r.model.evaluate_stratified(val_df)
+    val_stratified["candidate"] = r.candidate.name
+    val_stratified["split"] = "val"
+    stratified_rows.append(val_stratified)
+
+stratified_df = pl.from_pandas(
+    pd.concat(stratified_rows, ignore_index=True)
+)
+stratified_df.select([
+    "candidate", "split", "bin", "n_rows", "n_pos",
+    "precision", "recall", "f1", "roc_auc", "pr_auc"
+]).sort("split", "bin")
+```
+
+------------------------------------------------------------------------
+
+## 9. Extract model quantities
+
+Pull feature importances (for tree models) or coefficients (for logistic) out of the trained pipeline, aligned with the preprocessor's output feature names.
+
+```{python}
+model = results[1].model
+importance = model.feature_importance()
+importance.head(20)
+```
+
+### Top features overall
+
+Diverging-bar plot of the top-N positive and top-N negative features. Default renderer is plotnine (static); pass `interactive=True` for plotly.
+
+```{python}
+from src.collection.viz import (
+    plot_feature_importance,
+    plot_feature_importance_grid,
+)
+
+plot_feature_importance(importance, top_pos=20, top_neg=20)
+```
+
+### Per-group views
+
+Filter to a single feature family (designers, publishers, mechanics, etc.) and strip the prefix from the y-axis labels.
+
+```{python}
+plot_feature_importance(importance, group="Publishers", top_pos=20, top_neg=15)
+```
+
+
+```{python}
+plot_feature_importance(importance, group="Designers", top_pos=20, top_neg=15)
+```
+
+
+```{python}
+plot_feature_importance(importance, group="Artists", top_pos=20, top_neg=15)
+```
+
+
+```{python}
+plot_feature_importance(importance, group="Mechanics", top_pos=20, top_neg=15)
+```
+
+------------------------------------------------------------------------
+
+## 10. Top games per split
+
+Rank games by predicted `own` probability within each split. The `model.top_games()` call handles scoring, optional exclusion of owned games, and sorting — returns a tidy polars DataFrame.
+
+```{python}
+owned_ids = raw_collection.filter(pl.col("owned") == True)["game_id"].to_list()
+
+upcoming = universe_df.filter(pl.col("year_published") >= 2026)
+print(f"score universe: {universe_df.height}, upcoming (2026+): {upcoming.height}")
+```
+
+
+### Top 25 unowned games in the training set
+
+```{python}
+pl.Config.set_tbl_cols(-1)
+pl.Config.set_tbl_rows(50)
+pl.Config.set_fmt_str_lengths(200)
+# show up to 50 rows
+model.top_games(train_df, n=25, exclude_game_ids=owned_ids)
+```
+
+```{python}
+# top games from lightbbm
+# results[1].model.top_games(train_df, n=25, exclude_game_ids=owned_ids)
+```
+
+### Top 25 games in the validation set (2023–2024)
+
+```{python}
+model.top_games(val_df, n=25)
+```
+
+### Top 25 games in the test set (2025)
+
+```{python}
+model.top_games(test_df, n=25)
+```
+
+### Top 25 upcoming games (2026+)
+
+```{python}
+model.top_games(upcoming, n=25)
+```
+
+### Cross-candidate comparison
+
+Two complementary views of model agreement:
+
+-   **`top_games_by_rank`** — each candidate's top-``n`` laid out by rank. Row 1 shows every model's #1 pick side-by-side; row 2 their #2; etc. Best for "what does each model actually pick first?"
+-   **`compare_top_games`** — pick a single ranking (mean score by default, or a specific candidate via `rank_by`) and surface every model's score for those rows. Best for "given this ordering, where do models agree?"
+
+```{python}
+# Option A: explicit reload
+from src.collection.candidate_comparison import compare_top_games, top_games_by_rank
+import polars.selectors as cs
+
+top_games_by_rank(results, train_df, n=25, exclude_game_ids=owned_ids).select(
+    pl.col("rank"), cs.starts_with("name_")
+)
+```
+
+```{python}
+top_games_by_rank(results, val_df, n=25).select(pl.col("rank"), cs.starts_with("name_"))
+
+
+```
+
+```{python}
+top_games_by_rank(results, test_df, n=25).select(pl.col("rank"), cs.starts_with("name_"))
+```
+
+```{python}
+top_games_by_rank(results, upcoming, n=25).select(pl.col("rank"), cs.starts_with("name_")).to_pandas().style.hide()
+```
+
+
+Model importance form lightgbm
+
+```{python}
+lgb_importance = results[2].model.feature_importance()
+plot_feature_importance(lgb_importance, top_pos=30)
+
+```
+
+```{python}
+
+plot_feature_importance(lgb_importance, group="Designers")
+```
+## Next
+
+Once the checklist is green, hook the same steps into `CollectionPipeline.run_full_pipeline` and make sure the CLI round-trip (`make train-collection USERNAME=... OUTCOME=own`) matches what we see here.

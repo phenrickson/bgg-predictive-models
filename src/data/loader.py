@@ -12,6 +12,36 @@ from src.utils.config import BigQueryConfig, DataWarehouseConfig
 logger = logging.getLogger(__name__)
 
 
+def _explode_embeddings(df: pl.DataFrame) -> pl.DataFrame:
+    """Explode a list-typed ``embedding`` column into ``emb_0..emb_{N-1}``.
+
+    If ``embedding`` is absent or entirely null, drop it (if present) and
+    return the frame unchanged otherwise.
+    """
+    if "embedding" not in df.columns:
+        return df
+
+    dim: Optional[int] = None
+    for value in df["embedding"].to_list():
+        if value is not None and len(value) > 0:
+            dim = len(value)
+            break
+
+    if dim is None:
+        return df.drop("embedding")
+
+    embeddings = df["embedding"].to_list()
+    matrix = np.full((len(embeddings), dim), np.nan, dtype=float)
+    for i, vec in enumerate(embeddings):
+        if vec is not None and len(vec) == dim:
+            matrix[i, :] = vec
+
+    emb_cols = {f"emb_{i}": matrix[:, i] for i in range(dim)}
+    emb_df = pl.DataFrame(emb_cols)
+
+    return df.drop("embedding").hstack(emb_df)
+
+
 class BGGDataLoader:
     """Simple loader for BGG data from BigQuery data warehouse."""
 
@@ -96,6 +126,95 @@ class BGGDataLoader:
             return preprocessor.fit_transform(df)
 
         # Otherwise return raw data
+        return df
+
+    def load_features(
+        self,
+        use_predicted_complexity: bool = False,
+        use_embeddings: bool = False,
+        where_clause: str = "",
+        timeout: int = 300,
+    ) -> pl.DataFrame:
+        """Load the game universe feature set, optionally enriched with
+        latest ``predicted_complexity`` and/or description embeddings.
+
+        ``use_embeddings`` joins the latest-per-game embedding row and
+        explodes the ``embedding`` list column into ``emb_0..emb_{N-1}``.
+
+        Args:
+            use_predicted_complexity: LEFT JOIN the latest predicted_complexity
+                row per game from ``predictions.bgg_complexity_predictions``.
+            use_embeddings: LEFT JOIN the latest embedding row per game from
+                ``predictions.bgg_description_embeddings`` and explode it.
+            where_clause: Optional WHERE clause applied to the base features
+                table (no ``f.`` prefix; column names only). ``year_published
+                IS NOT NULL`` is always added.
+            timeout: BigQuery query timeout in seconds.
+        """
+        ctes = [
+            f"""base AS (
+  SELECT *
+  FROM `{self.project_id}.{self.dataset}.{self.table}`
+  WHERE year_published IS NOT NULL{f' AND ({where_clause})' if where_clause else ''}
+)"""
+        ]
+        select_extra_cols: list[str] = []
+        joins: list[str] = []
+
+        if use_predicted_complexity:
+            ctes.append(
+                f"""complexity AS (
+  SELECT game_id, predicted_complexity
+  FROM (
+    SELECT
+      game_id,
+      predicted_complexity,
+      ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) AS rn
+    FROM `{self.project_id}.predictions.bgg_complexity_predictions`
+  )
+  WHERE rn = 1
+)"""
+            )
+            select_extra_cols.append("complexity.predicted_complexity")
+            joins.append("LEFT JOIN complexity USING (game_id)")
+
+        if use_embeddings:
+            ctes.append(
+                f"""embeddings AS (
+  SELECT game_id, embedding
+  FROM (
+    SELECT
+      game_id,
+      embedding,
+      ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY created_ts DESC) AS rn
+    FROM `{self.project_id}.predictions.bgg_description_embeddings`
+  )
+  WHERE rn = 1
+)"""
+            )
+            select_extra_cols.append("embeddings.embedding")
+            joins.append("LEFT JOIN embeddings USING (game_id)")
+
+        select_cols = "base.*"
+        if select_extra_cols:
+            select_cols = select_cols + ", " + ", ".join(select_extra_cols)
+
+        sql_parts = ["WITH " + ",\n".join(ctes)]
+        sql_parts.append(f"SELECT {select_cols}")
+        sql_parts.append("FROM base")
+        sql_parts.extend(joins)
+        sql = "\n".join(sql_parts)
+
+        logger.info("Executing feature universe query")
+        query_job = self.client.query(sql)
+        query_job.result(timeout=timeout)
+        pandas_df = query_job.to_dataframe()
+        df = pl.from_pandas(pandas_df)
+
+        if use_embeddings:
+            df = _explode_embeddings(df)
+
+        logger.info(f"Loaded {len(df)} rows × {len(df.columns)} columns")
         return df
 
     def load_training_data(

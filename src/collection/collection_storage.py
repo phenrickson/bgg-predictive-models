@@ -1,341 +1,273 @@
-"""Storage layer for BGG collection data in BigQuery."""
+"""Storage layer for BGG user collections in BigQuery.
+
+One row per (username, game_id) in `collections.user_collections`. Writes go
+through a single MERGE that inserts new rows, updates changed rows, and
+soft-deletes rows that are no longer present in the source. Schema is managed
+by Terraform — this module does not create tables.
+"""
 
 import logging
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import polars as pl
-import yaml
 from google.cloud import bigquery
-from google.cloud.exceptions import NotFound
 
 from src.utils.config import load_config
 
 logger = logging.getLogger(__name__)
 
 
+TABLE_COLUMNS = [
+    "game_id",
+    "game_name",
+    "subtype",
+    "collection_id",
+    "owned",
+    "previously_owned",
+    "for_trade",
+    "want",
+    "want_to_play",
+    "want_to_buy",
+    "wishlist",
+    "wishlist_priority",
+    "preordered",
+    "user_rating",
+    "user_comment",
+    "last_modified",
+]
+
+
 class CollectionStorage:
-    """Handles storing and retrieving user collections in BigQuery."""
+    """Upsert and read user collections in `collections.user_collections`."""
 
-    def __init__(self, environment: str = "dev", config_path: Optional[str] = None):
-        """Initialize collection storage.
-
-        Args:
-            environment: Environment to use (dev/prod)
-            config_path: Path to BigQuery config file (optional)
-        """
+    def __init__(self, environment: str = "dev"):
         self.environment = environment
-
-        # Load configuration
         config = load_config()
-        self.bq_config = config.get_bigquery_config()
-        self.client = self.bq_config.get_client()
+        bq_config = config.get_bigquery_config()
 
-        # Get environment-specific settings
-        self.project_id = self.bq_config.project_id
-        self.dataset_id = self.bq_config.dataset
-        self.location = self.bq_config.location
+        self.project_id = config.ml_project_id
+        self.dataset_id = bq_config.collections_dataset
+        self.table_id = "user_collections"
+        self.location = bq_config.location
 
-        # Load table configurations
-        self.table_config_path = (
-            config_path
-            or Path(__file__).parent.parent.parent / "config" / "bigquery.yaml"
+        self.client = bigquery.Client(project=self.project_id)
+        self.fq_table = f"{self.project_id}.{self.dataset_id}.{self.table_id}"
+
+        logger.info(
+            f"CollectionStorage initialized: {self.fq_table} (env={environment})"
         )
 
-        with open(self.table_config_path) as f:
-            self.table_config = yaml.safe_load(f)
+    def _prepare_rows(self, username: str, df: pl.DataFrame) -> list[dict]:
+        """Validate input and return a list of JSON-safe dicts for staging.
 
-        logger.info(f"Initialized collection storage for {environment} environment")
-        logger.info(f"Project: {self.project_id}, Dataset: {self.dataset_id}")
-
-    def _get_table_schema(self) -> list[bigquery.SchemaField]:
-        """Get BigQuery schema for collections table.
-
-        Returns:
-            List of BigQuery schema fields
+        - Filters to subtype == 'boardgame'.
+        - Rejects empty input.
+        - Rejects duplicate (username, game_id) after filtering.
+        - Casts `last_modified` from string to ISO-8601 timestamp (or None).
         """
-        if "collections" not in self.table_config["tables"]:
-            raise ValueError("Collections table not found in configuration")
-
-        table_def = self.table_config["tables"]["collections"]
-        if "schema" not in table_def:
-            raise ValueError("No schema defined for collections table")
-
-        schema_fields = []
-        for field_def in table_def["schema"]:
-            field = bigquery.SchemaField(
-                name=field_def["name"],
-                field_type=field_def["type"],
-                mode=field_def["mode"],
-                description=field_def.get("description"),
+        if df.height == 0:
+            raise ValueError(
+                f"Cannot save empty collection for user '{username}'. "
+                "Refusing to soft-delete every row in this user's collection."
             )
-            schema_fields.append(field)
 
-        return schema_fields
+        if "subtype" in df.columns:
+            df = df.filter(pl.col("subtype") == "boardgame")
 
-    def _create_table_if_not_exists(self) -> bigquery.Table:
-        """Create collections table if it doesn't exist.
+        if df.height == 0:
+            raise ValueError(
+                f"Collection for user '{username}' is empty after filtering to "
+                "boardgame subtype. Refusing to soft-delete every row."
+            )
 
-        Returns:
-            BigQuery table object
+        dupes = df.group_by("game_id").len().filter(pl.col("len") > 1)
+        if dupes.height > 0:
+            raise ValueError(
+                f"duplicate game_id rows in collection for '{username}': "
+                f"{dupes['game_id'].to_list()}"
+            )
+
+        missing = [c for c in TABLE_COLUMNS if c not in df.columns]
+        for col in missing:
+            df = df.with_columns(pl.lit(None).alias(col))
+
+        df = df.select(TABLE_COLUMNS)
+        # use_pyarrow_extension_array preserves nullable Int64 -> pandas
+        # int64[pyarrow]. Without it, pandas demotes int columns containing
+        # nulls to float64, which emits e.g. wishlist_priority=4.0 and is
+        # rejected by BigQuery's INTEGER column.
+        pdf = df.to_pandas(use_pyarrow_extension_array=True)
+
+        if "last_modified" in pdf.columns:
+            pdf["last_modified"] = pd.to_datetime(
+                pdf["last_modified"], errors="coerce"
+            )
+            pdf["last_modified"] = pdf["last_modified"].apply(
+                lambda ts: None if pd.isna(ts) else ts.isoformat()
+            )
+
+        # Convert pandas NaN/NaT/numpy types to JSON-safe Python values.
+        pdf = pdf.astype(object).where(pd.notnull(pdf), None)
+        return pdf.to_dict(orient="records")
+
+    def save_collection(self, username: str, collection_df: pl.DataFrame) -> None:
+        """Upsert one user's collection via MERGE.
+
+        Soft-deletes rows present in the table but not in `collection_df`.
+        Raises ValueError on empty input or duplicate (username, game_id).
         """
-        table_id = f"{self.project_id}.{self.dataset_id}.collections"
+        rows = self._prepare_rows(username, collection_df)
 
-        try:
-            table = self.client.get_table(table_id)
-            logger.info(f"Table {table_id} already exists")
-            return table
-        except NotFound:
-            logger.info(f"Creating table {table_id}")
+        # Stage to a temp table — MERGE's USING clause needs a table, not params.
+        # BigQuery table IDs disallow dashes; sanitize only the username portion.
+        safe_user = username.replace("-", "_")
+        staging_table = (
+            f"{self.project_id}.{self.dataset_id}._staging_{safe_user}"
+        )
 
-            # Get table configuration
-            table_def = self.table_config["tables"]["collections"]
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+            source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            schema=[
+                bigquery.SchemaField("game_id", "INTEGER", mode="REQUIRED"),
+                bigquery.SchemaField("game_name", "STRING"),
+                bigquery.SchemaField("subtype", "STRING"),
+                bigquery.SchemaField("collection_id", "INTEGER"),
+                bigquery.SchemaField("owned", "BOOL"),
+                bigquery.SchemaField("previously_owned", "BOOL"),
+                bigquery.SchemaField("for_trade", "BOOL"),
+                bigquery.SchemaField("want", "BOOL"),
+                bigquery.SchemaField("want_to_play", "BOOL"),
+                bigquery.SchemaField("want_to_buy", "BOOL"),
+                bigquery.SchemaField("wishlist", "BOOL"),
+                bigquery.SchemaField("wishlist_priority", "INTEGER"),
+                bigquery.SchemaField("preordered", "BOOL"),
+                bigquery.SchemaField("user_rating", "FLOAT"),
+                bigquery.SchemaField("user_comment", "STRING"),
+                bigquery.SchemaField("last_modified", "TIMESTAMP"),
+            ],
+        )
 
-            # Create table with schema
-            schema = self._get_table_schema()
-            table = bigquery.Table(table_id, schema=schema)
+        logger.info(
+            f"Staging {len(rows)} rows for '{username}' to {staging_table}"
+        )
+        self.client.load_table_from_json(
+            rows, staging_table, job_config=job_config
+        ).result()
 
-            # Add time partitioning
-            if "time_partitioning" in table_def:
-                partition_field = table_def["time_partitioning"]
-                table.time_partitioning = bigquery.TimePartitioning(
-                    type_=bigquery.TimePartitioningType.DAY, field=partition_field
-                )
+        merge_sql = f"""
+        MERGE `{self.fq_table}` T
+        USING (
+          SELECT @username AS username, * FROM `{staging_table}`
+        ) S
+        ON T.username = S.username AND T.game_id = S.game_id
 
-            # Add clustering
-            if "clustering_fields" in table_def:
-                table.clustering_fields = table_def["clustering_fields"]
+        WHEN MATCHED THEN UPDATE SET
+          game_name         = S.game_name,
+          subtype           = S.subtype,
+          collection_id     = S.collection_id,
+          owned             = S.owned,
+          previously_owned  = S.previously_owned,
+          for_trade         = S.for_trade,
+          want              = S.want,
+          want_to_play      = S.want_to_play,
+          want_to_buy       = S.want_to_buy,
+          wishlist          = S.wishlist,
+          wishlist_priority = S.wishlist_priority,
+          preordered        = S.preordered,
+          user_rating       = S.user_rating,
+          user_comment      = S.user_comment,
+          last_modified     = S.last_modified,
+          updated_at        = CURRENT_TIMESTAMP(),
+          removed_at        = NULL
 
-            # Create the table
-            table = self.client.create_table(table)
-            logger.info(f"Created table {table_id}")
+        WHEN NOT MATCHED BY TARGET THEN INSERT (
+          username, game_id, game_name, subtype, collection_id,
+          owned, previously_owned, for_trade, want, want_to_play, want_to_buy,
+          wishlist, wishlist_priority, preordered,
+          user_rating, user_comment, last_modified,
+          first_seen_at, updated_at, removed_at
+        ) VALUES (
+          S.username, S.game_id, S.game_name, S.subtype, S.collection_id,
+          S.owned, S.previously_owned, S.for_trade, S.want, S.want_to_play, S.want_to_buy,
+          S.wishlist, S.wishlist_priority, S.preordered,
+          S.user_rating, S.user_comment, S.last_modified,
+          CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(), NULL
+        )
 
-            return table
-
-    def save_collection(
-        self,
-        username: str,
-        collection_df: pl.DataFrame,
-        collection_version: Optional[str] = None,
-    ) -> bool:
-        """Save collection to BigQuery.
-
-        Args:
-            username: BGG username
-            collection_df: Collection DataFrame
-            collection_version: Optional version identifier (defaults to timestamp)
-
-        Returns:
-            True if successful, False otherwise
+        WHEN NOT MATCHED BY SOURCE
+          AND T.username = @username
+          AND T.removed_at IS NULL
+        THEN UPDATE SET
+          removed_at = CURRENT_TIMESTAMP(),
+          updated_at = CURRENT_TIMESTAMP()
         """
-        try:
-            # Ensure table exists
-            self._create_table_if_not_exists()
 
-            # Add metadata columns
-            loaded_at = datetime.now()
-            if collection_version is None:
-                collection_version = loaded_at.strftime("%Y%m%d_%H%M%S")
+        query_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("username", "STRING", username),
+            ]
+        )
+        logger.info(f"Running MERGE for '{username}'")
+        self.client.query(merge_sql, job_config=query_config).result()
 
-            # Add username, loaded_at, and collection_version to DataFrame
-            df_with_metadata = collection_df.with_columns(
-                [
-                    pl.lit(username).alias("username"),
-                    pl.lit(loaded_at).alias("loaded_at"),
-                    pl.lit(collection_version).alias("collection_version"),
-                ]
-            )
-
-            # Convert to pandas for BigQuery upload
-            pandas_df = df_with_metadata.to_pandas()
-
-            # Convert timestamp strings to datetime if needed
-            if "last_modified" in pandas_df.columns:
-                pandas_df["last_modified"] = pd.to_datetime(
-                    pandas_df["last_modified"], errors="coerce"
-                )
-
-            # Upload to BigQuery
-            table_id = f"{self.project_id}.{self.dataset_id}.collections"
-
-            job_config = bigquery.LoadJobConfig(
-                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                schema=self._get_table_schema(),
-            )
-
-            logger.info(
-                f"Uploading {len(pandas_df)} items for user '{username}' to {table_id}"
-            )
-            job = self.client.load_table_from_dataframe(
-                pandas_df, table_id, job_config=job_config
-            )
-
-            # Wait for the job to complete
-            job.result()
-
-            logger.info(
-                f"Successfully uploaded collection for '{username}' "
-                f"(version: {collection_version})"
-            )
-            return True
-
-        except Exception as e:
-            logger.error(f"Error saving collection for '{username}': {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
+        self.client.delete_table(staging_table, not_found_ok=True)
+        logger.info(f"MERGE complete for '{username}'")
 
     def get_latest_collection(self, username: str) -> Optional[pl.DataFrame]:
-        """Get the most recent collection for a user.
-
-        Args:
-            username: BGG username
-
-        Returns:
-            Collection DataFrame or None if not found
+        """Return currently active rows for `username` (removed_at IS NULL)."""
+        sql = f"""
+        SELECT *
+        FROM `{self.fq_table}`
+        WHERE username = @username
+          AND removed_at IS NULL
         """
-        try:
-            query = f"""
-            SELECT * EXCEPT (loaded_at, collection_version)
-            FROM `{self.project_id}.{self.dataset_id}.collections`
-            WHERE username = @username
-            AND loaded_at = (
-                SELECT MAX(loaded_at)
-                FROM `{self.project_id}.{self.dataset_id}.collections`
-                WHERE username = @username
-            )
-            """
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("username", "STRING", username)
-                ]
-            )
-
-            logger.info(f"Fetching latest collection for user '{username}'")
-            query_job = self.client.query(query, job_config=job_config)
-            pandas_df = query_job.to_dataframe()
-
-            if len(pandas_df) == 0:
-                logger.info(f"No collection found for user '{username}'")
-                return None
-
-            df = pl.from_pandas(pandas_df)
-            logger.info(f"Retrieved {len(df)} items for user '{username}'")
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Error retrieving collection for '{username}': {e}")
+        cfg = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("username", "STRING", username),
+            ]
+        )
+        pdf = self.client.query(sql, job_config=cfg).to_dataframe()
+        if len(pdf) == 0:
             return None
+        return pl.from_pandas(pdf)
 
-    def get_collection_history(self, username: str) -> Optional[pl.DataFrame]:
-        """Get collection history showing all versions.
+    def get_all_rows_including_removed(
+        self, username: str
+    ) -> Optional[pl.DataFrame]:
+        """Return every row for `username`, including soft-deleted ones.
 
-        Args:
-            username: BGG username
-
-        Returns:
-            DataFrame with collection versions and metadata
+        Used by tests and by callers that need to inspect removal history.
         """
-        try:
-            query = f"""
-            SELECT
-                username,
-                collection_version,
-                loaded_at,
-                COUNT(*) as item_count,
-                COUNT(DISTINCT game_id) as unique_games,
-                SUM(CASE WHEN owned THEN 1 ELSE 0 END) as owned_count
-            FROM `{self.project_id}.{self.dataset_id}.collections`
-            WHERE username = @username
-            GROUP BY username, collection_version, loaded_at
-            ORDER BY loaded_at DESC
-            """
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("username", "STRING", username)
-                ]
-            )
-
-            logger.info(f"Fetching collection history for user '{username}'")
-            query_job = self.client.query(query, job_config=job_config)
-            pandas_df = query_job.to_dataframe()
-
-            if len(pandas_df) == 0:
-                logger.info(f"No collection history found for user '{username}'")
-                return None
-
-            df = pl.from_pandas(pandas_df)
-            logger.info(f"Retrieved {len(df)} collection versions for '{username}'")
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Error retrieving collection history for '{username}': {e}")
+        sql = f"""
+        SELECT *
+        FROM `{self.fq_table}`
+        WHERE username = @username
+        """
+        cfg = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("username", "STRING", username),
+            ]
+        )
+        pdf = self.client.query(sql, job_config=cfg).to_dataframe()
+        if len(pdf) == 0:
             return None
-
-    def delete_collection(self, username: str, collection_version: str) -> bool:
-        """Delete a specific collection version.
-
-        Args:
-            username: BGG username
-            collection_version: Collection version to delete
-
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            query = f"""
-            DELETE FROM `{self.project_id}.{self.dataset_id}.collections`
-            WHERE username = @username
-            AND collection_version = @version
-            """
-
-            job_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("username", "STRING", username),
-                    bigquery.ScalarQueryParameter("version", "STRING", collection_version),
-                ]
-            )
-
-            logger.info(
-                f"Deleting collection version '{collection_version}' for user '{username}'"
-            )
-            query_job = self.client.query(query, job_config=job_config)
-            query_job.result()
-
-            logger.info(
-                f"Successfully deleted collection version '{collection_version}' for '{username}'"
-            )
-            return True
-
-        except Exception as e:
-            logger.error(
-                f"Error deleting collection version '{collection_version}' for '{username}': {e}"
-            )
-            return False
+        return pl.from_pandas(pdf)
 
     def get_owned_game_ids(self, username: str) -> Optional[list[int]]:
-        """Get list of game IDs owned by user from latest collection.
-
-        Args:
-            username: BGG username
-
-        Returns:
-            List of game IDs or None if not found
-        """
+        """Return game_ids where owned = TRUE and the row is not soft-deleted."""
         df = self.get_latest_collection(username)
         if df is None:
             return None
+        return df.filter(pl.col("owned") == True)["game_id"].to_list()
 
-        # Filter to owned boardgames only
-        owned_games = df.filter(
-            (pl.col("owned") == True) & (pl.col("subtype") == "boardgame")
+    def delete_user_rows(self, username: str) -> None:
+        """Hard-delete every row for `username`. Used by test teardown."""
+        sql = f"DELETE FROM `{self.fq_table}` WHERE username = @username"
+        cfg = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("username", "STRING", username),
+            ]
         )
-
-        return owned_games.select("game_id").to_series().to_list()
+        self.client.query(sql, job_config=cfg).result()
