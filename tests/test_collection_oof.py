@@ -59,7 +59,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from src.collection.collection_model import CollectionModel, ClassificationModelConfig
+from src.collection.collection_model import (
+    CollectionModel,
+    ClassificationModelConfig,
+    RegressionModelConfig,
+)
 from src.collection.outcomes import DirectColumnRule, OutcomeDefinition
 
 
@@ -211,3 +215,71 @@ def test_oof_predict_cv_too_few_rows():
     too_small = _make_classification_frame(n=5, seed=2)
     with pytest.raises(ValueError, match="too few rows"):
         model.oof_predict_cv(too_small, n_folds=5)
+
+
+# ---------------------------------------------------------------------------
+# Regression OOF tests (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def _regression_outcome() -> OutcomeDefinition:
+    return OutcomeDefinition(
+        name="rating",
+        task="regression",
+        label_rule=DirectColumnRule(column="label"),
+        require=None,
+    )
+
+
+def _make_regression_frame(n: int = 200, seed: int = 0) -> pl.DataFrame:
+    """Tiny synthetic regression frame with two informative features.
+
+    Uses varied year_published to pass variance threshold in preprocessor, and
+    avoids BGG-specific list columns via _MINIMAL_PREPROCESSOR_KWARGS.
+    """
+    rng = np.random.default_rng(seed)
+    f1 = rng.normal(size=n)
+    f2 = rng.normal(size=n)
+    target = 0.7 * f1 - 0.3 * f2 + rng.normal(scale=0.1, size=n)
+    return pl.DataFrame({
+        "game_id": np.arange(n, dtype=np.int64),
+        "year_published": rng.integers(1990, 2024, size=n).astype(np.int64),
+        "users_rated": rng.integers(0, 1000, size=n).astype(np.int64),
+        "f1": f1,
+        "f2": f2,
+        "label": target.astype(np.float64),
+    })
+
+
+def test_oof_predict_cv_regression_shape():
+    train = _make_regression_frame(n=200, seed=0)
+    model = CollectionModel(
+        username="tester",
+        outcome=_regression_outcome(),
+        regression_config=RegressionModelConfig(
+            model_type="lightgbm",
+            preprocessor_kwargs=_MINIMAL_PREPROCESSOR_KWARGS,
+        ),
+    )
+    model.train(train, params={})
+
+    oof_preds, per_fold, overall = model.oof_predict_cv(train, n_folds=4)
+
+    # regression: no proba column, only fold + pred
+    assert "fold" in oof_preds.columns
+    assert "pred" in oof_preds.columns
+    assert "proba" not in oof_preds.columns
+    assert oof_preds.height == train.height
+
+    # folds partition the rows
+    folds = sorted(oof_preds["fold"].unique().to_list())
+    assert folds == [0, 1, 2, 3]
+
+    # pooled regression metrics
+    assert {"rmse", "mae", "r2"}.issubset(set(overall.keys()))
+
+    # per-fold list well-formed
+    assert len(per_fold) == 4
+    for entry in per_fold:
+        assert "fold" in entry and "n_rows" in entry
+        assert "rmse" in entry
