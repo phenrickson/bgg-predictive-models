@@ -349,15 +349,13 @@ with tab_overview:
             else:
                 st.info(f"No values for metric={metric_choice}, split={split_choice}.")
 
-        # Separation plots — one faceted figure with a row per candidate.
+        # Separation plots (one per candidate, stacked vertically).
         st.subheader("Separation plots")
         sep_split_options = ["val", "oof", "test"]
         sep_split = st.radio(
             "Split", sep_split_options, index=1, horizontal=True, key="sep_split"
         )
 
-        sep_frames: list[pl.DataFrame] = []
-        skipped: list[str] = []
         for r in runs:
             cand = r.get("candidate")
             if not cand:
@@ -366,89 +364,43 @@ with tab_overview:
                 storage, outcome, cand, split=sep_split, version=r.get("version")
             )
             if preds is None or preds.height == 0:
-                skipped.append(f"{cand} (no `{sep_split}`)")
+                st.caption(f"`{cand}`: no `{sep_split}` predictions saved.")
                 continue
             if "proba" not in preds.columns or "label" not in preds.columns:
-                skipped.append(f"{cand} (missing proba/label)")
+                st.caption(f"`{cand}`: predictions missing proba/label.")
                 continue
-            ordered = (
-                preds.sort("proba", descending=True)
-                .with_row_index("rank", offset=1)
-                .select(["rank", "proba", "label"])
-                .with_columns(pl.lit(cand).alias("candidate"))
+
+            sorted_preds = preds.sort("proba", descending=True).with_row_index(
+                "rank", offset=1
             )
-            sep_frames.append(ordered)
+            sep_pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+            true_ranks = sep_pdf.loc[sep_pdf["label"].astype(bool), "rank"].tolist()
 
-        if skipped:
-            st.caption("Skipped: " + ", ".join(skipped))
-
-        if sep_frames:
-            sep_pdf = pl.concat(sep_frames, how="diagonal_relaxed").to_pandas()
-            cand_order = [f.row(0)[3] for f in sep_frames]  # candidate column at index 3
-            n_facets = len(cand_order)
-
-            fig = px.area(
-                sep_pdf,
-                x="rank",
-                y="proba",
-                facet_row="candidate",
-                category_orders={"candidate": cand_order},
-            )
+            fig = px.area(sep_pdf, x="rank", y="proba", title=cand)
             fig.update_traces(
                 line={"color": "#444444", "width": 1},
                 fillcolor="rgba(80,80,80,0.25)",
                 hovertemplate="rank=%{x}<br>proba=%{y:.4f}<extra></extra>",
             )
-
-            # Build a flat list of vertical-line shapes, each pinned to its
-            # candidate's facet via that facet's yaxis ref.
-            shapes = []
-            for i, cand in enumerate(cand_order):
-                # Plotly numbers facet axes top-to-bottom: y, y2, y3 ... but
-                # facet_row stacks so the FIRST candidate is at the TOP, which
-                # corresponds to the LAST y-axis index. Reverse.
-                facet_idx = n_facets - i  # 1-based, top facet = n_facets
-                yref = "y" if facet_idx == 1 else f"y{facet_idx}"
-                trues = sep_pdf.loc[
-                    (sep_pdf["candidate"] == cand) & (sep_pdf["label"].astype(bool)),
-                    "rank",
-                ].tolist()
-                for x in trues:
-                    shapes.append({
-                        "type": "line",
-                        "x0": x, "x1": x,
-                        "y0": 0, "y1": 1,
-                        "yref": f"{yref} domain",
-                        "line": {"color": "#4fc3f7", "width": 1},
-                        "opacity": 0.6,
-                    })
-
-            # Strip the "candidate=" prefix plotly adds to facet annotations,
-            # and use them as left-side row labels.
-            fig.for_each_annotation(
-                lambda a: a.update(
-                    text=a.text.split("=")[-1],
-                    x=0,
-                    xanchor="left",
-                    font={"size": 12},
-                )
-            )
-
+            shapes = [
+                {
+                    "type": "line",
+                    "x0": x, "x1": x,
+                    "y0": 0, "y1": 1,
+                    "yref": "y domain",
+                    "line": {"color": "#4fc3f7", "width": 1},
+                    "opacity": 0.6,
+                }
+                for x in true_ranks
+            ]
             fig.update_layout(
                 shapes=shapes,
-                height=max(140, 80 * n_facets + 60),
-                margin={"t": 20, "b": 50, "l": 40, "r": 12},
-                showlegend=False,
+                height=140,
+                margin={"t": 30, "b": 36, "l": 50, "r": 12},
                 xaxis_title="rank (proba descending)",
+                yaxis_title="proba",
+                title={"text": cand, "x": 0.0, "xanchor": "left", "font": {"size": 13}},
             )
-            fig.update_yaxes(showticklabels=False, range=[0, 1], title_text="")
-            # Strip x-axis title from every facet so it only appears once on
-            # the bottom (set above on the figure layout).
-            fig.update_xaxes(title_text="")
-            # Restore the bottom facet's title (row=1 in plotly's facet
-            # numbering = bottom row when facet_row is used).
-            fig.update_xaxes(title_text="rank (proba descending)", row=1, col=1)
-
             st.plotly_chart(fig, use_container_width=True)
 
         # Splits + run metadata
