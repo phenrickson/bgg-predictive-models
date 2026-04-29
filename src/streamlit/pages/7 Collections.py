@@ -561,6 +561,56 @@ with tab_compare:
             else:
                 wide = wide.sort(rank_choice, descending=True, nulls_last=True)
 
+            # Pairwise scatter: pick two candidates, plot proba vs proba colored by label.
+            if len(per_candidate) >= 2:
+                st.subheader("Pairwise scatter")
+                cand_list = list(per_candidate.keys())
+                sc1, sc2 = st.columns([1, 1])
+                with sc1:
+                    x_cand = st.selectbox(
+                        "X-axis candidate", cand_list, index=0, key="compare_scatter_x"
+                    )
+                with sc2:
+                    y_default = 1 if len(cand_list) > 1 else 0
+                    y_cand = st.selectbox(
+                        "Y-axis candidate", cand_list, index=y_default, key="compare_scatter_y"
+                    )
+                if x_cand == y_cand:
+                    st.caption("Pick two different candidates to see disagreement.")
+                else:
+                    x_col = f"proba_{x_cand}"
+                    y_col = f"proba_{y_cand}"
+                    scatter_df = wide.select(
+                        [c for c in ["name", "year_published", "label", x_col, y_col]
+                         if c in wide.columns]
+                    ).drop_nulls(subset=[x_col, y_col])
+                    if scatter_df.height == 0:
+                        st.info("No overlapping rows between those two candidates.")
+                    else:
+                        color_col = "label" if "label" in scatter_df.columns else None
+                        hover = [c for c in ["name", "year_published"] if c in scatter_df.columns]
+                        fig = px.scatter(
+                            scatter_df.to_pandas(),
+                            x=x_col,
+                            y=y_col,
+                            color=color_col,
+                            hover_data=hover or None,
+                            opacity=0.55,
+                            title=f"{x_cand} vs {y_cand} (proba)",
+                        )
+                        # 45-degree reference line so agreement is the diagonal.
+                        fig.add_shape(
+                            type="line", x0=0, y0=0, x1=1, y1=1,
+                            line={"color": "gray", "dash": "dash", "width": 1},
+                        )
+                        fig.update_layout(
+                            xaxis_title=f"proba — {x_cand}",
+                            yaxis_title=f"proba — {y_cand}",
+                            xaxis_range=[0, 1],
+                            yaxis_range=[0, 1],
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
             st.caption(f"{wide.height:,} rows · split = `{compare_split}`")
             st.dataframe(wide.head(500).to_pandas(), use_container_width=True)
 
