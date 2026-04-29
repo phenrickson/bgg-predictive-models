@@ -40,6 +40,8 @@ FEATURE_GROUPS: dict[str, str] = {
     "artist_": "Artists",
     "publisher_": "Publishers",
     "family_": "Families",
+    "player_count_": "Players",
+    "missingindicator_": "Missingness",
 }
 
 
@@ -223,8 +225,18 @@ def _prepare(
     )
     if name_formatter is not None:
         if name_formatter is tidy_feature_name and group is not None:
+            # Drop the "Family:" tag when the surrounding chart already
+            # identifies the group — except where the bare body is
+            # ambiguous on its own:
+            #   - Players: "4" reads as numeric and Plotly will switch
+            #     the y-axis to continuous.
+            #   - Missingness: "Min Age" collides with the underlying
+            #     feature of the same name in any cross-group context,
+            #     and within-group it's clearer to keep the "Missing:"
+            #     prefix so the chart says what it's measuring.
+            include_tag = group in ("Players", "Missingness")
             out["feature"] = out["feature"].map(
-                lambda f: tidy_feature_name(f, include_tag=False)
+                lambda f: tidy_feature_name(f, include_tag=include_tag)
             )
         else:
             out["feature"] = out["feature"].map(name_formatter)

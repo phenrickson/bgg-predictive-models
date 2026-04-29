@@ -74,6 +74,30 @@ finalize outcome="own" candidate="lgbm_default" version="latest" finalize_throug
         $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}") \
         --local-root {{local_root}}
 
+# Finalize every candidate listed in config.collections.candidates for an outcome.
+# Continue-on-error: runs every candidate, exits non-zero at the end if any failed.
+finalize-all outcome="own" finalize_through="":
+    #!/usr/bin/env bash
+    failed=()
+    candidates=$(uv run python -c 'from src.collection.candidates import load_candidates; from src.utils.config import load_config; print("\n".join(load_candidates(load_config().raw_config)))')
+    if [ -z "$candidates" ]; then
+        echo "No candidates defined in config.collections.candidates" >&2
+        exit 1
+    fi
+    for c in $candidates; do
+        echo "--- $c ---"
+        if ! uv run python -m src.collection.finalize \
+            --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+            --candidate "$c" --local-root {{local_root}} \
+            $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}"); then
+            failed+=("$c")
+        fi
+    done
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "FAILED: ${failed[@]}" >&2
+        exit 1
+    fi
+
 # Register a trained collection model to GCS for the standalone scoring
 # service. Prefers the finalized refit if present.
 promote outcome="own" candidate="lgbm_default" version="latest" description="":

@@ -58,6 +58,7 @@ st.title("Collections")
 
 def _feature_group_label(name: str) -> str:
     from src.collection.viz import feature_group
+
     return feature_group(name)
 
 
@@ -89,18 +90,18 @@ def _score_universe(
         proba = pipeline.predict_proba(X_pd)[:, 1]
         scored = universe.with_columns(pl.Series("score", proba))
         if threshold is not None:
-            scored = scored.with_columns(
-                (pl.col("score") >= threshold).alias("pred")
-            )
+            scored = scored.with_columns((pl.col("score") >= threshold).alias("pred"))
     else:
         pred = pipeline.predict(X_pd)
         scored = universe.with_columns(pl.Series("score", pred))
 
     keep = [
-        c for c in ["game_id", "name", "year_published", "users_rated", "score", "pred"]
+        c
+        for c in ["game_id", "name", "year_published", "users_rated", "score", "pred"]
         if c in scored.columns
     ]
     return scored.select(keep).sort("score", descending=True).head(top_n)
+
 
 # ---------------------------------------------------------------------------
 # Top-level selectors (apply to every tab)
@@ -202,14 +203,24 @@ with tab_collection:
         st.info(f"No stored collection rows for `{username}` in BigQuery.")
     else:
         flag_cols = [
-            c for c in ["owned", "prev_owned", "previously_owned", "want",
-                        "wishlist", "preordered", "for_trade", "want_to_play",
-                        "want_to_buy"]
+            c
+            for c in [
+                "owned",
+                "prev_owned",
+                "previously_owned",
+                "want",
+                "wishlist",
+                "preordered",
+                "for_trade",
+                "want_to_play",
+                "want_to_buy",
+            ]
             if c in coll.columns
         ]
         rated = (
             coll.filter(pl.col("user_rating") > 0).height
-            if "user_rating" in coll.columns else 0
+            if "user_rating" in coll.columns
+            else 0
         )
 
         cols = st.columns(min(len(flag_cols) + 1, 5) or 1)
@@ -226,7 +237,9 @@ with tab_collection:
 
         f1, f2 = st.columns([1, 1])
         with f1:
-            search = st.text_input("Search game name", key="coll_search").strip().lower()
+            search = (
+                st.text_input("Search game name", key="coll_search").strip().lower()
+            )
         with f2:
             flag_choice = st.selectbox(
                 "Filter by flag", ["(any)"] + flag_cols, key="coll_flag"
@@ -243,10 +256,23 @@ with tab_collection:
             view = view.filter(pl.col(flag_choice) == True)
 
         preferred = [
-            c for c in ["game_id", "game_name", "name", "user_rating",
-                        "owned", "prev_owned", "previously_owned", "want",
-                        "wishlist", "preordered", "for_trade",
-                        "wishlist_priority", "first_seen_at", "updated_at"]
+            c
+            for c in [
+                "game_id",
+                "game_name",
+                "name",
+                "user_rating",
+                "owned",
+                "prev_owned",
+                "previously_owned",
+                "want",
+                "wishlist",
+                "preordered",
+                "for_trade",
+                "wishlist_priority",
+                "first_seen_at",
+                "updated_at",
+            ]
             if c in view.columns
         ]
         rest = [c for c in view.columns if c not in preferred]
@@ -274,19 +300,25 @@ with tab_overview:
         wide_pdf = wide.to_pandas()
         if "split" in wide_pdf.columns:
             split_order = {"val": 0, "oof": 1, "test": 2}
-            wide_pdf = wide_pdf.assign(
-                _split_order=wide_pdf["split"].map(split_order).fillna(99)
-            ).sort_values(
-                ["_split_order", "candidate"]
-            ).drop(columns="_split_order").reset_index(drop=True)
+            wide_pdf = (
+                wide_pdf.assign(
+                    _split_order=wide_pdf["split"].map(split_order).fillna(99)
+                )
+                .sort_values(["_split_order", "candidate"])
+                .drop(columns="_split_order")
+                .reset_index(drop=True)
+            )
 
         # Highlight the best value within each (split, metric) cell.
         higher_is_better = {"precision", "recall", "f1", "f2", "roc_auc", "pr_auc"}
         lower_is_better = {"log_loss"}
-        metric_cols = [c for c in wide_pdf.columns if c in higher_is_better | lower_is_better]
+        metric_cols = [
+            c for c in wide_pdf.columns if c in higher_is_better | lower_is_better
+        ]
 
         def _highlight_best(df):
             import pandas as pd
+
             out = pd.DataFrame("", index=df.index, columns=df.columns)
             if "split" not in df.columns:
                 return out
@@ -307,7 +339,11 @@ with tab_overview:
             return out
 
         styler = wide_pdf.style.apply(_highlight_best, axis=None).format(
-            {c: "{:.4f}" for c in metric_cols + (["threshold"] if "threshold" in wide_pdf.columns else [])}
+            {
+                c: "{:.4f}"
+                for c in metric_cols
+                + (["threshold"] if "threshold" in wide_pdf.columns else [])
+            }
         )
         st.dataframe(styler, use_container_width=True)
 
@@ -323,7 +359,9 @@ with tab_overview:
             )
             mc1, mc2 = st.columns([1, 1])
             with mc1:
-                metric_choice = st.selectbox("Metric", metric_options, index=default_idx)
+                metric_choice = st.selectbox(
+                    "Metric", metric_options, index=default_idx
+                )
             with mc2:
                 default_split_idx = (
                     split_options.index("test") if "test" in split_options else 0
@@ -385,8 +423,10 @@ with tab_overview:
             shapes = [
                 {
                     "type": "line",
-                    "x0": x, "x1": x,
-                    "y0": 0, "y1": 1,
+                    "x0": x,
+                    "x1": x,
+                    "y0": 0,
+                    "y1": 1,
                     "yref": "y domain",
                     "line": {"color": "#4fc3f7", "width": 1},
                     "opacity": 0.6,
@@ -407,19 +447,21 @@ with tab_overview:
         with st.expander("Run metadata"):
             meta_rows = []
             for r in runs:
-                meta_rows.append({
-                    "candidate": r.get("candidate"),
-                    "version": r.get("version"),
-                    "splits_version": r.get("splits_version"),
-                    "n_train_used": r.get("n_train_used"),
-                    "n_val": r.get("n_val"),
-                    "n_test": r.get("n_test"),
-                    "threshold": r.get("threshold"),
-                    "trained_at": r.get("trained_at"),
-                    "git_sha": (r.get("git_sha") or "")[:8],
-                    "finalize_through": r.get("finalize_through"),
-                    "finalized_at": r.get("finalized_at"),
-                })
+                meta_rows.append(
+                    {
+                        "candidate": r.get("candidate"),
+                        "version": r.get("version"),
+                        "splits_version": r.get("splits_version"),
+                        "n_train_used": r.get("n_train_used"),
+                        "n_val": r.get("n_val"),
+                        "n_test": r.get("n_test"),
+                        "threshold": r.get("threshold"),
+                        "trained_at": r.get("trained_at"),
+                        "git_sha": (r.get("git_sha") or "")[:8],
+                        "finalize_through": r.get("finalize_through"),
+                        "finalized_at": r.get("finalized_at"),
+                    }
+                )
             st.dataframe(pl.DataFrame(meta_rows).to_pandas(), use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -438,9 +480,10 @@ with tab_detail:
         registration = matched_run
     else:
         version = storage.latest_candidate_version(outcome, candidate)
-        registration = storage.load_candidate_registration(
-            outcome, candidate, version=version
-        ) or {}
+        registration = (
+            storage.load_candidate_registration(outcome, candidate, version=version)
+            or {}
+        )
 
     st.subheader(f"{candidate} (v{version})")
 
@@ -459,26 +502,40 @@ with tab_detail:
                 test_s = f"{test_v:.4f}" if isinstance(test_v, (int, float)) else "—"
                 oof_s = f"{oof_v:.4f}" if isinstance(oof_v, (int, float)) else None
                 delta_text = f"val: {val_s}" + (f"  ·  oof: {oof_s}" if oof_s else "")
-                st.metric(label=f"{key} (test)", value=test_s, delta=delta_text, delta_color="off")
+                st.metric(
+                    label=f"{key} (test)",
+                    value=test_s,
+                    delta=delta_text,
+                    delta_color="off",
+                )
 
     with st.expander("Best params + spec"):
-        st.json({
-            "best_params": registration.get("best_params"),
-            "candidate_spec": registration.get("candidate_spec"),
-            "threshold": registration.get("threshold"),
-            "splits_version": registration.get("splits_version"),
-        })
+        st.json(
+            {
+                "best_params": registration.get("best_params"),
+                "candidate_spec": registration.get("candidate_spec"),
+                "threshold": registration.get("threshold"),
+                "splits_version": registration.get("splits_version"),
+            }
+        )
 
     # Tuning curve
     tuning = load_tuning_results(storage, outcome, candidate, version=version)
     if tuning is not None and tuning.height:
         st.subheader("Tuning")
-        score_cols = [c for c in tuning.columns if c.startswith("score_") or c == "score"]
+        score_cols = [
+            c for c in tuning.columns if c.startswith("score_") or c == "score"
+        ]
         if "score" in tuning.columns:
             tuning_sorted = tuning.sort("score").to_pandas().reset_index(drop=True)
             tuning_sorted["trial"] = tuning_sorted.index
-            fig = px.line(tuning_sorted, x="trial", y="score", markers=True,
-                          title="Tuning trials (sorted by score)")
+            fig = px.line(
+                tuning_sorted,
+                x="trial",
+                y="score",
+                markers=True,
+                title="Tuning trials (sorted by score)",
+            )
             st.plotly_chart(fig, use_container_width=True)
         with st.expander("Tuning trace"):
             st.dataframe(tuning.to_pandas(), use_container_width=True)
@@ -487,9 +544,9 @@ with tab_detail:
     importance = load_feature_importance(storage, outcome, candidate, version=version)
     if importance is not None and importance.height:
         st.subheader("Feature importance")
-        groups_present = sorted({
-            _feature_group_label(name) for name in importance["feature"].to_list()
-        })
+        groups_present = sorted(
+            {_feature_group_label(name) for name in importance["feature"].to_list()}
+        )
         ic1, ic2 = st.columns([1, 1])
         with ic1:
             group_choice = st.selectbox(
@@ -499,14 +556,16 @@ with tab_detail:
             top_n = st.slider("Top N (each direction)", 5, 50, 20, key="fi_top_n")
 
         try:
+            fi_title = group_choice if group_choice != "(all)" else "Feature Importance"
+            fi_subtitle = f"{username} · {candidate} v{version} · outcome: {outcome}"
             fig = plot_feature_importance(
                 importance.to_pandas(),
                 group=None if group_choice == "(all)" else group_choice,
                 top_pos=top_n,
                 top_neg=top_n,
                 interactive=True,
+                title=f"{fi_title}<br><sub>{fi_subtitle}</sub>",
             )
-            fig.update_layout(height=450)
             st.plotly_chart(fig, use_container_width=True)
         except Exception as e:  # noqa: BLE001
             st.error(f"Could not render feature importance: {e}")
@@ -552,8 +611,19 @@ with tab_detail:
         # Surface predicted score next to the name so the descending sort
         # is visible without scrolling.
         preferred = [
-            c for c in ["fold", "proba", "pred", "prediction", "actual",
-                        "game_id", "name", "year_published", "users_rated", "label"]
+            c
+            for c in [
+                "fold",
+                "proba",
+                "pred",
+                "prediction",
+                "actual",
+                "game_id",
+                "name",
+                "year_published",
+                "users_rated",
+                "label",
+            ]
             if c in view.columns
         ]
         rest = [c for c in view.columns if c not in preferred]
@@ -618,12 +688,13 @@ with tab_compare:
             # Use the first candidate's frame as the spine; left-join the rest by game_id.
             spine_cand, spine = next(iter(per_candidate.items()))
             meta_cols = [
-                c for c in ["game_id", "name", "year_published", "users_rated", "label"]
+                c
+                for c in ["game_id", "name", "year_published", "users_rated", "label"]
                 if c in spine.columns
             ]
-            spine_view = spine.select(
-                meta_cols + ["proba"]
-            ).rename({"proba": f"proba_{spine_cand}"})
+            spine_view = spine.select(meta_cols + ["proba"]).rename(
+                {"proba": f"proba_{spine_cand}"}
+            )
 
             wide = spine_view
             for cand, df in per_candidate.items():
@@ -642,17 +713,19 @@ with tab_compare:
                 "Rank by", rank_options, index=0, key="compare_rank_by"
             )
 
-            search = st.text_input("Search game name", key="compare_search").strip().lower()
+            search = (
+                st.text_input("Search game name", key="compare_search").strip().lower()
+            )
             if search and "name" in wide.columns:
                 wide = wide.filter(
                     pl.col("name").str.to_lowercase().str.contains(search)
                 )
 
             if rank_choice == "mean across candidates":
-                wide = wide.with_columns(
-                    pl.mean_horizontal(*proba_cols).alias("_rank")
+                wide = wide.with_columns(pl.mean_horizontal(*proba_cols).alias("_rank"))
+                wide = wide.sort("_rank", descending=True, nulls_last=True).drop(
+                    "_rank"
                 )
-                wide = wide.sort("_rank", descending=True, nulls_last=True).drop("_rank")
             else:
                 wide = wide.sort(rank_choice, descending=True, nulls_last=True)
 
@@ -668,7 +741,10 @@ with tab_compare:
                 with sc2:
                     y_default = 1 if len(cand_list) > 1 else 0
                     y_cand = st.selectbox(
-                        "Y-axis candidate", cand_list, index=y_default, key="compare_scatter_y"
+                        "Y-axis candidate",
+                        cand_list,
+                        index=y_default,
+                        key="compare_scatter_y",
                     )
                 if x_cand == y_cand:
                     st.caption("Pick two different candidates to see disagreement.")
@@ -676,14 +752,21 @@ with tab_compare:
                     x_col = f"proba_{x_cand}"
                     y_col = f"proba_{y_cand}"
                     scatter_df = wide.select(
-                        [c for c in ["name", "year_published", "label", x_col, y_col]
-                         if c in wide.columns]
+                        [
+                            c
+                            for c in ["name", "year_published", "label", x_col, y_col]
+                            if c in wide.columns
+                        ]
                     ).drop_nulls(subset=[x_col, y_col])
                     if scatter_df.height == 0:
                         st.info("No overlapping rows between those two candidates.")
                     else:
                         color_col = "label" if "label" in scatter_df.columns else None
-                        hover = [c for c in ["name", "year_published"] if c in scatter_df.columns]
+                        hover = [
+                            c
+                            for c in ["name", "year_published"]
+                            if c in scatter_df.columns
+                        ]
                         # Cast label to a string so plotly treats it as a stable
                         # discrete category, and pin colors so True/False stay
                         # consistent across tabs regardless of row order.
@@ -696,7 +779,9 @@ with tab_compare:
                             y=y_col,
                             color=color_col,
                             color_discrete_map={"True": "#4fc3f7", "False": "#666666"},
-                            category_orders={color_col: ["False", "True"]} if color_col else None,
+                            category_orders=(
+                                {color_col: ["False", "True"]} if color_col else None
+                            ),
                             hover_data=hover or None,
                             title=f"{x_cand} vs {y_cand} (proba)",
                         )
@@ -709,7 +794,11 @@ with tab_compare:
                                 trace.marker.opacity = 0.35
                         # 45-degree reference line so agreement is the diagonal.
                         fig.add_shape(
-                            type="line", x0=0, y0=0, x1=1, y1=1,
+                            type="line",
+                            x0=0,
+                            y0=0,
+                            x1=1,
+                            y1=1,
                             line={"color": "gray", "dash": "dash", "width": 1},
                         )
                         fig.update_layout(
@@ -747,9 +836,13 @@ with tab_topn:
     if topn_preds is None or topn_preds.height == 0:
         st.info(f"No predictions saved for `{topn_candidate}`.")
     elif "proba" not in topn_preds.columns:
-        st.info("Top-N currently surfaces classification proba; this is a regression run.")
+        st.info(
+            "Top-N currently surfaces classification proba; this is a regression run."
+        )
     elif "year_published" not in topn_preds.columns or "name" not in topn_preds.columns:
-        st.info("Predictions parquet is missing `year_published` or `name`; cannot pivot by year.")
+        st.info(
+            "Predictions parquet is missing `year_published` or `name`; cannot pivot by year."
+        )
     else:
         all_years = sorted(
             int(y) for y in topn_preds["year_published"].drop_nulls().unique().to_list()
@@ -773,7 +866,9 @@ with tab_topn:
                 top_n = st.slider("Top N", 5, 100, 25, key="topn_n")
             with c2:
                 if min_year == max_year:
-                    st.caption(f"Year: **{min_year}** (only year in this prediction set)")
+                    st.caption(
+                        f"Year: **{min_year}** (only year in this prediction set)"
+                    )
                     lo = hi = min_year
                 else:
                     year_range = st.slider(
@@ -809,9 +904,11 @@ with tab_topn:
                     int(y) for y in view["year_published"].unique().to_list()
                 )
 
-                name_pivot = view.pivot(
-                    values="name", index="_rank", on="year_published"
-                ).sort("_rank").rename({"_rank": "rank"})
+                name_pivot = (
+                    view.pivot(values="name", index="_rank", on="year_published")
+                    .sort("_rank")
+                    .rename({"_rank": "rank"})
+                )
                 # Make sure column order is ascending year and all selected years appear.
                 ordered = ["rank"] + [str(y) for y in year_cols]
                 name_pivot = name_pivot.select(
@@ -819,9 +916,11 @@ with tab_topn:
                 )
 
                 if "label" in view.columns:
-                    label_pivot = view.pivot(
-                        values="label", index="_rank", on="year_published"
-                    ).sort("_rank").rename({"_rank": "rank"})
+                    label_pivot = (
+                        view.pivot(values="label", index="_rank", on="year_published")
+                        .sort("_rank")
+                        .rename({"_rank": "rank"})
+                    )
                     label_pivot = label_pivot.select(
                         [c for c in ordered if c in label_pivot.columns]
                     )
@@ -861,9 +960,7 @@ with tab_topn:
                     }
                     st.dataframe(styler, column_config=column_config)
                 else:
-                    st.caption(
-                        f"`{topn_candidate}` · top {top_n} per year · {lo}–{hi}"
-                    )
+                    st.caption(f"`{topn_candidate}` · top {top_n} per year · {lo}–{hi}")
                     column_config = {
                         c: st.column_config.TextColumn(c, width=180, pinned=False)
                         for c in name_pdf.columns
@@ -923,7 +1020,10 @@ with tab_finalized:
             with sc1:
                 min_year = st.number_input(
                     "Min year_published",
-                    min_value=1900, max_value=2100, value=year_default, step=1,
+                    min_value=1900,
+                    max_value=2100,
+                    value=year_default,
+                    step=1,
                 )
             with sc2:
                 top_n = st.slider("Top N", 10, 200, 50)
@@ -949,7 +1049,9 @@ with tab_finalized:
                 search = st.text_input("Search", key="final_search").strip().lower()
                 view = scored
                 if search and "name" in view.columns:
-                    view = view.filter(pl.col("name").str.to_lowercase().str.contains(search))
+                    view = view.filter(
+                        pl.col("name").str.to_lowercase().str.contains(search)
+                    )
                 st.caption(f"{view.height:,} rows")
                 st.dataframe(view.to_pandas(), use_container_width=True)
 
