@@ -589,11 +589,19 @@ with tab_compare:
                     else:
                         color_col = "label" if "label" in scatter_df.columns else None
                         hover = [c for c in ["name", "year_published"] if c in scatter_df.columns]
+                        # Cast label to a string so plotly treats it as a stable
+                        # discrete category, and pin colors so True/False stay
+                        # consistent across tabs regardless of row order.
+                        scatter_pdf = scatter_df.to_pandas()
+                        if color_col is not None:
+                            scatter_pdf[color_col] = scatter_pdf[color_col].astype(str)
                         fig = px.scatter(
-                            scatter_df.to_pandas(),
+                            scatter_pdf,
                             x=x_col,
                             y=y_col,
                             color=color_col,
+                            color_discrete_map={"True": "#1f4e79", "False": "#999999"},
+                            category_orders={color_col: ["True", "False"]} if color_col else None,
                             hover_data=hover or None,
                             opacity=0.55,
                             title=f"{x_cand} vs {y_cand} (proba)",
