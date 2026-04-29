@@ -95,6 +95,7 @@ class CollectionCandidate:
     downsample_negatives_ratio: Optional[float] = None
     downsample_protect_min_ratings: int = 25
     notes: str = ""
+    oof_cv_folds: int = 5
 
     def __post_init__(self) -> None:
         if not _NAME_RE.match(self.name):
@@ -125,6 +126,16 @@ class CollectionCandidate:
             raise ValueError(
                 f"downsample_protect_min_ratings must be >= 0 "
                 f"(got {self.downsample_protect_min_ratings})"
+            )
+        if self.oof_cv_folds < 0:
+            raise ValueError(
+                f"oof_cv_folds must be >= 0 (got {self.oof_cv_folds}); "
+                "use 0 to disable OOF CV"
+            )
+        if self.oof_cv_folds == 1:
+            raise ValueError(
+                "oof_cv_folds must be 0 (disabled) or >= 2; "
+                "got 1 which is not a valid CV configuration"
             )
 
     # --- Serialization ---
