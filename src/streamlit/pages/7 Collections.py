@@ -605,15 +605,12 @@ with tab_compare:
                             hover_data=hover or None,
                             title=f"{x_cand} vs {y_cand} (proba)",
                         )
-                        # True trues are rare and important — bigger, opaque, on top.
-                        # False trues are the bulk — small, muted, behind.
+                        # True trues are rare and important — full opacity, on top.
+                        # False trues are the bulk — muted, drawn behind.
                         for trace in fig.data:
                             if trace.name == "True":
-                                trace.marker.size = 9
                                 trace.marker.opacity = 1.0
-                                trace.marker.line = dict(width=0)
                             elif trace.name == "False":
-                                trace.marker.size = 5
                                 trace.marker.opacity = 0.35
                         # 45-degree reference line so agreement is the diagonal.
                         fig.add_shape(
