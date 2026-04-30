@@ -77,9 +77,13 @@ class EmbeddingTrainer:
             DataFrame with features and predicted_complexity.
         """
         loader = EmbeddingDataLoader(config=self.config)
+        use_embeddings = bool(
+            self.config.embeddings and self.config.embeddings.use_embeddings
+        )
         return loader.load_embedding_data(
             end_year=end_year,
             min_ratings=min_ratings,
+            use_embeddings=use_embeddings,
         )
 
     def prepare_features(
@@ -104,9 +108,13 @@ class EmbeddingTrainer:
         if preprocessor is None:
             # Create embedding-specific preprocessor with appropriate defaults
             # (excludes designer/artist/publisher, focuses on game characteristics)
+            use_embeddings = bool(
+                self.config.embeddings and self.config.embeddings.use_embeddings
+            )
             preprocessor = create_embedding_preprocessor(
                 model_type="linear",
                 preserve_columns=["year_published", "predicted_complexity"],
+                include_description_embeddings=use_embeddings,
             )
 
         df_pandas = df.to_pandas()
@@ -674,7 +682,7 @@ class EmbeddingTrainer:
         train_df, tune_df, test_df = create_data_splits(
             df,
             train_through=years.training.train_through,
-            tune_start=years.training.train_through,
+            tune_start=years.training.tune_start,
             tune_through=years.training.tune_through,
             test_start=years.training.test_start,
             test_through=years.training.test_through,

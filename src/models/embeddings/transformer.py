@@ -90,6 +90,7 @@ def create_embedding_preprocessor(
     normalization_factor: int = 25,
     log_columns: Optional[List[str]] = None,
     preserve_columns: Optional[List[str]] = None,
+    include_description_embeddings: bool = False,
     **kwargs,
 ) -> Pipeline:
     """Create a preprocessing pipeline optimized for embedding training.
@@ -129,6 +130,7 @@ def create_embedding_preprocessor(
     # Create embedding transformer with preserved columns
     transformer = EmbeddingTransformer(
         preserve_columns=preserve_columns,
+        include_description_embeddings=include_description_embeddings,
         **kwargs,
     )
 

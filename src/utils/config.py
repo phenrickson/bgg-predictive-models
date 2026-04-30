@@ -126,6 +126,7 @@ class EmbeddingConfig:
     vector_search: EmbeddingVectorSearchConfig  # Curated table for similarity search
     search: EmbeddingSearchConfig
     min_ratings: int = 25  # Minimum users_rated for training data
+    use_embeddings: bool = False  # Use description embeddings as input features
 
     def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
         """Get parameters for a specific algorithm.
@@ -187,6 +188,7 @@ class ModelConfig:
     algorithm_params: Optional[Dict[str, Any]] = None
     mode: Optional[str] = None  # For geek_rating: "stacking" or "direct"
     include_predictions: bool = True  # For geek_rating direct mode: include sub-model predictions as features
+    preprocessor_kwargs: Optional[Dict[str, Any]] = None  # Overrides passed to create_preprocessing_pipeline
 
     def get_algorithm_params(self) -> Dict[str, Any]:
         """Get algorithm-specific parameters.
@@ -418,6 +420,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             algorithm_params=model_config.get("algorithm_params"),
             mode=model_config.get("mode"),
             include_predictions=model_config.get("include_predictions", True),
+            preprocessor_kwargs=model_config.get("preprocessor_kwargs"),
         )
 
     # Create scoring config if present
@@ -462,6 +465,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             vector_search=vector_search_config,
             search=search_config,
             min_ratings=emb.get("min_ratings", 25),
+            use_embeddings=emb.get("use_embeddings", False),
         )
 
     # Create text embeddings config if present
