@@ -18,7 +18,7 @@ from src.utils.config import Config, load_config
 
 from .algorithms import BaseEmbeddingAlgorithm, create_embedding_algorithm
 from .data import EmbeddingDataLoader
-from .transformer import create_embedding_preprocessor
+from .transformer import PrefixColumnDropper, create_embedding_preprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -856,8 +856,19 @@ class EmbeddingTrainer:
         with open(pipeline_path, "wb") as f:
             pickle.dump(pipeline_data, f)
 
-        # Also save standard pipeline.pkl for compatibility
-        experiment.save_pipeline(preprocessor)
+        # Save standard pipeline.pkl bundling preprocessor + embedding model
+        # so that pipeline.transform(games_df) returns the embedding_dim-d
+        # output, not the raw preprocessed feature matrix. Insert a
+        # PrefixColumnDropper between the preprocessor and the embedding step
+        # to mirror prepare_features (year_published columns are kept through
+        # preprocessing but excluded from the feature matrix the embedding
+        # algorithm was fit on).
+        full_pipeline = Pipeline(
+            preprocessor.steps
+            + [("drop_id_cols", PrefixColumnDropper(prefixes=["year_published"]))]
+            + [("embedding", embedding_model)]
+        )
+        experiment.save_pipeline(full_pipeline)
 
         # Log model info (final model trained on train + tune)
         experiment.log_model_info({

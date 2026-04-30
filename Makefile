@@ -69,6 +69,9 @@ data:
 	uv run -m src.pipeline.data --model hurdle
 	uv run -m src.pipeline.data --model complexity
 
+# set current year
+CURRENT_YEAR ?= 2026
+
 # model types
 LINEAR ?= linear
 RIDGE ?= ridge

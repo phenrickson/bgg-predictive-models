@@ -1136,19 +1136,23 @@ async def generate_coordinates(request: GenerateCoordinatesRequest):
             logger.info(f"Processing {len(game_ids)} specific games")
         else:
             # For batch processing, get games from embeddings table
-            # that need coordinate updates
+            # that need coordinate updates. Read from the source-of-truth
+            # raw.game_embeddings (where /generate_embeddings just wrote)
+            # rather than the warehouse-side game_similarity_search view,
+            # which is only refreshed by Dataform AFTER this job finishes
+            # (cross-repo race on version changes).
             emb_config = config.embeddings
-            project = emb_config.vector_search.project or config.ml_project_id
-            dataset = emb_config.vector_search.dataset
-            table = emb_config.vector_search.table
-            table_id = f"{project}.{dataset}.{table}"
+            embeddings_table_id = (
+                f"{config.ml_project_id}.{emb_config.upload.dataset}."
+                f"{emb_config.upload.table}"
+            )
             coords_table_id = f"{config.ml_project_id}.{emb_config.upload.dataset}.game_coordinates"
 
             # Get games that have embeddings but don't have coordinates yet
             # for this model version
             query = f"""
             SELECT DISTINCT e.game_id
-            FROM `{table_id}` e
+            FROM `{embeddings_table_id}` e
             LEFT JOIN (
                 SELECT game_id, embedding_version
                 FROM `{coords_table_id}`
@@ -1273,13 +1277,15 @@ async def generate_coordinates(request: GenerateCoordinatesRequest):
 
         logger.info(f"Uploaded {len(upload_df)} coordinates to {coords_table_id}")
 
-        # Count remaining games needing coordinates
+        # Count remaining games needing coordinates. Same source-of-truth
+        # rationale as the batch query above: read from raw.game_embeddings,
+        # not the warehouse-side game_similarity_search view.
         games_remaining = 0
         emb_config = config.embeddings
-        project = emb_config.vector_search.project or config.ml_project_id
-        dataset = emb_config.vector_search.dataset
-        table = emb_config.vector_search.table
-        emb_table_id = f"{project}.{dataset}.{table}"
+        emb_table_id = (
+            f"{config.ml_project_id}.{emb_config.upload.dataset}."
+            f"{emb_config.upload.table}"
+        )
         count_query = f"""
         SELECT COUNT(DISTINCT e.game_id) as cnt
         FROM `{emb_table_id}` e

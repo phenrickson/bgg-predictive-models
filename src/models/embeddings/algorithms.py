@@ -6,12 +6,13 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA, TruncatedSVD
 
 logger = logging.getLogger(__name__)
 
 
-class BaseEmbeddingAlgorithm(ABC):
+class BaseEmbeddingAlgorithm(BaseEstimator, TransformerMixin, ABC):
     """Abstract base class for embedding algorithms."""
 
     def __init__(self, embedding_dim: int, **kwargs):
@@ -63,6 +64,9 @@ class BaseEmbeddingAlgorithm(ABC):
     def get_embedding_dim(self) -> int:
         """Return the embedding dimension."""
         return self.embedding_dim
+
+    def __sklearn_is_fitted__(self) -> bool:
+        return bool(self.is_fitted)
 
     @abstractmethod
     def get_metrics(self) -> Dict[str, Any]:

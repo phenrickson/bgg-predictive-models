@@ -7,6 +7,8 @@ predictive models.
 
 from typing import List, Optional
 
+import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -17,6 +19,32 @@ from src.features.transformers import (
     LogTransformer,
     YearTransformer,
 )
+
+
+class PrefixColumnDropper(BaseEstimator, TransformerMixin):
+    """Drop DataFrame columns whose names start with any of the given prefixes.
+
+    Used as a post-preprocessor step to exclude columns (e.g., year_published*)
+    that should be carried through preprocessing for context but excluded from
+    the feature matrix passed to the embedding algorithm.
+    """
+
+    def __init__(self, prefixes: Optional[List[str]] = None):
+        self.prefixes = prefixes or []
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        if not isinstance(X, pd.DataFrame):
+            return X
+        drop_cols = [
+            c for c in X.columns
+            if any(c.startswith(p) for p in self.prefixes)
+        ]
+        if drop_cols:
+            return X.drop(columns=drop_cols)
+        return X
 
 
 # Default family patterns for embeddings - focus on game characteristic types
