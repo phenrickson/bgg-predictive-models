@@ -592,6 +592,7 @@ def fetch_game_embeddings(
     game_ids: List[int],
     embedding_dims: Optional[int] = None,
     model_version: Optional[int] = None,
+    use_source_of_truth: bool = False,
 ) -> Dict[int, Dict[str, Any]]:
     """Fetch embeddings and metadata for multiple games.
 
@@ -599,17 +600,34 @@ def fetch_game_embeddings(
         game_ids: List of game IDs to fetch.
         embedding_dims: Embedding dimensions (8, 16, 32, or 64/None).
         model_version: Specific model version, or None for latest.
+        use_source_of_truth: If True, read from raw.game_embeddings (the
+            ML-side write target, available immediately after
+            /generate_embeddings). If False (default), read from
+            analytics.game_similarity_search (the warehouse-side view that
+            joins richer metadata, but is only refreshed by Dataform after
+            the ML pipeline's notify-data-warehouse step). Set True for
+            internal pipeline calls that must not race the cross-repo
+            Dataform refresh; leave False for endpoints serving the dashboard
+            that need name/complexity metadata.
 
     Returns:
         Dict mapping game_id to {embedding, name, year_published, complexity}.
+        When use_source_of_truth=True, name/year_published/complexity are
+        absent (not present in the raw table); only embedding is populated.
     """
     from src.models.embeddings.search import VALID_EMBEDDING_DIMS
 
     emb_config = config.embeddings
-    project = emb_config.vector_search.project or config.ml_project_id
-    dataset = emb_config.vector_search.dataset
-    table = emb_config.vector_search.table
-    table_id = f"{project}.{dataset}.{table}"
+    if use_source_of_truth:
+        table_id = (
+            f"{config.ml_project_id}.{emb_config.upload.dataset}."
+            f"{emb_config.upload.table}"
+        )
+    else:
+        project = emb_config.vector_search.project or config.ml_project_id
+        dataset = emb_config.vector_search.dataset
+        table = emb_config.vector_search.table
+        table_id = f"{project}.{dataset}.{table}"
 
     # Determine embedding column
     if embedding_dims is None or embedding_dims == 64:
@@ -627,11 +645,19 @@ def fetch_game_embeddings(
 
     game_ids_str = ",".join(str(g) for g in game_ids)
 
-    query = f"""
-    SELECT game_id, name, year_published, complexity, {emb_col} as embedding, embedding_version
-    FROM `{table_id}`
-    WHERE game_id IN ({game_ids_str}) AND {version_filter}
-    """
+    if use_source_of_truth:
+        # raw.game_embeddings doesn't carry name/year_published/complexity
+        query = f"""
+        SELECT game_id, {emb_col} as embedding, embedding_version
+        FROM `{table_id}`
+        WHERE game_id IN ({game_ids_str}) AND {version_filter}
+        """
+    else:
+        query = f"""
+        SELECT game_id, name, year_published, complexity, {emb_col} as embedding, embedding_version
+        FROM `{table_id}`
+        WHERE game_id IN ({game_ids_str}) AND {version_filter}
+        """
 
     client = bigquery.Client(project=config.ml_project_id)
 
@@ -1180,11 +1206,15 @@ async def generate_coordinates(request: GenerateCoordinatesRequest):
                 games_processed=0,
             )
 
-        # Fetch embeddings (need full 64-dim for projection)
+        # Fetch embeddings (need full 64-dim for projection). Use the
+        # source-of-truth raw.game_embeddings; analytics.game_similarity_search
+        # is only refreshed AFTER this workflow notifies the warehouse, so on
+        # version changes the view doesn't yet have the rows we just wrote.
         embeddings_map = fetch_game_embeddings(
             game_ids=game_ids,
             embedding_dims=None,  # Full embeddings
             model_version=model_version,
+            use_source_of_truth=True,
         )
 
         if not embeddings_map:
