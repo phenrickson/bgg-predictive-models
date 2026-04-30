@@ -267,10 +267,15 @@ def load_games_for_embedding(
     """
     # Use EmbeddingDataLoader to get predicted_complexity joined with features
     emb_loader = EmbeddingDataLoader(config)
+    use_embeddings = bool(
+        config.embeddings and config.embeddings.use_embeddings
+    )
 
     if game_ids:
         logger.info(f"Loading {len(game_ids)} specific games for embeddings...")
-        return emb_loader.load_scoring_data(game_ids=game_ids).to_pandas()
+        return emb_loader.load_scoring_data(
+            game_ids=game_ids, use_embeddings=use_embeddings
+        ).to_pandas()
 
     # Change detection: find games needing embeddings for THIS model
     # Games that either don't have embeddings from this model or have updated features
@@ -315,7 +320,9 @@ def load_games_for_embedding(
             return pd.DataFrame()
 
         logger.info(f"Found {len(game_ids_to_load)} games needing embeddings")
-        return emb_loader.load_scoring_data(game_ids=game_ids_to_load).to_pandas()
+        return emb_loader.load_scoring_data(
+            game_ids=game_ids_to_load, use_embeddings=use_embeddings
+        ).to_pandas()
 
     except Exception as e:
         logger.error(f"Change detection query failed: {e}")
