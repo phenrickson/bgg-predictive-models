@@ -267,6 +267,11 @@ def parse_arguments() -> argparse.Namespace:
     # Load algorithm_params from config
     args.algorithm_params = model_config.get_algorithm_params() if model_config else {}
 
+    # Load preprocessor_kwargs overrides from config (e.g., normalize_row_families)
+    args.preprocessor_kwargs = (
+        getattr(model_config, "preprocessor_kwargs", None) or {}
+    )
+
     # Load geek_rating-specific config (mode, sub_model_experiments)
     if args.model == "geek_rating":
         # Mode: CLI > config > default
@@ -430,12 +435,22 @@ def train_model(
         if getattr(args, "include_predictions", True):
             preserve_columns.extend(["predicted_rating", "predicted_users_rated_log"])
 
-    preprocessor = create_preprocessing_pipeline(
-        model_type=args.preprocessor_type,
-        model_name=algorithm,
+    # Merge config-driven preprocessor overrides; computed values take precedence
+    # so dynamic preserve_columns (year_published, predicted_complexity, etc.)
+    # are never lost to a stale YAML value.
+    preprocessor_kwargs = dict(getattr(args, "preprocessor_kwargs", {}) or {})
+    if preprocessor_kwargs:
+        logger.info(f"Using preprocessor_kwargs from config: {preprocessor_kwargs}")
+    preprocessor_kwargs.update(
         preserve_columns=preserve_columns,
         include_description_embeddings=args.use_embeddings,
         include_count_features=args.include_count_features,
+    )
+
+    preprocessor = create_preprocessing_pipeline(
+        model_type=args.preprocessor_type,
+        model_name=algorithm,
+        **preprocessor_kwargs,
     )
 
     # Allow models to customize pipeline construction
@@ -462,7 +477,7 @@ def train_model(
 
     # Tune model
     logger.info(f"Tuning with metric: {metric}")
-    tuned_pipeline, best_params = tune_model(
+    tuned_pipeline, best_params, _ = tune_model(
         pipeline=pipeline,
         train_X=train_X,
         train_y=train_y,

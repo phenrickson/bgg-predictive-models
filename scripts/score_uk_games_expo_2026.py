@@ -225,6 +225,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     if scored["year_published"].dtype != pl.Int64:
         scored = scored.with_columns(pl.col("year_published").cast(pl.Int64, strict=False))
+    if scored["game_id"].dtype != pl.Int64:
+        scored = scored.with_columns(pl.col("game_id").cast(pl.Int64, strict=False))
 
     bgg_pred_cols: List[str] = []
     if not args.no_bgg_predictions:
@@ -281,6 +283,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             column_formats[col] = "#,##0"
         if "year_published" in scored.columns:
             column_formats["year_published"] = "0"
+        if "game_id" in scored.columns:
+            column_formats["game_id"] = "0"
         scored.write_excel(
             workbook=str(out_path),
             worksheet=f"{args.username}_{args.outcome}",
@@ -288,7 +292,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 col: {
                     "type": "2_color_scale",
                     "min_color": "#ffffff",
-                    "max_color": "#08519c",
+                    "max_color": "#6baed6",
                 }
                 for col in heatmap_score_cols
             },

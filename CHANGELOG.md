@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.1] - 2026-04-30
+
+### Added
+
+- **Description embeddings as game-embedding features**: new
+  `embeddings.use_embeddings` flag in `config.yaml` (and on
+  `EmbeddingConfig`). When true, `EmbeddingDataLoader` INNER JOINs the
+  latest `bgg_description_embeddings` row per game and explodes the
+  embedding array into `emb_0..emb_{N-1}`, and
+  `create_embedding_preprocessor` forwards
+  `include_description_embeddings` through to `EmbeddingTransformer`
+  for passthrough into the SVD/PCA/UMAP/autoencoder/VAE input matrix.
+- **Config-driven preprocessor overrides for outcome models**:
+  `models.<outcome>.preprocessor_kwargs` (e.g.,
+  `normalize_row_families`) is now picked up by `outcomes/train.py`
+  and merged into `create_preprocessing_pipeline`. Computed values
+  (`preserve_columns`, `include_description_embeddings`,
+  `include_count_features`) take precedence so dynamic context is
+  never lost to a stale YAML setting.
+
+### Fixed
+
+- `EmbeddingTrainer.train` was passing
+  `tune_start=years.training.train_through` to `create_data_splits`,
+  which inflated `validation_window` by a year and pushed the test
+  window outside the loaded data, producing an empty test set. Now
+  passes `years.training.tune_start`.
+- `outcomes/train.py` correctly unpacks the third return value of
+  `tune_model` (the per-config results frame).
+
+### Misc
+
+- UK Games Expo 2026 scoring script: cast `game_id` to `Int64` and
+  apply integer Excel format; lighten heatmap max color.
+- Reporting/notebook dev deps added: `itables`, `nbclient`,
+  `openpyxl`, `plotly`, `xlsxwriter`.
+
 ## [0.5.0] - 2026-04-29
 
 ### Added
