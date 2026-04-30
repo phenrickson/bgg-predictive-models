@@ -114,6 +114,16 @@ def load_umap_coordinates(exp_path: str, dataset: str = "all") -> pl.DataFrame:
     return None
 
 
+@st.cache_data
+def load_pca_coordinates(exp_path: str, dataset: str = "all") -> pl.DataFrame:
+    """Load pre-computed PCA 2D coordinates."""
+    exp_path = Path(exp_path)
+    pca_path = exp_path / f"{dataset}_pca_coords.parquet"
+    if pca_path.exists():
+        return pl.read_parquet(pca_path)
+    return None
+
+
 def create_scree_plot(artifacts: dict) -> go.Figure:
     """Create scree plot from artifacts."""
     if "explained_variance_ratio" not in artifacts:
@@ -849,26 +859,41 @@ with tab3:
                         )
                         st.plotly_chart(fig, use_container_width=True)
 
-                        # Network plot using UMAP coordinates
-                        st.subheader("Neighbor Network (UMAP Space)")
-                        umap_coords = load_umap_coordinates(str(exp_path), "all")
+                        # Network plot using projected coordinates
+                        projection_space = st.radio(
+                            "Projection space",
+                            ["UMAP", "PCA"],
+                            horizontal=True,
+                            key=f"network_projection_{game_id}",
+                        )
 
-                        if umap_coords is not None:
-                            # Build lookup for UMAP coordinates
-                            umap_lookup = {
-                                row["game_id"]: (row["umap_1"], row["umap_2"])
-                                for row in umap_coords.iter_rows(named=True)
+                        st.subheader(f"Neighbor Network ({projection_space} Space)")
+
+                        if projection_space == "UMAP":
+                            coords_df = load_umap_coordinates(str(exp_path), "all")
+                            x_col, y_col = "umap_1", "umap_2"
+                            x_label, y_label = "UMAP 1", "UMAP 2"
+                        else:
+                            coords_df = load_pca_coordinates(str(exp_path), "all")
+                            x_col, y_col = "pca_1", "pca_2"
+                            x_label, y_label = "PCA 1", "PCA 2"
+
+                        if coords_df is not None:
+                            # Build lookup for projected coordinates
+                            coord_lookup = {
+                                row["game_id"]: (row[x_col], row[y_col])
+                                for row in coords_df.iter_rows(named=True)
                             }
 
-                            # Check if query and neighbors have UMAP coords
-                            if game_id in umap_lookup:
-                                query_x, query_y = umap_lookup[game_id]
+                            # Check if query and neighbors have coords
+                            if game_id in coord_lookup:
+                                query_x, query_y = coord_lookup[game_id]
 
                                 # Collect neighbor coordinates
                                 neighbor_data = []
                                 for row in similar_df.itertuples():
-                                    if row.game_id in umap_lookup:
-                                        nx, ny = umap_lookup[row.game_id]
+                                    if row.game_id in coord_lookup:
+                                        nx, ny = coord_lookup[row.game_id]
                                         score = row.similarity if metric == "cosine" else row.distance
                                         neighbor_data.append({
                                             "game_id": row.game_id,
@@ -933,8 +958,8 @@ with tab3:
 
                                     network_fig.update_layout(
                                         height=600,
-                                        xaxis_title="UMAP 1",
-                                        yaxis_title="UMAP 2",
+                                        xaxis_title=x_label,
+                                        yaxis_title=y_label,
                                         title=f"Neighbor Network for {query_name}",
                                         showlegend=True,
                                         legend=dict(
@@ -947,11 +972,11 @@ with tab3:
                                     )
                                     st.plotly_chart(network_fig, use_container_width=True)
                                 else:
-                                    st.info("No neighbors found with UMAP coordinates")
+                                    st.info(f"No neighbors found with {projection_space} coordinates")
                             else:
-                                st.info("Query game not found in UMAP coordinates")
+                                st.info(f"Query game not found in {projection_space} coordinates")
                         else:
-                            st.info("No pre-computed UMAP coordinates available for this experiment")
+                            st.info(f"No pre-computed {projection_space} coordinates available for this experiment")
                     else:
                         st.warning("Game not found in embeddings")
             else:
