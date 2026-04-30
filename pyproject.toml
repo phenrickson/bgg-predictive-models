@@ -51,6 +51,11 @@ embeddings = [
 [dependency-groups]
 dev = [
     "ipykernel>=6.29.5",
+    "itables>=2.7.3",
+    "nbclient>=0.10.4",
+    "openpyxl>=3.1.5",
+    "plotly>=6.2.0",
+    "xlsxwriter>=3.2.9",
 ]
 
 [tool.black]
