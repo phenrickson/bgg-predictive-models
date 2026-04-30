@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+import numpy as np
 import pandas as pd
 from google.cloud import bigquery
 
@@ -435,17 +436,20 @@ async def generate_embeddings(request: GenerateEmbeddingsRequest):
 
         logger.info(f"Generating embeddings for {len(games_df)} games...")
 
-        # Generate embeddings using pipeline transform
-        # Returns DataFrame with shape (n_games, embedding_dim)
+        # Generate embeddings using pipeline transform.
+        # The final step (SVD/PCA/UMAP/...) returns a numpy ndarray; older
+        # registered pipelines whose final step was the preprocessor returned
+        # a DataFrame. Normalize to ndarray so we always iterate rows.
         embeddings = pipeline.transform(games_df)
+        embeddings_array = (
+            embeddings.values if isinstance(embeddings, pd.DataFrame) else np.asarray(embeddings)
+        )
 
-        # Build results DataFrame
-        # embeddings.values converts to numpy array, iterate rows to get list of vectors
         results_df = pd.DataFrame({
             "game_id": games_df["game_id"].values,
             "name": games_df["name"].values if "name" in games_df.columns else None,
             "year_published": games_df["year_published"].values if "year_published" in games_df.columns else None,
-            "embedding": [row for row in embeddings.values],
+            "embedding": [row for row in embeddings_array],
         })
 
         # Upload to BigQuery (skip if specific game_ids provided - return in response)
