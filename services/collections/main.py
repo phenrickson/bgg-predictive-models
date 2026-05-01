@@ -96,3 +96,179 @@ def model_info(username: str, outcome: str):
         "finalize_through_year": entry.finalize_through_year,
         "status": entry.status,
     }
+
+
+import uuid  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from typing import List  # noqa: E402
+
+import polars as pl  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from services.collections.change_detection import find_unscored  # noqa: E402
+from services.collections.landing_uploader import (  # noqa: E402
+    CollectionPredictionRow, CollectionPredictionsUploader,
+)
+from src.data.loader import BGGDataLoader  # noqa: E402
+
+
+class PredictOwnRequest(BaseModel):
+    username: str
+    game_ids: Optional[List[int]] = None
+    use_change_detection: bool = False
+    upload_to_data_warehouse: bool = True
+    model_version: Optional[int] = None  # None = latest active
+
+
+class PredictOwnPrediction(BaseModel):
+    game_id: int
+    predicted_prob: float
+    predicted_label: bool
+
+
+class PredictOwnResponse(BaseModel):
+    job_id: str
+    username: str
+    outcome: str
+    model_version: int
+    n_scored: int
+    score_ts: datetime
+    predictions: List[PredictOwnPrediction]
+
+
+# Reuse a single BGGDataLoader for feature pulls
+_loader: Optional[BGGDataLoader] = None
+
+
+def _get_loader() -> BGGDataLoader:
+    global _loader
+    if _loader is None:
+        _loader = BGGDataLoader(config.get_bigquery_config())
+    return _loader
+
+
+# Cache loaded pipelines: (username, outcome, version) -> (pipeline, threshold)
+_PIPELINE_CACHE: dict = {}
+
+
+def _load_pipeline(username: str, outcome: str, version: int):
+    key = (username, outcome, version)
+    if key not in _PIPELINE_CACHE:
+        rcm = RegisteredCollectionModel(
+            username=username,
+            outcome=outcome,
+            bucket_name=BUCKET_NAME,
+            environment_prefix=ENVIRONMENT_PREFIX,
+            project_id=GCP_PROJECT_ID,
+        )
+        pipeline, threshold, _ = rcm.load(version=version)
+        _PIPELINE_CACHE[key] = (pipeline, threshold)
+    return _PIPELINE_CACHE[key]
+
+
+@app.post("/predict_own", response_model=PredictOwnResponse)
+def predict_own(req: PredictOwnRequest):
+    job_id = str(uuid.uuid4())
+
+    # 1. Resolve registry entry
+    entry = registry.lookup_latest(req.username, "own")
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active 'own' model for user {req.username!r}",
+        )
+    version = req.model_version if req.model_version is not None else entry.model_version
+
+    # 2. Determine target game_ids
+    if req.use_change_detection and req.game_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass either game_ids or use_change_detection=true, not both",
+        )
+    if req.use_change_detection:
+        game_ids = find_unscored(
+            username=req.username,
+            outcome="own",
+            model_version=version,
+            landing_table=LANDING_TABLE,
+            candidate_table="bgg-data-warehouse.analytics.games_features",
+            bq_client=bq_client,
+        )
+    elif req.game_ids:
+        game_ids = list(req.game_ids)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide game_ids or use_change_detection=true",
+        )
+
+    score_ts = datetime.now(timezone.utc)
+
+    if not game_ids:
+        return PredictOwnResponse(
+            job_id=job_id,
+            username=req.username,
+            outcome="own",
+            model_version=version,
+            n_scored=0,
+            score_ts=score_ts,
+            predictions=[],
+        )
+
+    # 3. Load pipeline + threshold
+    try:
+        pipeline, threshold = _load_pipeline(req.username, "own", version)
+    except Exception as e:  # GCS load / pickle errors
+        logger.exception("Failed loading pipeline")
+        raise HTTPException(status_code=502, detail=f"Pipeline load failed: {e}")
+
+    # 4. Pull features
+    try:
+        features_df = _get_loader().load_data().filter(pl.col("game_id").is_in(game_ids))
+        X = features_df.to_pandas()
+    except Exception as e:
+        logger.exception("Feature load failed")
+        raise HTTPException(status_code=502, detail=f"Feature load failed: {e}")
+
+    # 5. Score
+    proba = pipeline.predict_proba(X)[:, 1]
+    thr = threshold if threshold is not None else 0.5
+    labels = (proba >= thr)
+
+    predictions = [
+        PredictOwnPrediction(
+            game_id=int(gid),
+            predicted_prob=float(p),
+            predicted_label=bool(lbl),
+        )
+        for gid, p, lbl in zip(X["game_id"].tolist(), proba, labels)
+    ]
+
+    # 6. Upload
+    if req.upload_to_data_warehouse and predictions:
+        rows = [
+            CollectionPredictionRow(
+                job_id=job_id,
+                username=req.username,
+                game_id=p.game_id,
+                outcome="own",
+                predicted_prob=p.predicted_prob,
+                predicted_label=p.predicted_label,
+                threshold=threshold,
+                model_name=f"collection_own_{req.username}",
+                model_version=version,
+                score_ts=score_ts,
+            )
+            for p in predictions
+        ]
+        CollectionPredictionsUploader(LANDING_TABLE, bq_client).upload(rows)
+
+    return PredictOwnResponse(
+        job_id=job_id,
+        username=req.username,
+        outcome="own",
+        model_version=version,
+        n_scored=len(predictions),
+        score_ts=score_ts,
+        predictions=predictions,
+    )
