@@ -291,6 +291,9 @@ collections:
             - mechanics
             - categories
             - families
+  scoring:
+    registry_table: bgg-predictive-models.raw.collection_models_registry
+    landing_table: bgg-predictive-models.raw.collection_predictions_landing
 
 # Scoring Configuration
 scoring:

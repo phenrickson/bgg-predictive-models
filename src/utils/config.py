@@ -310,6 +310,14 @@ class Config:
             collections_dataset="collections",
         )
 
+    def get_collection_registry_table(self) -> str:
+        """Fully-qualified BQ table id for the collection models registry."""
+        return self.raw_config["collections"]["scoring"]["registry_table"]
+
+    def get_collection_landing_table(self) -> str:
+        """Fully-qualified BQ table id for the collection predictions landing table."""
+        return self.raw_config["collections"]["scoring"]["landing_table"]
+
 
 def load_config(config_path: Optional[str] = None) -> Config:
     """Load configuration from YAML file.
