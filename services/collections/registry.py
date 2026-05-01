@@ -46,7 +46,7 @@ class CollectionRegistry:
         rows = list(self.client.query(sql, job_config=job_config).result())
         if not rows:
             return None
-        r = max(rows, key=lambda row: row.model_version)
+        r = rows[0]
         return RegistryEntry(
             username=r.username,
             outcome=r.outcome,

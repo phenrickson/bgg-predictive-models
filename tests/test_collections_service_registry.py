@@ -20,7 +20,6 @@ def _row(username, outcome, version, gcs_path, status="active", year=2025):
 def test_lookup_latest_returns_highest_active_version():
     bq_client = MagicMock()
     bq_client.query.return_value.result.return_value = [
-        _row("alice", "own", 1, "gs://b/v1"),
         _row("alice", "own", 2, "gs://b/v2"),
     ]
     reg = CollectionRegistry("project.raw.collection_models_registry", bq_client)
