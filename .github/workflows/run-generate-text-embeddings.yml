@@ -133,3 +133,19 @@ jobs:
         echo "- **Batches Completed**: ${{ steps.generate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Total Games Embedded**: ${{ steps.generate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
 
+  notify-data-warehouse:
+    runs-on: ubuntu-latest
+    needs: generate-text-embeddings
+    if: always() && github.ref == 'refs/heads/main' && needs.generate-text-embeddings.result == 'success'
+
+    steps:
+    - name: Notify Data Warehouse
+      env:
+        GITHUB_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+      run: |
+        curl -X POST \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/phenrickson/bgg-data-warehouse/dispatches \
+          -d '{"event_type": "text_embeddings_complete", "client_payload": {"run_id": "${{ github.run_id }}", "total_games": "${{ needs.generate-text-embeddings.outputs.total_games }}"}}'
+
