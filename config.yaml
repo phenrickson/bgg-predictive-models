@@ -53,31 +53,23 @@ models:
     type: logistic
     experiment_name: logistic-hurdle-normalize
     use_embeddings: true
-    preprocessor_kwargs:
-      normalize_row_families: [ mechanics, categories, families ]
   complexity:
     type: ard
     experiment_name: ard-complexity-normalize
     use_sample_weights: false
     use_embeddings: true
-    preprocessor_kwargs:
-      normalize_row_families: [ mechanics, categories, families ]
   rating:
     type: ard
     experiment_name: ard-ridge-rating-normalize
     use_sample_weights: false
     min_ratings: 5
     use_embeddings: true
-    preprocessor_kwargs:
-      normalize_row_families: [ mechanics, categories, families ]
   users_rated:
     type: ard
     experiment_name: ard-ridge-users_rated-normalize
     use_sample_weights: false
     min_ratings: 0
     use_embeddings: true
-    preprocessor_kwargs:
-      normalize_row_families: [ mechanics, categories, families ]
   geek_rating:
     type: ard
     experiment_name: ard-geek_rating-normalize
@@ -85,8 +77,6 @@ models:
     min_ratings: 25 # only used for direct mode
     use_embeddings: true # only used for direct mode
     include_predictions: true
-    preprocessor_kwargs:
-      normalize_row_families: [ mechanics, categories, families ]
 
 # Evaluate models over time
 evaluate:
