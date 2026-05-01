@@ -16,6 +16,11 @@ resource "google_bigquery_table" "collection_predictions_landing" {
 
   schema = jsonencode([
     {
+      name = "job_id"
+      type = "STRING"
+      mode = "REQUIRED"
+    },
+    {
       name = "username"
       type = "STRING"
       mode = "REQUIRED"

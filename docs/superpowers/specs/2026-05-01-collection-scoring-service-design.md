@@ -126,6 +126,7 @@ Append-only. Partitioned by `score_ts`, clustered by `(username, game_id)`.
 
 | Column | Type |
 |--------|------|
+| `job_id` | STRING |
 | `username` | STRING |
 | `game_id` | INT64 |
 | `outcome` | STRING |
@@ -135,6 +136,11 @@ Append-only. Partitioned by `score_ts`, clustered by `(username, game_id)`.
 | `model_name` | STRING |
 | `model_version` | INT64 |
 | `score_ts` | TIMESTAMP |
+
+`job_id` is generated server-side per `/predict_own` call (UUID4) and is shared
+across every row produced by that call. Matches the convention used by
+`ml_predictions_landing` so all rows from one scoring run can be joined back to
+a single invocation.
 
 History is preserved across model versions: a v2 model produces new rows
 without touching v1 rows. Downstream Dataform views can deduplicate to
