@@ -224,7 +224,13 @@ def predict_own(req: PredictOwnRequest):
 
     # 4. Pull features
     try:
-        features_df = _get_loader().load_data().filter(pl.col("game_id").is_in(game_ids))
+        # Match the training-side and Streamlit feature loading: include
+        # predicted_complexity. Pipelines were fit with this column.
+        features_df = (
+            _get_loader()
+            .load_features(use_predicted_complexity=True, use_embeddings=False)
+            .filter(pl.col("game_id").is_in(game_ids))
+        )
         X = features_df.to_pandas()
     except Exception as e:
         logger.exception("Feature load failed")

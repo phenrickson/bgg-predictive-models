@@ -155,6 +155,8 @@ text_embeddings:
 collections:
   users:
     - phenrickson
+    - GOBBluth89
+    - TomBrewstErr
   deploy:
     own:
       candidate: logistic_row_norm
