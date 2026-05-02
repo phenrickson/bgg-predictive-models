@@ -135,14 +135,14 @@ promote-all outcome="own":
     deployed=0; skipped=0; failed=0; \
     while IFS= read -r u; do \
         [ -z "$u" ] && continue; \
-        path="{{local_root}}/{{environment}}/$u/{{outcome}}/$cand"; \
+        path="{{local_root}}/$u/{{outcome}}/$cand"; \
         if ! ls $path/v*/finalized.pkl 2>/dev/null | grep -q .; then \
             echo "skip $u: no finalized.pkl under $path"; \
             skipped=$((skipped + 1)); \
             continue; \
         fi; \
         echo "=== promote $u {{outcome}} $cand ==="; \
-        if just username=$u outcome={{outcome}} candidate=$cand promote; then \
+        if just username=$u promote {{outcome}} $cand; then \
             deployed=$((deployed + 1)); \
         else \
             echo "FAIL: $u"; \

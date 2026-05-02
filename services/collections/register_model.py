@@ -40,7 +40,10 @@ def register_collection(
     environment: str = "dev",
     local_root: str = "models/collections",
 ) -> dict:
-    cand_root = Path(local_root) / environment / username / outcome / candidate
+    # Local layout matches src/collection/collection_artifact_storage.py:
+    # {local_root}/{username}/{outcome}/{candidate}/v{N}/. The `environment`
+    # arg controls the GCS prefix and registry context, not the local path.
+    cand_root = Path(local_root) / username / outcome / candidate
     if not cand_root.is_dir():
         raise FileNotFoundError(f"Candidate dir not found: {cand_root}")
 
