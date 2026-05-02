@@ -67,25 +67,37 @@ jobs:
         run: |
           TOTAL=0
           FAIL_USERS=()
+          MAX_BATCHES_PER_USER=10  # 10 batches * 25k = 250k games max per user
+
           while IFS= read -r USER; do
             [ -z "$USER" ] && continue
             echo "=== Scoring $USER ==="
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "${{ steps.get-url.outputs.service_url }}/predict_own" \
-              -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
-              -H "Content-Type: application/json" \
-              -d "{\"username\":\"$USER\",\"use_change_detection\":true,\"upload_to_data_warehouse\":true}" \
-              --max-time 1800)
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            BODY=$(echo "$RESPONSE" | head -n-1)
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "FAIL ($HTTP_CODE) for $USER: $BODY"
-              FAIL_USERS+=("$USER")
-              continue
-            fi
-            N=$(echo "$BODY" | jq -r '.n_scored')
-            echo "$USER: scored $N"
-            TOTAL=$((TOTAL + N))
+            USER_TOTAL=0
+            BATCH=0
+            while [ $BATCH -lt $MAX_BATCHES_PER_USER ]; do
+              BATCH=$((BATCH + 1))
+              RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+                "${{ steps.get-url.outputs.service_url }}/predict_own" \
+                -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+                -H "Content-Type: application/json" \
+                -d "{\"username\":\"$USER\",\"use_change_detection\":true,\"upload_to_data_warehouse\":true}" \
+                --max-time 600)
+              HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+              BODY=$(echo "$RESPONSE" | head -n-1)
+              if [ "$HTTP_CODE" != "200" ]; then
+                echo "FAIL ($HTTP_CODE) for $USER batch $BATCH: $BODY"
+                FAIL_USERS+=("$USER")
+                break
+              fi
+              N=$(echo "$BODY" | jq -r '.n_scored')
+              USER_TOTAL=$((USER_TOTAL + N))
+              echo "$USER batch $BATCH: scored $N (user total: $USER_TOTAL)"
+              if [ "$N" -eq 0 ]; then
+                break
+              fi
+              sleep 5
+            done
+            TOTAL=$((TOTAL + USER_TOTAL))
           done <<< "${{ steps.users.outputs.users }}"
 
           echo "total=$TOTAL" >> $GITHUB_OUTPUT

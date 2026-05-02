@@ -54,7 +54,7 @@ def test_predict_own_with_explicit_game_ids_returns_predictions(mocked_app):
 
         # Stub feature loader
         m._loader = MagicMock()
-        m._loader.load_data.return_value = pl.DataFrame({"game_id": [10, 11], "x": [1.0, 2.0]})
+        m._loader.load_features.return_value = pl.DataFrame({"game_id": [10, 11], "x": [1.0, 2.0]})
 
         # Stub uploader so we don't hit BQ
         with patch("services.collections.main.CollectionPredictionsUploader") as up_cls:

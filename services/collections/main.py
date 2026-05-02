@@ -136,6 +136,11 @@ class PredictOwnResponse(BaseModel):
     predictions: List[PredictOwnPrediction]
 
 
+# Cap per-request work to bound Cloud Run memory. The daily GHA loops calls
+# until n_scored==0, mirroring the run-complexity-scoring workflow.
+MAX_GAMES_PER_REQUEST = 25000
+
+
 # Reuse a single BGGDataLoader for feature pulls
 _loader: Optional[BGGDataLoader] = None
 
@@ -193,6 +198,7 @@ def predict_own(req: PredictOwnRequest):
             landing_table=LANDING_TABLE,
             candidate_table="bgg-data-warehouse.analytics.games_features",
             bq_client=bq_client,
+            limit=MAX_GAMES_PER_REQUEST,
         )
     elif req.game_ids:
         game_ids = list(req.game_ids)

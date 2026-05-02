@@ -11,7 +11,7 @@ import pytest
 def _make_candidate_dir(tmp_path: Path, *, finalized: bool, train_only: bool):
     """Build a candidate dir with optional finalized.pkl / model.pkl."""
     cand_root = (
-        tmp_path / "models" / "collections" / "dev" / "alice" / "own" / "lgbm_default"
+        tmp_path / "models" / "collections" / "alice" / "own" / "lgbm_default"
     )
     v1 = cand_root / "v1"
     v1.mkdir(parents=True)
