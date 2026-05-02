@@ -288,6 +288,37 @@ scoring-service-upload:
 	--upload-to-bigquery \
 	--download
 
+### collection scoring service
+.PHONY: docker-collections-scoring start-collections-scoring stop-collections-scoring collections-scoring-service
+
+docker-collections-scoring:
+	docker build -f docker/collections.Dockerfile -t bgg-collection-scoring .
+
+start-collections-scoring: docker-collections-scoring
+	@docker rm -f bgg-collection-scoring 2>/dev/null || true
+	docker run -d \
+	--name bgg-collection-scoring \
+	-p 8088:8080 \
+	-v $(PWD)/credentials:/app/credentials \
+	-e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
+	--env-file .env \
+	bgg-collection-scoring
+
+stop-collections-scoring:
+	@if docker ps -q --filter name=bgg-collection-scoring | grep -q .; then \
+		echo "Stopping collection scoring service container"; \
+		docker stop bgg-collection-scoring && docker rm bgg-collection-scoring; \
+	else \
+		echo "No running collection scoring service container found"; \
+		docker rm bgg-collection-scoring 2>/dev/null || true; \
+	fi
+
+collections-scoring-service:
+	@if [ -z "$(USERNAME)" ]; then echo "USERNAME required, e.g. make collections-scoring-service USERNAME=phenrickson"; exit 1; fi
+	curl -X POST http://localhost:8088/predict_own \
+		-H "Content-Type: application/json" \
+		-d '{"username":"$(USERNAME)","use_change_detection":true,"upload_to_data_warehouse":true}'
+
 # Streamlit targets
 .PHONY: streamlit-build streamlit-run streamlit-stop
 

@@ -98,8 +98,9 @@ finalize-all outcome="own" finalize_through="":
         exit 1
     fi
 
-# Register a trained collection model to GCS for the standalone scoring
-# service. Prefers the finalized refit if present.
+# Register a finalized collection model to GCS for the standalone scoring
+# service AND insert a row in the BQ registry. Strict-finalized: requires
+# finalized.pkl (run `finalize` first).
 promote outcome="own" candidate="lgbm_default" version="latest" description="":
     uv run python -m services.collections.register_model \
         --username {{username}} --environment {{environment}} --outcome {{outcome}} \
@@ -116,6 +117,40 @@ promote-many outcomes candidate="lgbm_default" version="latest" description="":
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
         --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}")"
+
+# Promote the configured candidate (collections.deploy.{outcome}.candidate)
+# for every user in collections.users. Skips users without a finalized
+# artifact for that candidate. Continue-on-error; exits non-zero if any user
+# genuinely failed.
+#
+#   just promote-all
+#   just promote-all outcome=own
+promote-all outcome="own":
+    @users=$(uv run python -c "import yaml; \
+        c = yaml.safe_load(open('config.yaml')); \
+        print('\n'.join(c['collections']['users']))"); \
+    cand=$(uv run python -c "import yaml; \
+        c = yaml.safe_load(open('config.yaml')); \
+        print(c['collections']['deploy']['{{outcome}}']['candidate'])"); \
+    deployed=0; skipped=0; failed=0; \
+    while IFS= read -r u; do \
+        [ -z "$u" ] && continue; \
+        path="{{local_root}}/{{environment}}/$u/{{outcome}}/$cand"; \
+        if ! ls $path/v*/finalized.pkl 2>/dev/null | grep -q .; then \
+            echo "skip $u: no finalized.pkl under $path"; \
+            skipped=$((skipped + 1)); \
+            continue; \
+        fi; \
+        echo "=== promote $u {{outcome}} $cand ==="; \
+        if just username=$u outcome={{outcome}} candidate=$cand promote; then \
+            deployed=$((deployed + 1)); \
+        else \
+            echo "FAIL: $u"; \
+            failed=$((failed + 1)); \
+        fi; \
+    done <<< "$users"; \
+    echo "promote-all: deployed=$deployed skipped=$skipped failed=$failed"; \
+    [ $failed -eq 0 ]
 
 # List registered collection models for a user from GCS.
 #   just verify

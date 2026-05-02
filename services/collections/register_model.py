@@ -7,10 +7,13 @@ import json
 import logging
 import pickle
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Union
 
 from services.collections.registered_model import RegisteredCollectionModel
+from services.collections.registry_writer import RegistryWriter
+from src.utils.config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +48,12 @@ def register_collection(
     version_dir = cand_root / f"v{resolved}"
 
     finalized = version_dir / "finalized.pkl"
-    train_only = version_dir / "model.pkl"
-    if finalized.exists():
-        pipeline_path, kind = finalized, "finalized"
-    elif train_only.exists():
-        pipeline_path, kind = train_only, "train_only"
-    else:
-        raise FileNotFoundError(f"No finalized.pkl or model.pkl in {version_dir}")
+    if not finalized.exists():
+        raise FileNotFoundError(
+            f"Finalized artifact not found: {finalized}. "
+            f"Run finalize before promoting."
+        )
+    pipeline_path, kind = finalized, "finalized"
 
     pipeline = pickle.loads(pipeline_path.read_bytes())
 
@@ -82,6 +84,29 @@ def register_collection(
         "Registered %s/%s as v%d (kind=%s, source v%d)",
         username, outcome, registration["version"], kind, resolved,
     )
+
+    # Insert into the BQ registry so the scoring service can find this deployment.
+    cfg = load_config()
+    registry_table = cfg.get_collection_registry_table()
+    bucket = cfg.get_bucket_name()
+    env = cfg.get_environment_prefix()
+    gcs_path = (
+        f"gs://{bucket}/{env}/services/collections/"
+        f"{username}/{outcome}/v{registration['version']}/"
+    )
+    RegistryWriter(registry_table).register_deployment(
+        username=username,
+        outcome=outcome,
+        model_version=registration["version"],
+        gcs_path=gcs_path,
+        # The finalize step writes "finalize_through" to candidate
+        # registration.json (see src/collection/collection_artifact_storage.py
+        # save_finalized_pipeline). Map it to the registry's
+        # finalize_through_year column.
+        finalize_through_year=cand_reg.get("finalize_through"),
+        registered_at=datetime.now(timezone.utc),
+    )
+
     return registration
 
 

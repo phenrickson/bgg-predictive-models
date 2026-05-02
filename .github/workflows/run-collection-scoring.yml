@@ -1,0 +1,104 @@
+name: Run Collection Scoring Service
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 1 hour after run-scoring-service.yml
+  workflow_dispatch: {}
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  score-collections:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Environment Variables
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get Service URL
+        id: get-url
+        run: |
+          SERVICE_URL=$(gcloud run services describe bgg-collection-scoring \
+            --region us-central1 --format 'value(status.url)')
+          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+      - name: Get ID Token
+        id: id-token
+        run: |
+          ID_TOKEN=$(gcloud auth print-identity-token)
+          echo "::add-mask::$ID_TOKEN"
+          echo "token=$ID_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: List Active Users from Registry
+        id: users
+        run: |
+          USERS=$(bq query --use_legacy_sql=false --format=csv \
+            "SELECT DISTINCT username FROM \`bgg-predictive-models.raw.collection_models_registry\` WHERE outcome='own' AND status='active'" \
+            | tail -n +2)
+          echo "users<<EOF" >> $GITHUB_OUTPUT
+          echo "$USERS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Score Each User
+        id: score
+        run: |
+          TOTAL=0
+          FAIL_USERS=()
+          while IFS= read -r USER; do
+            [ -z "$USER" ] && continue
+            echo "=== Scoring $USER ==="
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+              "${{ steps.get-url.outputs.service_url }}/predict_own" \
+              -H "Authorization: Bearer ${{ steps.id-token.outputs.token }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"username\":\"$USER\",\"use_change_detection\":true,\"upload_to_data_warehouse\":true}" \
+              --max-time 1800)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "FAIL ($HTTP_CODE) for $USER: $BODY"
+              FAIL_USERS+=("$USER")
+              continue
+            fi
+            N=$(echo "$BODY" | jq -r '.n_scored')
+            echo "$USER: scored $N"
+            TOTAL=$((TOTAL + N))
+          done <<< "${{ steps.users.outputs.users }}"
+
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "failed=${FAIL_USERS[*]}" >> $GITHUB_OUTPUT
+          if [ ${#FAIL_USERS[@]} -gt 0 ]; then
+            echo "::error::failed users: ${FAIL_USERS[*]}"
+            exit 1
+          fi
+
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "## Collection Scoring Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Environment: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Total scored: ${{ steps.score.outputs.total }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Failed users: ${{ steps.score.outputs.failed }}" >> $GITHUB_STEP_SUMMARY

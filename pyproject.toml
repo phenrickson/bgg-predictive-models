@@ -50,6 +50,7 @@ embeddings = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "ipykernel>=6.29.5",
     "itables>=2.7.3",
     "nbclient>=0.10.4",
