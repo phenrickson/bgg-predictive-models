@@ -21,8 +21,10 @@ def test_build_unscored_query_uses_left_anti_join_against_landing():
 
 def test_find_unscored_returns_game_ids_only_for_missing_rows():
     bq_client = MagicMock()
-    row1 = MagicMock(); row1.game_id = 7
-    row2 = MagicMock(); row2.game_id = 42
+    row1 = MagicMock()
+    row1.game_id = 7
+    row2 = MagicMock()
+    row2.game_id = 42
     bq_client.query.return_value.result.return_value = [row1, row2]
 
     unscored = find_unscored(

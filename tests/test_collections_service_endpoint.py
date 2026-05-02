@@ -1,6 +1,5 @@
 """End-to-end test of /predict_own with all GCP calls mocked."""
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -101,7 +100,9 @@ def test_predict_own_returns_404_when_user_not_registered(mocked_app):
 
 def test_predict_own_rejects_both_game_ids_and_change_detection(mocked_app):
     m = mocked_app
-    entry = MagicMock(); entry.model_version = 1; entry.gcs_path = "gs://x"
+    entry = MagicMock()
+    entry.model_version = 1
+    entry.gcs_path = "gs://x"
     m.registry.lookup_latest = MagicMock(return_value=entry)
     client = TestClient(m.app)
 
