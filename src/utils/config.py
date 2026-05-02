@@ -318,6 +318,14 @@ class Config:
         """Fully-qualified BQ table id for the collection predictions landing table."""
         return self.raw_config["collections"]["scoring"]["landing_table"]
 
+    def get_collection_users(self) -> list[str]:
+        """Flat list of usernames whose collection models should be deployed."""
+        return list(self.raw_config["collections"]["users"])
+
+    def get_collection_deploy_candidate(self, outcome: str) -> str:
+        """Candidate name to deploy for the given outcome (e.g. 'logistic_row_norm')."""
+        return self.raw_config["collections"]["deploy"][outcome]["candidate"]
+
 
 def load_config(config_path: Optional[str] = None) -> Config:
     """Load configuration from YAML file.
