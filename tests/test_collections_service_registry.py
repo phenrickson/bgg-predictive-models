@@ -1,9 +1,8 @@
 """Tests for services.collections.registry.CollectionRegistry."""
 
 from unittest.mock import MagicMock
-import pytest
 
-from services.collections.registry import CollectionRegistry, RegistryEntry
+from services.collections.registry import CollectionRegistry
 
 
 def _row(username, outcome, version, gcs_path, status="active", year=2025):
