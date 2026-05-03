@@ -1,9 +1,11 @@
 name: Score Complexity Predictions
 
 on:
-  # Triggered by data warehouse after Dataform completes
+  # Triggered after Dataform propagates description embeddings. Complexity
+  # scoring INNER JOINs to predictions.bgg_description_embeddings, so it must
+  # run after text embeddings have been written for any newly-fetched games.
   repository_dispatch:
-    types: [dataform_complete]
+    types: [dataform_text_embeddings_ready]
 
   workflow_dispatch:
     inputs:

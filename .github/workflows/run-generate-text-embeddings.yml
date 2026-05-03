@@ -1,11 +1,11 @@
 name: Run Text Embeddings
 
 on:
-  # Triggered after main scoring service completes
-  workflow_run:
-    workflows: ["Run Scoring Service"]
-    types: [completed]
-    branches: [main]
+  # Triggered after Dataform refreshes analytics.games_features so brand-new
+  # games get description embeddings before complexity scoring needs them
+  # (complexity INNER JOINs to predictions.bgg_description_embeddings).
+  repository_dispatch:
+    types: [dataform_complete]
 
   workflow_dispatch:
     inputs:
@@ -25,8 +25,6 @@ jobs:
   generate-text-embeddings:
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
-    # Skip if triggered by workflow_run and upstream failed
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       total_games: ${{ steps.generate.outputs.total_games }}
       batch_count: ${{ steps.generate.outputs.batch_count }}
