@@ -242,6 +242,26 @@ def predict_own(req: PredictOwnRequest):
         logger.exception("Feature load failed")
         raise HTTPException(status_code=502, detail=f"Feature load failed: {e}")
 
+    # Defense: change-detection can return game_ids that don't materialize in
+    # the joined features view (e.g. streaming-buffer lag, stale lookup).
+    # Treat zero-row feature frames as "nothing to score this batch" rather
+    # than letting sklearn raise an unhelpful column-name error.
+    if X.empty:
+        logger.warning(
+            "find_unscored returned %d game_ids but features filter yielded 0 rows; "
+            "returning n_scored=0 for this batch",
+            len(game_ids),
+        )
+        return PredictOwnResponse(
+            job_id=job_id,
+            username=req.username,
+            outcome="own",
+            model_version=version,
+            n_scored=0,
+            score_ts=score_ts,
+            predictions=[],
+        )
+
     # 5. Score
     proba = pipeline.predict_proba(X)[:, 1]
     thr = threshold if threshold is not None else 0.5
