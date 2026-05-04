@@ -1,0 +1,15 @@
+/* Styles for the collection report. Minimal — Quarto's cerulean theme
+   does most of the work. */
+
+.scroll {
+    max-height: 600px;
+    overflow: auto;
+}
+
+.callout-note {
+    border-left: 4px solid #4fc3f7;
+}
+
+table.dataTable {
+    font-size: 0.9em;
+}

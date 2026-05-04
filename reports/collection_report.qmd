@@ -1,0 +1,279 @@
+---
+title: "Predicting Board Game Collections"
+subtitle: "{{< meta username >}}'s Collection"
+author: "Phil Henrickson"
+date: today
+format:
+  html:
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: true
+    theme: cerulean
+    css: styles.css
+    fig-align: center
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  username: phenrickson
+  outcome: own
+  source: local
+  candidate: null
+---
+
+```{python}
+#| label: setup
+#| include: false
+import polars as pl
+import pandas as pd
+from itables import show as itables_show
+
+from src.reports.collection_data import load
+from src.collection.viz import (
+    collection_datatable,
+    extract_finalized_importance,
+    metrics_table,
+    plot_collection_by_category,
+    plot_collection_by_year,
+    plot_feature_importance,
+    plot_partial_effects_by_group,
+    plot_separation,
+    predictions_datatable,
+    top_n_by_year_table,
+)
+
+candidate_param = "{{< meta candidate >}}"
+candidates = None
+if candidate_param and candidate_param.lower() not in ("none", "null", ""):
+    candidates = {"{{< meta outcome >}}": candidate_param}
+
+data = load(
+    username="{{< meta username >}}",
+    outcomes="{{< meta outcome >}}",
+    source="{{< meta source >}}",
+    candidates=candidates,
+)
+arts = data.outcomes["{{< meta outcome >}}"]
+```
+
+# About
+
+This report examines a classification model trained to predict whether a
+user owns a game on BoardGameGeek. The model learns from features that
+are observable about a game at release — its publisher, mechanics,
+designers, playing time, and so on — and never reads BGG community
+information like average rating or weight, so it can score newly
+released games without leaking signal from the community after release.
+
+::: {.callout-note}
+To jump to the model's predictions for new and upcoming games, see the
+[Predictions](#predictions) section.
+:::
+
+# Collection
+
+The data in this project comes from BoardGameGeek. The unit of
+observation is a game. We train a classification model at the user
+level to learn the relationship between game features and games a user
+owns — what predicts a user's collection?
+
+## Types of Games
+
+What kinds of games does the user own? The plot below shows the most
+frequent designers, publishers, mechanics, categories, and so on that
+appear in their collection.
+
+```{python}
+#| label: types-of-games
+#| fig-height: 7
+plot_collection_by_category(data.collection, data.games)
+```
+
+The histogram below shows the years in which games in the user's
+collection were published. This often hints at when someone first
+entered the hobby.
+
+```{python}
+#| label: collection-by-year
+plot_collection_by_year(data.collection, data.games)
+```
+
+## Games in Collection
+
+The full collection, sortable and filterable. Use the table to find a
+game for the next game night.
+
+```{python}
+#| label: collection-table
+itables_show(
+    collection_datatable(data.collection, data.games),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+)
+```
+
+# Modeling
+
+For each user we train a binary classifier whose target is whether the
+user owns a given game. The training process examines historical games
+and learns which features tend to co-occur with games a user owns.
+Features are dummies indicating presence/absence of designers, artists,
+publishers, plus continuous features for playing time, player counts,
+and recommended minimum age.
+
+::: {.callout-note}
+The model only uses features observable at release. It does not consume
+BGG community signals (average rating, weight, number of users rated)
+so it can score upcoming games before the community has weighed in.
+:::
+
+## What Predicts A Collection?
+
+Beyond predictions, the model tells us *what* it learned. For a
+penalized logistic regression the coefficients tell us, for each
+feature, how much it shifts the log-odds of a user owning a game.
+Positive values increase the probability; negative values decrease it.
+
+```{python}
+#| label: feature-importance
+#| fig-height: 6
+plot_feature_importance(
+    arts.feature_importance.to_pandas(),
+    top_pos=25,
+    top_neg=25,
+    interactive=True,
+    title="Feature importance",
+)
+```
+
+## Partial Effects
+
+The same coefficients, broken out by feature family. Use the tabs to
+inspect each group.
+
+```{python}
+#| label: partial-effects-build
+#| include: false
+plots = plot_partial_effects_by_group(arts.feature_importance.to_pandas())
+```
+
+::: {.panel-tabset .nav-pills}
+
+```{python}
+#| label: partial-effects-tabs
+#| output: asis
+for name, fig in plots.items():
+    print(f"### {name}\n")
+    print("```{=html}")
+    print(fig.to_html(include_plotlyjs="cdn", full_html=False))
+    print("```\n")
+```
+
+:::
+
+# Assessment
+
+How well did the model do? The metrics below are computed on the
+training (out-of-fold), validation, and test splits.
+
+```{python}
+#| label: metrics-table
+metrics_table(arts.registration)
+```
+
+A separation plot ranks every prediction from highest to lowest. Each
+blue tick is a game the user owns. A good model places its blue ticks
+on the left.
+
+```{python}
+#| label: separation-oof
+#| fig-height: 4
+plot_separation(arts.oof_predictions, title="Out-of-fold")
+```
+
+```{python}
+#| label: separation-val
+#| fig-height: 4
+plot_separation(arts.val_predictions, title="Validation")
+```
+
+## Top Games in Training
+
+The highest-scored games from the training (out-of-fold) split.
+
+```{python}
+#| label: top-games-training
+itables_show(
+    predictions_datatable(arts.oof_predictions, data.games, top_n=200),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+)
+```
+
+## Top Games in Validation
+
+```{python}
+#| label: top-games-validation
+itables_show(
+    predictions_datatable(arts.val_predictions, data.games, top_n=200),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+)
+```
+
+## Top Games by Year
+
+Side-by-side comparison of the model's top picks for each year.
+
+```{python}
+#| label: top-games-by-year
+all_eval = pl.concat(
+    [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
+    how="diagonal_relaxed",
+)
+top_n_by_year_table(all_eval, top_n=15).to_pandas()
+```
+
+# Predictions {#predictions}
+
+## New and Upcoming Games
+
+Predictions for new and upcoming releases, generated by the deployed
+model.
+
+```{python}
+#| label: predictions-upcoming
+itables_show(
+    predictions_datatable(
+        arts.upcoming_predictions, data.games, top_n=200, min_users_rated=1
+    ),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+)
+```
+
+## Older Games
+
+High-scoring older games from the model's evaluation splits, filtered
+to games with enough community ratings to be plausible recommendations.
+
+```{python}
+#| label: predictions-older
+older = pl.concat(
+    [arts.oof_predictions, arts.val_predictions], how="diagonal_relaxed"
+)
+itables_show(
+    predictions_datatable(older, data.games, top_n=500, min_users_rated=5),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+)
+```
