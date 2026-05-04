@@ -49,3 +49,27 @@ def test_extract_finalized_importance_returns_none_when_unsupported():
     )
     out = extract_finalized_importance(pipeline, pd.DataFrame({"x": [1, 2]}))
     assert out is None
+
+
+from src.collection.viz import metrics_table
+
+
+def test_metrics_table_returns_wide_dataframe():
+    registration = {
+        "metrics": {"roc_auc": 0.85, "pr_auc": 0.6},
+        "val_metrics": {"roc_auc": 0.82, "pr_auc": 0.55},
+        "oof_metrics": {"overall": {"roc_auc": 0.8, "pr_auc": 0.5}},
+    }
+    df = metrics_table(registration)
+    assert "split" in df.columns
+    assert "roc_auc" in df.columns
+    assert "pr_auc" in df.columns
+    splits = set(df["split"].tolist())
+    assert {"val", "oof", "test"}.issubset(splits)
+
+
+def test_metrics_table_handles_missing_metrics():
+    df = metrics_table({})
+    assert df.height == 0 if hasattr(df, "height") else len(df) == 0
+    # pandas DataFrame at least has the split column header
+    assert "split" in df.columns

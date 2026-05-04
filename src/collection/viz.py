@@ -405,3 +405,27 @@ def extract_finalized_importance(
     out = pd.DataFrame({"feature": names, "value": values})
     out["abs_value"] = out["value"].abs()
     return out.sort_values("abs_value", ascending=False).reset_index(drop=True)
+
+
+def metrics_table(registration: dict) -> pd.DataFrame:
+    """One-row-per-split metrics frame from a registration.json.
+
+    Splits surfaced (in this order): ``val``, ``oof``, ``test``. Missing
+    splits are dropped. Numeric metrics are kept as-is so downstream
+    formatters can apply their own rounding.
+    """
+    rows: list[dict[str, Any]] = []
+    splits = {
+        "val": registration.get("val_metrics") or {},
+        "oof": (registration.get("oof_metrics") or {}).get("overall") or {},
+        "test": registration.get("metrics") or {},
+    }
+    for split_name, metrics in splits.items():
+        if not metrics:
+            continue
+        row: dict[str, Any] = {"split": split_name}
+        row.update({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=["split"])
+    return pd.DataFrame(rows)
