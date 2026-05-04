@@ -156,3 +156,132 @@ def _read_pickle(uri: str):
 def _read_parquet(uri: str) -> pl.DataFrame:
     """Polars reads gs:// natively; for local paths just pass through."""
     return pl.read_parquet(uri)
+
+
+from src.collection.viz import extract_finalized_importance
+
+
+def _outcome_root(source: str, username: str, outcome: str) -> str:
+    """Compose the outcome-level URI/path. Trailing slash safe."""
+    base = source.rstrip("/")
+    return f"{base}/{username}/{outcome}"
+
+
+def _candidate_root(
+    source: str, username: str, outcome: str, candidate: str, version: int
+) -> str:
+    return f"{_outcome_root(source, username, outcome)}/{candidate}/v{version}"
+
+
+def _splits_root(source: str, username: str, outcome: str, version: int) -> str:
+    return f"{_outcome_root(source, username, outcome)}/_splits/v{version}"
+
+
+def _fetch_collection_snapshot(username: str) -> pl.DataFrame:
+    """Latest BGG collection snapshot for the user. Implemented in Task 9."""
+    raise NotImplementedError("Task 9 implements BQ collection snapshot fetch")
+
+
+def _fetch_games_metadata() -> pl.DataFrame:
+    """Game metadata used for joining into prediction tables. Task 9."""
+    raise NotImplementedError("Task 9 implements BQ games-metadata fetch")
+
+
+def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
+    """Deployed-model predictions from raw.collection_predictions_landing.
+    Implemented in Task 9."""
+    raise NotImplementedError("Task 9 implements BQ upcoming predictions fetch")
+
+
+def _load_outcome(
+    source: str,
+    username: str,
+    outcome: str,
+    candidate_override: str | None,
+) -> OutcomeArtifacts:
+    """Load all per-outcome artifacts. Pure filesystem reads + pipeline
+    introspection; no BQ."""
+    if Path(source).exists() and not source.startswith("gs://"):
+        candidate, version = select_candidate(
+            Path(source), username, outcome, candidate=candidate_override
+        )
+    else:
+        if candidate_override is None:
+            raise NotImplementedError(
+                "GCS source requires an explicit candidate override until "
+                "GCS-aware candidate selection is implemented."
+            )
+        candidate = candidate_override
+        version = 1
+
+    cand_root = _candidate_root(source, username, outcome, candidate, version)
+    registration = _read_json(f"{cand_root}/registration.json")
+    threshold_blob = _read_json(f"{cand_root}/threshold.json")
+    threshold = threshold_blob.get("threshold")
+
+    pipeline = _read_pickle(f"{cand_root}/finalized.pkl")
+
+    splits_version = registration.get("splits_version", version)
+    splits_train = _read_parquet(
+        f"{_splits_root(source, username, outcome, splits_version)}/train.parquet"
+    )
+    feature_importance_pdf = extract_finalized_importance(
+        pipeline, splits_train.head(5).to_pandas()
+    )
+    if feature_importance_pdf is None:
+        feature_importance = pl.DataFrame()
+    else:
+        feature_importance = pl.from_pandas(feature_importance_pdf)
+
+    oof = _read_parquet(f"{cand_root}/predictions/oof.parquet")
+    val = _read_parquet(f"{cand_root}/predictions/val.parquet")
+    test = _read_parquet(f"{cand_root}/predictions/test.parquet")
+
+    upcoming = _fetch_upcoming_predictions(username, outcome)
+
+    return OutcomeArtifacts(
+        outcome=outcome,
+        selected_candidate=candidate,
+        selected_version=version,
+        pipeline=pipeline,
+        registration=registration,
+        threshold=threshold,
+        feature_importance=feature_importance,
+        oof_predictions=oof,
+        val_predictions=val,
+        test_predictions=test,
+        upcoming_predictions=upcoming,
+    )
+
+
+def load(
+    username: str,
+    outcomes: str | list[str] = "own",
+    source: str = "local",
+    candidates: dict[str, str] | None = None,
+) -> CollectionReportData:
+    """Load everything the report template needs for a user."""
+    outcome_list: list[str] = (
+        [outcomes] if isinstance(outcomes, str) else list(outcomes)
+    )
+    resolved_source = "models/collections" if source == "local" else source
+
+    overrides = candidates or {}
+    out: dict[str, OutcomeArtifacts] = {}
+    for outcome in outcome_list:
+        out[outcome] = _load_outcome(
+            resolved_source,
+            username,
+            outcome,
+            candidate_override=overrides.get(outcome),
+        )
+
+    collection = _fetch_collection_snapshot(username)
+    games = _fetch_games_metadata()
+
+    return CollectionReportData(
+        username=username,
+        collection=collection,
+        games=games,
+        outcomes=out,
+    )

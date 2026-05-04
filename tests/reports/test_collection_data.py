@@ -124,3 +124,60 @@ def test_read_pickle_local(fixture_collection_root: Path):
     )
     pipeline = _read_pickle(str(path))
     assert hasattr(pipeline, "predict")
+
+
+from src.reports.collection_data import load
+
+
+@pytest.fixture
+def mock_bq_fetchers(monkeypatch):
+    """Stub out BQ-backed fetchers so the loader test stays offline."""
+    empty = pl.DataFrame()
+    monkeypatch.setattr(
+        "src.reports.collection_data._fetch_collection_snapshot",
+        lambda username: empty,
+    )
+    monkeypatch.setattr(
+        "src.reports.collection_data._fetch_games_metadata",
+        lambda: empty,
+    )
+    monkeypatch.setattr(
+        "src.reports.collection_data._fetch_upcoming_predictions",
+        lambda username, outcome: empty,
+    )
+
+
+def test_load_single_outcome(fixture_collection_root: Path, mock_bq_fetchers):
+    data = load(
+        username="phenrickson",
+        outcomes="own",
+        source=str(fixture_collection_root),
+    )
+    assert data.username == "phenrickson"
+    assert "own" in data.outcomes
+    arts = data.outcomes["own"]
+    assert arts.outcome == "own"
+    assert arts.selected_candidate == "logistic_row_norm"
+    assert arts.selected_version == 1
+    assert arts.threshold == 0.5
+    assert arts.oof_predictions.height == 3
+    assert arts.val_predictions.height == 3
+    assert arts.test_predictions.height == 3
+    assert arts.feature_importance.shape[0] == 3
+    assert arts.registration["finalize_through"] == 2024
+
+
+def test_load_outcomes_list_accepts_str_or_list(
+    fixture_collection_root: Path, mock_bq_fetchers
+):
+    a = load(
+        username="phenrickson",
+        outcomes="own",
+        source=str(fixture_collection_root),
+    )
+    b = load(
+        username="phenrickson",
+        outcomes=["own"],
+        source=str(fixture_collection_root),
+    )
+    assert set(a.outcomes) == set(b.outcomes) == {"own"}
