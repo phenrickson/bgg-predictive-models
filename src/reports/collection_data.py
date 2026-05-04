@@ -177,20 +177,58 @@ def _splits_root(source: str, username: str, outcome: str, version: int) -> str:
     return f"{_outcome_root(source, username, outcome)}/_splits/v{version}"
 
 
+from src.collection.collection_storage import CollectionStorage
+from src.utils.config import load_config
+
+
+def _bq_client():
+    """Lazy BigQuery client. Patchable in tests."""
+    from google.cloud import bigquery
+
+    return bigquery.Client()
+
+
 def _fetch_collection_snapshot(username: str) -> pl.DataFrame:
-    """Latest BGG collection snapshot for the user. Implemented in Task 9."""
-    raise NotImplementedError("Task 9 implements BQ collection snapshot fetch")
+    """Latest BGG collection snapshot for the user."""
+    storage = CollectionStorage(environment="dev")
+    df = storage.get_latest_collection(username)
+    return df if df is not None else pl.DataFrame()
 
 
 def _fetch_games_metadata() -> pl.DataFrame:
-    """Game metadata used for joining into prediction tables. Task 9."""
-    raise NotImplementedError("Task 9 implements BQ games-metadata fetch")
+    """Game metadata for joining into predictions tables."""
+    from src.data.loader import BGGDataLoader
+
+    bq_config = load_config().get_bigquery_config()
+    loader = BGGDataLoader(bq_config)
+    return loader.load_features(use_predicted_complexity=True, use_embeddings=False)
 
 
 def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
-    """Deployed-model predictions from raw.collection_predictions_landing.
-    Implemented in Task 9."""
-    raise NotImplementedError("Task 9 implements BQ upcoming predictions fetch")
+    """Latest deployed-model predictions for the user from
+    raw.collection_predictions_landing. Keeps only the most recent
+    score per (game_id) — the table is append-only.
+    """
+    table = load_config().get_collection_landing_table()
+    sql = f"""
+    WITH ranked AS (
+        SELECT
+            game_id,
+            predicted_prob,
+            predicted_label,
+            score_ts,
+            model_version,
+            ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) AS rn
+        FROM `{table}`
+        WHERE username = {username!r} AND outcome = {outcome!r}
+    )
+    SELECT game_id, predicted_prob, predicted_label, score_ts, model_version
+    FROM ranked
+    WHERE rn = 1
+    """
+    job = _bq_client().query(sql)
+    pdf = job.to_dataframe()
+    return pl.from_pandas(pdf)
 
 
 def _load_outcome(

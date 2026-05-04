@@ -181,3 +181,66 @@ def test_load_outcomes_list_accepts_str_or_list(
         source=str(fixture_collection_root),
     )
     assert set(a.outcomes) == set(b.outcomes) == {"own"}
+
+
+def test_fetch_collection_snapshot_calls_bq(monkeypatch):
+    """Smoke test: the public fetcher routes through CollectionStorage."""
+    captured = {}
+
+    class FakeStorage:
+        def __init__(self, environment):
+            captured["environment"] = environment
+
+        def get_latest_collection(self, username):
+            captured["username"] = username
+            return pl.DataFrame({"game_id": [1], "game_name": ["A"]})
+
+    monkeypatch.setattr(
+        "src.reports.collection_data.CollectionStorage", FakeStorage
+    )
+    from src.reports.collection_data import _fetch_collection_snapshot
+
+    df = _fetch_collection_snapshot("phenrickson")
+    assert df.height == 1
+    assert captured == {"environment": "dev", "username": "phenrickson"}
+
+
+def test_fetch_upcoming_predictions_query_shape(monkeypatch):
+    """The fetcher should issue a SELECT against the configured landing table."""
+    queries: list[str] = []
+
+    class FakeQueryJob:
+        def to_dataframe(self):
+            import pandas as pd
+
+            return pd.DataFrame(
+                {
+                    "game_id": [1],
+                    "predicted_prob": [0.9],
+                    "predicted_label": [True],
+                }
+            )
+
+    class FakeBQClient:
+        def query(self, sql):
+            queries.append(sql)
+            return FakeQueryJob()
+
+    class FakeConfig:
+        def get_collection_landing_table(self):
+            return "project.dataset.collection_predictions_landing"
+
+    monkeypatch.setattr(
+        "src.reports.collection_data._bq_client", lambda: FakeBQClient()
+    )
+    monkeypatch.setattr(
+        "src.reports.collection_data.load_config", lambda: FakeConfig()
+    )
+
+    from src.reports.collection_data import _fetch_upcoming_predictions
+
+    df = _fetch_upcoming_predictions("phenrickson", "own")
+    assert df.height == 1
+    assert "collection_predictions_landing" in queries[0]
+    assert "phenrickson" in queries[0]
+    assert "own" in queries[0]
