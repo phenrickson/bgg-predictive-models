@@ -126,3 +126,33 @@ def select_candidate(
 
     cand = sorted(finalized.keys())[0]
     return cand, finalized[cand]
+
+
+import json as _json
+import pickle as _pickle
+
+import fsspec
+
+
+def _read_bytes(uri: str) -> bytes:
+    """Read raw bytes from a local path or gs:// URI."""
+    with fsspec.open(uri, "rb") as f:
+        return f.read()
+
+
+def _read_text(uri: str) -> str:
+    with fsspec.open(uri, "rt") as f:
+        return f.read()
+
+
+def _read_json(uri: str) -> dict:
+    return _json.loads(_read_text(uri))
+
+
+def _read_pickle(uri: str):
+    return _pickle.loads(_read_bytes(uri))
+
+
+def _read_parquet(uri: str) -> pl.DataFrame:
+    """Polars reads gs:// natively; for local paths just pass through."""
+    return pl.read_parquet(uri)

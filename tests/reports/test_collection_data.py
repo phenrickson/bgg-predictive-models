@@ -81,3 +81,46 @@ def test_select_candidate_raises_when_no_finalized(tmp_path: Path):
     user_dir.mkdir(parents=True)
     with pytest.raises(ValueError, match="No finalized candidate"):
         select_candidate(tmp_path, "phenrickson", "own")
+
+
+from src.reports.collection_data import _read_json, _read_parquet, _read_pickle
+
+
+def test_read_json_local(fixture_collection_root: Path):
+    path = (
+        fixture_collection_root
+        / "phenrickson"
+        / "own"
+        / "logistic_row_norm"
+        / "v1"
+        / "registration.json"
+    )
+    data = _read_json(str(path))
+    assert data["candidate"] == "logistic_row_norm"
+
+
+def test_read_parquet_local(fixture_collection_root: Path):
+    path = (
+        fixture_collection_root
+        / "phenrickson"
+        / "own"
+        / "logistic_row_norm"
+        / "v1"
+        / "predictions"
+        / "oof.parquet"
+    )
+    df = _read_parquet(str(path))
+    assert df.height == 3
+
+
+def test_read_pickle_local(fixture_collection_root: Path):
+    path = (
+        fixture_collection_root
+        / "phenrickson"
+        / "own"
+        / "logistic_row_norm"
+        / "v1"
+        / "model.pkl"
+    )
+    pipeline = _read_pickle(str(path))
+    assert hasattr(pipeline, "predict")
