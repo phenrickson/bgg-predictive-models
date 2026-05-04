@@ -1,0 +1,556 @@
+---
+title: "Predicting Board Game Collections"
+subtitle: "`r params$username`'s Collection"
+author: "Phil Henrickson"
+date: today
+format: 
+    html:
+      code-fold: true
+      code-overflow: scroll
+      code-summary: 'Show the code'
+      self-contained: true
+      toc: true
+      fig-align: center
+      theme: cerulean
+      message: false
+      include-in-header:
+      - text: |
+            <style>
+            .panel-tabset > .nav-tabs,
+            .panel-tabset > .tab-content {border: none;}
+            </style>
+css: styles.css
+editor: source
+params:
+    board: collection_model_board
+    username: phenrickson
+    metrics: metrics
+    preds: new_preds
+    outcome: 'own'
+    pin_vetiver: pin_vetiver
+---
+
+```{r}
+#| include: false
+options(knitr.duplicate.label = "allow")
+```
+
+
+```{r}
+#| echo: false
+#| include: false
+library(targets)
+library(dplyr)
+library(tibble)
+library(gt)
+library(gtExtras)
+library(ggrepel)
+library(tibble)
+library(dplyr)
+library(rsample)
+library(tidymodels)
+library(bggUtils)
+```
+
+# About
+
+This report details the results of training and evaluating a classification model for predicting games for a user's boardgame collection.
+
+::: {.callout-note}
+
+To view games predicted by the model, go to [Section @sec-predictions: Predictions ].
+
+:::
+
+```{r}
+#| include: false
+#| echo: false
+# load in dependencies from targets
+tar_source("src")
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+# load games
+tar_load(games_raw)
+tar_load(games_new)
+tar_load(games)
+username <- params$username
+
+# load model board
+tar_load(collection_model_board)
+
+user_collection <- paste("collection", username, sep = "_")
+user_model <- paste("model_glmnet", username, sep = "_")
+user_preds <- paste("preds", username, sep = "_")
+user_metrics <- paste("metrics", username, sep = "_")
+new_preds <- paste("new_preds", username, sep = "_")
+
+tar_load(user_collection)
+tar_load(user_model)
+tar_load(user_preds)
+tar_load(user_metrics)
+tar_load(new_preds)
+
+collection <- get(ls(pattern = user_collection))
+model_glmnet <- get(ls(pattern = user_model))
+preds <- get(ls(pattern = paste0("^", user_preds)))
+metrics <- get(ls(pattern = user_metrics))
+
+rm(list = ls(pattern = paste(params$username)))
+
+theme_set(
+    bggUtils::theme_bgg()
+)
+```
+
+```{r}
+#| include: false
+#| echo: false
+#| message: false
+#|
+# load user model and predict new games
+m <- load_model(
+    board = collection_model_board,
+    name = params$username,
+    hash = params$pin_vetiver
+)
+
+# predict games
+new_preds <-
+    m |>
+    predict_user_model(games = games_new, collection = collection)
+```
+
+
+# Collection
+
+The data in this project comes from BoardGameGeek.com. The data used is at the game level, where an individual observation contains *features* about a game, such as its publisher, categories, and playing time, among many others. 
+
+I train a classification model at the user level to learn the relationship between game features and games that a user owns - what predicts a user's collection? 
+
+```{r}
+#| message: false
+#| echo: false
+collection_and_games <-
+    model_glmnet |>
+    extract_split()
+
+collection_and_games |>
+    table_collection()
+```
+
+I evaluate the model's performance on a training set of historical games via resampling, then validate the model's performance on a set aside set of newer relases. I then refit the model on the training and validation in order and predict upcoming releases in order to find new games that the user is most likely to add to their collection.
+
+```{r}
+#| echo: false
+
+collection_and_games |>
+    table_splits()
+```
+
+
+## Types of Games
+
+What types of game does the user own? The following plot displays the most frequent publishers, mechanics, designers, artists, etc that appear in a user’s collection.
+
+```{r}
+#| fig-height: 7
+collection |>
+    filter(own == 1) |>
+    collection_by_category(
+        games = games_raw
+    ) |>
+    plot_collection_by_category() +
+    ylab("feature")
+```
+
+The following plot shows the years in which games in the user's collection were published. This can usually indicate when someone first entered the hobby.
+
+```{r}
+#| echo: false
+collection_and_games |>
+    plot_collection_by_year() +
+    facet_wrap(~ params$username)
+```
+
+## Games in Collection
+
+What games does the user currently have in their collection? The following table can be used to examine games the user owns, along with some helpful information for selecting the right game for a game night!
+
+Use the filters above the table to sort/filter based on information about the game, such as year published, recommended player counts, or playing time.
+
+```{r}
+collection |>
+    filter(own == 1) |>
+    prep_collection_datatable(
+        games = games_raw
+    ) |>
+    filter(!is.na(image)) |>
+    collection_datatable()
+```
+
+# Modeling
+
+I’ll now the examine predictive models trained on the user’s collection.
+
+For an individual user, I train a predictive model on their collection in order to predict whether a user owns a game. The outcome, in this case, is binary: does the user have a game listed in their collection or not? This is the setting for training a classification model, where the model aims to learn the probability that a user will add a game to their collection based on its observable features.
+
+How does a model learn what a user is likely to own? The training process is a matter of examining historical games and finding patterns that exist between game features (designers, mechanics, playing time, etc) and games in the user’s collection.
+
+I make use of many potential features for games, the vast majority of which are dummies indicating the presence or absence of the presence or absence of things such as a publisher/artist/designer. The "standard" BGG features for every game contain information that is typically listed on the box its playing time, player counts, or its recommended minimum age.
+
+::: {.callout-note}
+
+I train models to predict whether a user owns a game based only on information that could be observed about the game at its release: playing time, player count, mechanics, categories, genres, and selected designers, artists, and publishers. I do not make use of BGG community information, such as its average rating, weight, or number of user ratings. This is to ensure the model can predict newly released games without relying on information from the BGG community.
+
+:::
+
+## What Predicts A Collection?
+
+A predictive model gives us more than just predictions. We can also ask, what did the model learn from the data? What predicts the outcome? In the case of predicting a boardgame collection, what did the model find to be predictive of games a user has in their collection?
+
+To answer this, I examine the coefficients from a model logistic regression with ridge regularization (which I will refer to as a penalized logistic regression).
+
+Positive values indicate that a feature increases a user’s probability of owning/rating a game, while negative values indicate a feature decreases the probability. To be precise, the coefficients indicate the effect of a particular feature on the log-odds of a user owning a game.
+
+```{r}
+#| include: false
+top_coefs_plot <-
+    model_glmnet |>
+    pluck("wflow", 1) |>
+    get_coefs.glmnet() |>
+    top_coefs_by_sign() |>
+    coef_plot.glmnet()
+```
+
+```{r}
+#| echo: false
+#| fig-height: 6
+top_coefs_plot +
+    facet_wrap(~ params$username)
+```
+
+The following visualization shows the path of each feature as it enters the model, with highly influential features tending to enter the model early with large positive or negative effects. The dotted line indicates the level of regularization that was selected during tuning.
+
+```{r}
+#| warning: false
+#| message: false
+#|
+model_glmnet |>
+    pluck("wflow", 1) |>
+    trace_plot.glmnet(max.overlaps = 30) +
+    facet_wrap(~ params$username)
+```
+
+## Partial Effects
+
+What are the effects of individual features?
+
+Use the buttons below to examine the effects different types of predictors had in predicting the user's collection.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+coefs <-
+    model_glmnet |>
+    pluck("wflow", 1) |>
+    get_coefs.glmnet()
+
+groups <- c(
+    "Mechanics",
+    "Designers",
+    "Artists",
+    "Publishers",
+    "Categories",
+    "Families",
+    "Themes",
+    "Components",
+    "Mechanisms"
+)
+
+plots <-
+    map(
+        tolower(groups),
+        ~ coefs |>
+            mutate(term = gsub("themes_theme_", "themes_", term)) |>
+            coef_plot_by_group(group = .x, shrink = F, scales = "free") +
+            ggh4x::facet_grid2(
+                sign ~ .,
+                scales = "free_y"
+            ) +
+            geom_vline(
+                xintercept = c(min(coefs$estimate), max(coefs$estimate)),
+                linetype = "dotted",
+                alpha = 0.25
+            ) +
+            labs(
+                subtitle = ""
+            )
+    )
+
+names(plots) <- groups
+```
+
+
+<!-- ```{r} -->
+<!-- #| echo: false -->
+<!-- #| class: scroll -->
+<!-- #| fig-height: 6 -->
+<!-- #| results: "asis" -->
+
+<!-- qreport::maketabs(plots) -->
+<!-- ``` -->
+
+
+::: {.panel-tabset .nav-pills}
+
+### Categories
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Categories
+```
+
+### Mechanics
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Mechanics
+```
+
+### Themes
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Themes
+```
+
+### Families
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Families
+```
+
+### Publishers
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Publishers
+```
+
+### Designers
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Designers
+```
+
+### Artists
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Artists
+```
+
+### Components
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Components
+```
+
+### Mechanisms
+
+```{r}
+#| echo: false
+#| class: scroll
+#| fig-height: 6
+plots$Mechanisms
+```
+
+:::
+
+# Assessment
+
+How well did the model do in predicting the user’s collection?
+
+This section contains a variety of visualizations and metrics for assessing the performance of the model(s). If you’re not particularly interested in predictive modeling, skip down further to the predictions from the model.
+
+The following displays the model's performance in resampling on a training set, a validation set, and a holdout set of upcoming games.
+
+```{r}
+metrics |>
+    mutate_if(is.numeric, round, 3) |>
+    pivot_wider(
+        names_from = c(".metric"),
+        values_from = c(".estimate")
+    ) |>
+    gt::gt() |>
+    gt::sub_missing() |>
+    gt_options()
+```
+
+An easy way to visually examine the performance of classification model is to view a separation plot.
+
+I plot the predicted probabilities from the model for every game (during resampling) from lowest to highest. I then overlay a blue line for any game that the user does own. A good classifier is one that is able to separate the blue (games owned by the user) from the white (games not owned by the user), with most of the blue occurring at the highest probabilities (left side of the chart).
+
+```{r}
+#| message: false
+#| warning: false
+preds |>
+    filter(type %in% c("resamples", "valid")) |>
+    plot_separation(outcome = params$outcome)
+```
+
+I can more formally assess how well each model did in resampling by looking at the area under the ROC curve (roc_auc). A perfect model would receive a score of 1, while a model that cannot predict the outcome will default to a score of 0.5. The extent to which something is a good score depends on the setting, but generally anything in the .8 to .9 range is very good while the .7 to .8 range is perfectly acceptable.
+
+```{r}
+#| warning: false
+#| message: false
+preds |>
+    nest(data = -c(username, wflow_id, type)) |>
+    mutate(
+        roc_curve = map(
+            data,
+            safely(~ .x |> safe_roc_curve(truth = params$outcome))
+        )
+    ) |>
+    mutate(result = map(roc_curve, ~ .x |> pluck("result"))) |>
+    select(username, wflow_id, type, result) |>
+    unnest(result) |>
+    plot_roc_curve()
+```
+
+## Top Games in Training
+
+What were the model's top games in the training set?
+
+```{r}
+#| class: scroll
+#| warning: false
+#| message: false
+preds |>
+    filter(type == "resamples") |>
+    prep_predictions_datatable(
+        games = games,
+        outcome = params$outcome
+    ) |>
+    predictions_datatable(
+        outcome = params$outcome,
+        remove_description = T,
+        remove_image = T,
+        pagelength = 15
+    )
+```
+
+## Top Games in Validation
+
+What were the model's top games in the validation set?
+
+```{r}
+#| class: scroll
+#| warning: false
+#| message: false
+preds |>
+    filter(type %in% c("valid")) |>
+    prep_predictions_datatable(
+        games = games,
+        outcome = params$outcome
+    ) |>
+    predictions_datatable(
+        outcome = params$outcome,
+        remove_description = T,
+        remove_image = T,
+        pagelength = 15
+    )
+```
+
+## Top Games by Year
+
+Displaying the model's top games for individual years in recent years.
+
+```{r}
+#| warning: false
+#| message: false
+#| class: scroll
+
+preds |>
+    filter(type %in% c("resamples", "valid")) |>
+    top_n_preds(
+        games = games,
+        outcome = params$outcome,
+        top_n = 15,
+        n_years = 15
+    ) |>
+    gt_top_n(collection = collection |> prep_collection())
+```
+
+
+# Predictions {#sec-predictions}
+
+## New and Upcoming Games
+
+What were the model's top predictions for new and upcoming board game releases?
+
+```{r}
+#| class: scroll
+#| message: false
+#| warning: false
+new_preds |>
+    filter(type == "upcoming") |>
+    # imposing a minimum threshold to filter out games with no info
+    filter(usersrated >= 1) |>
+    # removing this goddamn boxing game that has every mechanic listed
+    filter(game_id != 420629) |>
+    prep_predictions_datatable(
+        games = games_new,
+        outcome = params$outcome
+    ) |>
+    predictions_datatable(outcome = params$outcome)
+```
+
+## Older Games
+
+What were the model's top predictions for older games?
+
+```{r}
+#| class: scroll
+#| message: false
+#| warning: false
+#| echo: false
+preds |>
+    filter(type %in% c("resamples", "valid")) |>
+    left_join(
+        games |> select(game_id, usersrated),
+        by = join_by(game_id)
+    ) |>
+    filter(usersrated >= 5) |>
+    slice_max(.pred_yes, n = 500) |>
+    prep_predictions_datatable(
+        games = games,
+        outcome = params$outcome
+    ) |>
+    predictions_datatable(outcome = params$outcome)
+```
+
