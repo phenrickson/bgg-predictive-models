@@ -11,7 +11,7 @@ No fitting or scoring happens here.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -358,3 +358,50 @@ def _render_plotly_grid(
         margin=dict(l=180, r=60, t=80, b=60),
     )
     return fig
+
+
+def extract_finalized_importance(
+    pipeline,
+    train_sample: pd.DataFrame,
+) -> Optional[pd.DataFrame]:
+    """Return feature importance for a fitted Pipeline.
+
+    Pulls ``feature_importances_`` (tree models) or ``coef_`` (linear
+    models) from ``pipeline.named_steps['model']``. Recovers
+    post-preprocessing feature names by transforming a small sample of
+    canonical training data through ``pipeline.named_steps['preprocessor']``
+    — sklearn's ``get_feature_names_out`` is unreliable on this stack.
+
+    Returns a DataFrame with columns ``feature``, ``value``, ``abs_value``,
+    sorted by ``abs_value`` descending. Returns ``None`` if the model
+    exposes neither attribute.
+    """
+    import numpy as np
+
+    model_step = pipeline.named_steps["model"]
+    if hasattr(model_step, "feature_importances_"):
+        values = np.asarray(model_step.feature_importances_)
+    elif hasattr(model_step, "coef_"):
+        values = np.asarray(model_step.coef_).ravel()
+    else:
+        return None
+
+    names: Optional[list[str]] = None
+    try:
+        preprocessor = pipeline.named_steps["preprocessor"]
+        transformed = preprocessor.transform(train_sample.head(5))
+        if hasattr(transformed, "columns"):
+            names = list(transformed.columns)
+    except Exception:
+        names = None
+    if names is None:
+        try:
+            names = list(pipeline[:-1].get_feature_names_out())
+        except Exception:
+            names = None
+    if names is None or len(names) != len(values):
+        names = [f"f{i}" for i in range(len(values))]
+
+    out = pd.DataFrame({"feature": names, "value": values})
+    out["abs_value"] = out["value"].abs()
+    return out.sort_values("abs_value", ascending=False).reset_index(drop=True)
