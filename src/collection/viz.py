@@ -655,3 +655,35 @@ def collection_datatable(collection, games) -> pd.DataFrame:
         ]
         view = view.join(games.select(meta_cols), on="game_id", how="left")
     return view.to_pandas()
+
+
+def plot_partial_effects_by_group(
+    feature_importance: pd.DataFrame,
+    top_n: int = 15,
+) -> dict[str, go.Figure]:
+    """Build one feature-importance plot per known group.
+
+    Returns a dict keyed by group label. Empty groups are omitted.
+    """
+    if feature_importance is None or len(feature_importance) == 0:
+        return {}
+    groups = sorted(
+        {feature_group(name) for name in feature_importance["feature"].tolist()}
+    )
+    out: dict[str, go.Figure] = {}
+    for group in groups:
+        if group == "Other":
+            continue
+        try:
+            fig = plot_feature_importance(
+                feature_importance,
+                group=group,
+                top_pos=top_n,
+                top_neg=top_n,
+                interactive=True,
+                title=group,
+            )
+        except Exception:
+            continue
+        out[group] = fig
+    return out

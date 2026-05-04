@@ -216,3 +216,25 @@ def test_collection_datatable_returns_pandas():
     out = collection_datatable(coll, games)
     assert isinstance(out, pd.DataFrame)
     assert "game_id" in out.columns
+
+
+from src.collection.viz import plot_partial_effects_by_group
+
+
+def test_plot_partial_effects_by_group_returns_dict():
+    fi = pd.DataFrame(
+        {
+            "feature": [
+                "category_strategy",
+                "category_party",
+                "designer_uwe_rosenberg",
+                "publisher_z_man_games",
+            ],
+            "value": [0.5, -0.2, 0.7, 0.1],
+            "abs_value": [0.5, 0.2, 0.7, 0.1],
+        }
+    )
+    plots = plot_partial_effects_by_group(fi)
+    assert isinstance(plots, dict)
+    # At least one of the known groups returned a plot
+    assert "Categories" in plots or "Designers" in plots
