@@ -96,3 +96,37 @@ def test_plot_separation_handles_empty():
     preds = pl.DataFrame({"proba": [], "label": []})
     fig = plot_separation(preds, title="Empty")
     assert hasattr(fig, "data")
+
+
+from src.collection.viz import top_n_by_year_table
+
+
+def test_top_n_by_year_table_returns_pivot():
+    preds = pl.DataFrame(
+        {
+            "game_id": list(range(1, 9)),
+            "name": [f"G{i}" for i in range(1, 9)],
+            "year_published": [2020, 2020, 2020, 2021, 2021, 2021, 2022, 2022],
+            "proba": [0.9, 0.7, 0.3, 0.8, 0.6, 0.2, 0.95, 0.5],
+            "label": [True, False, False, True, True, False, True, False],
+        }
+    )
+    df = top_n_by_year_table(preds, top_n=2)
+    assert "rank" in df.columns
+    year_cols = [c for c in df.columns if c != "rank"]
+    assert {"2020", "2021", "2022"}.issubset(set(year_cols))
+    assert df.height == 2
+
+
+def test_top_n_by_year_table_empty_returns_empty_frame():
+    preds = pl.DataFrame(
+        {
+            "game_id": [],
+            "name": [],
+            "year_published": [],
+            "proba": [],
+            "label": [],
+        }
+    )
+    df = top_n_by_year_table(preds, top_n=5)
+    assert df.height == 0

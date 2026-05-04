@@ -487,3 +487,35 @@ def plot_separation(
         margin={"t": 40, "b": 40, "l": 50, "r": 12},
     )
     return fig
+
+
+def top_n_by_year_table(predictions, top_n: int = 15):
+    """Pivot predictions into rank × year, top-N per year.
+
+    Each column is a year (as a string for stable header names); each
+    row is rank 1..top_n. Cells contain the game ``name``.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "year_published" not in predictions.columns:
+        return pl.DataFrame()
+
+    view = predictions.with_columns(pl.col("year_published").cast(pl.Int64))
+    view = view.with_columns(
+        pl.col("proba")
+        .rank(method="ordinal", descending=True)
+        .over("year_published")
+        .alias("_rank")
+    ).filter(pl.col("_rank") <= top_n)
+
+    if view.height == 0:
+        return pl.DataFrame()
+
+    pivot = (
+        view.pivot(values="name", index="_rank", on="year_published")
+        .sort("_rank")
+        .rename({"_rank": "rank"})
+    )
+    year_cols = sorted(int(y) for y in view["year_published"].unique().to_list())
+    ordered = ["rank"] + [str(y) for y in year_cols]
+    return pivot.select([c for c in ordered if c in pivot.columns])
