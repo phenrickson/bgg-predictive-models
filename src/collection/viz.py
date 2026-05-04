@@ -519,3 +519,31 @@ def top_n_by_year_table(predictions, top_n: int = 15):
     year_cols = sorted(int(y) for y in view["year_published"].unique().to_list())
     ordered = ["rank"] + [str(y) for y in year_cols]
     return pivot.select([c for c in ordered if c in pivot.columns])
+
+
+def predictions_datatable(
+    predictions,
+    games,
+    top_n: int = 500,
+    min_users_rated: int = 0,
+) -> pd.DataFrame:
+    """Sortable predictions table for embedding in the report.
+
+    Returns a pandas DataFrame; the qmd wraps it with `itables.show(...)`.
+    """
+    import polars as pl
+
+    view = predictions
+    if min_users_rated > 0 and "users_rated" in view.columns:
+        view = view.filter(pl.col("users_rated") >= min_users_rated)
+    if "proba" in view.columns:
+        view = view.sort("proba", descending=True)
+    view = view.head(top_n)
+
+    if games is not None and games.height > 0 and "game_id" in games.columns:
+        meta_cols = [
+            c for c in games.columns if c == "game_id" or c not in view.columns
+        ]
+        view = view.join(games.select(meta_cols), on="game_id", how="left")
+
+    return view.to_pandas()

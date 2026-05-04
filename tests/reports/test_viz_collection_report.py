@@ -130,3 +130,39 @@ def test_top_n_by_year_table_empty_returns_empty_frame():
     )
     df = top_n_by_year_table(preds, top_n=5)
     assert df.height == 0
+
+
+from src.collection.viz import predictions_datatable
+
+
+def test_predictions_datatable_returns_pandas():
+    preds = pl.DataFrame(
+        {
+            "game_id": [1, 2, 3],
+            "name": ["A", "B", "C"],
+            "year_published": [2020, 2021, 2022],
+            "proba": [0.9, 0.4, 0.7],
+            "label": [True, False, True],
+        }
+    )
+    games = pl.DataFrame({"game_id": [1, 2, 3]})
+    out = predictions_datatable(preds, games, top_n=10)
+    assert isinstance(out, pd.DataFrame)
+    # Sorted descending by proba
+    assert list(out["proba"]) == sorted(out["proba"], reverse=True)
+
+
+def test_predictions_datatable_filters_min_users_rated():
+    preds = pl.DataFrame(
+        {
+            "game_id": [1, 2, 3],
+            "name": ["A", "B", "C"],
+            "year_published": [2020, 2021, 2022],
+            "proba": [0.9, 0.4, 0.7],
+            "users_rated": [100, 0, 50],
+            "label": [True, False, True],
+        }
+    )
+    games = pl.DataFrame({"game_id": [1, 2, 3]})
+    out = predictions_datatable(preds, games, min_users_rated=10)
+    assert set(out["game_id"]) == {1, 3}
