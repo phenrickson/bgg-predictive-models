@@ -19,6 +19,11 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 
 
+def _to_pandas_or_passthrough(x):
+    """Module-level so the fixture pipeline pickles cleanly."""
+    return x.to_pandas() if hasattr(x, "to_pandas") else x
+
+
 def _identity_pipeline() -> Pipeline:
     """A trivial Pipeline with a `preprocessor` and `model` step.
 
@@ -26,11 +31,7 @@ def _identity_pipeline() -> Pipeline:
     DummyClassifier with a fake `coef_` attached so importance extraction
     has something to read.
     """
-
-    def to_pandas_or_passthrough(x):
-        return x.to_pandas() if hasattr(x, "to_pandas") else x
-
-    preprocessor = FunctionTransformer(to_pandas_or_passthrough, validate=False)
+    preprocessor = FunctionTransformer(_to_pandas_or_passthrough, validate=False)
     model = DummyClassifier(strategy="constant", constant=0)
     X = np.zeros((4, 3))
     y = np.array([0, 1, 0, 1])
