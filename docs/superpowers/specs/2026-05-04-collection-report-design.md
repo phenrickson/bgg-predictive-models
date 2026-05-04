@@ -66,7 +66,8 @@ class OutcomeArtifacts:
     pipeline: Pipeline               # finalized model
     registration: dict
     threshold: float | None
-    feature_importance: pl.DataFrame
+    feature_importance: pl.DataFrame  # extracted from the fitted pipeline,
+                                      # not from the candidate's parquet
 
     oof_predictions: pl.DataFrame
     val_predictions: pl.DataFrame
@@ -97,6 +98,34 @@ top-level fields. Multi-outcome views later iterate `data.outcomes`.
 The on-disk layout already separates these levels
 (`{username}/collection/...` vs `{username}/{outcome}/...`), so this
 mirrors what's there.
+
+### Feature importance is extracted from the pipeline
+
+The report shows feature importance for the *finalized* model, the same
+way the Streamlit Finalized Model tab does
+(`_extract_finalized_importance` in `src/streamlit/pages/7 Collections.py`):
+
+1. Pull `feature_importances_` (tree models) or `coef_` (linear models)
+   from `pipeline.named_steps["model"]`.
+2. Recover post-preprocessing feature names by transforming a small
+   slice of canonical training data
+   (`{outcome}/_splits/v{N}/train.parquet`) through
+   `pipeline.named_steps["preprocessor"]`. Sklearn's
+   `get_feature_names_out` is unreliable on this stack.
+3. Return a frame with `feature, value, abs_value`.
+
+The candidate-level `feature_importance.parquet` on disk is *not* used
+by the report — that file reflects the candidate's training run, while
+the report wants the finalized pipeline's view. The loader extracts
+fresh.
+
+This adds one read to `load()`: the canonical splits parquet for the
+selected outcome's `_splits/v{N}/`. The splits version comes from the
+finalized run's `registration.json` (`splits_version` field).
+
+The extraction logic is shared with Streamlit; lift
+`_extract_finalized_importance` to `src/collection/viz.py` and call it
+from both surfaces.
 
 ### Source switch
 
@@ -136,6 +165,7 @@ New (used by both report and Streamlit):
 | `predictions_datatable(predictions, games, ...)` | Sortable datatable of predictions with BGG image/link columns |
 | `metrics_table(registration)` | Wide metrics table (val/oof/test × metric) from registration.json |
 | `plot_partial_effects_by_group(feature_importance)` | One plot per feature group (mechanics, designers, ...) for a tabset |
+| `extract_finalized_importance(pipeline, train_sample)` | Pull `coef_`/`feature_importances_` from a fitted Pipeline and recover post-preprocessing feature names; lifted from `src/streamlit/pages/7 Collections.py` |
 
 All helpers are pure: take frames in, return Plotly Figure or rendered
 HTML/itables object out. No I/O.
