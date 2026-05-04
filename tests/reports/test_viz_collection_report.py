@@ -166,3 +166,53 @@ def test_predictions_datatable_filters_min_users_rated():
     games = pl.DataFrame({"game_id": [1, 2, 3]})
     out = predictions_datatable(preds, games, min_users_rated=10)
     assert set(out["game_id"]) == {1, 3}
+
+
+from src.collection.viz import (
+    collection_datatable,
+    plot_collection_by_category,
+    plot_collection_by_year,
+)
+
+
+def test_plot_collection_by_year_returns_figure():
+    coll = pl.DataFrame(
+        {"game_id": [1, 2, 3, 4], "owned": [True, True, False, True]}
+    )
+    games = pl.DataFrame(
+        {
+            "game_id": [1, 2, 3, 4],
+            "year_published": [2018, 2019, 2020, 2018],
+        }
+    )
+    fig = plot_collection_by_year(coll, games)
+    assert hasattr(fig, "data")
+
+
+def test_plot_collection_by_category_returns_figure():
+    coll = pl.DataFrame({"game_id": [1, 2, 3], "owned": [True, True, True]})
+    games = pl.DataFrame(
+        {
+            "game_id": [1, 2, 3],
+            "category_strategy": [1, 0, 1],
+            "category_party": [0, 1, 0],
+            "designer_uwe_rosenberg": [1, 1, 0],
+        }
+    )
+    fig = plot_collection_by_category(coll, games, top_n=10)
+    assert hasattr(fig, "data")
+
+
+def test_collection_datatable_returns_pandas():
+    coll = pl.DataFrame(
+        {
+            "game_id": [1, 2],
+            "game_name": ["A", "B"],
+            "owned": [True, True],
+            "user_rating": [9.0, 7.5],
+        }
+    )
+    games = pl.DataFrame({"game_id": [1, 2], "year_published": [2020, 2021]})
+    out = collection_datatable(coll, games)
+    assert isinstance(out, pd.DataFrame)
+    assert "game_id" in out.columns

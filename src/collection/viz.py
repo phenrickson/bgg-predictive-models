@@ -547,3 +547,111 @@ def predictions_datatable(
         view = view.join(games.select(meta_cols), on="game_id", how="left")
 
     return view.to_pandas()
+
+
+def plot_collection_by_year(collection, games) -> go.Figure:
+    """Histogram of ``year_published`` for owned games."""
+    import polars as pl
+
+    if collection.height == 0:
+        return go.Figure(layout={"title": "Games by year"})
+    owned = (
+        collection.filter(pl.col("owned") == True)
+        .select("game_id")
+        .join(games.select(["game_id", "year_published"]), on="game_id", how="inner")
+    )
+    if owned.height == 0:
+        return go.Figure(layout={"title": "Games by year"})
+    counts = owned.group_by("year_published").len().sort("year_published")
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=counts["year_published"].to_list(),
+                y=counts["len"].to_list(),
+            )
+        ]
+    )
+    fig.update_layout(
+        title="Games by year",
+        xaxis_title="year_published",
+        yaxis_title="count",
+        height=320,
+    )
+    return fig
+
+
+def plot_collection_by_category(collection, games, top_n: int = 15) -> go.Figure:
+    """Top-N feature flags in the user's owned games, faceted by family.
+
+    Aggregates dummy columns matching known feature-group prefixes
+    (categories, mechanics, designers, etc.) over the joined collection,
+    then plots the most-frequent within each group.
+    """
+    import polars as pl
+
+    if collection.height == 0:
+        return go.Figure(layout={"title": "Types of games"})
+    owned = collection.filter(pl.col("owned") == True).select("game_id")
+    joined = owned.join(games, on="game_id", how="inner")
+    if joined.height == 0:
+        return go.Figure(layout={"title": "Types of games"})
+
+    rows: list[dict[str, Any]] = []
+    for col in joined.columns:
+        group = feature_group(col)
+        if group == "Other":
+            continue
+        try:
+            total = int(joined.select(pl.col(col).sum()).item())
+        except Exception:
+            continue
+        if total <= 0:
+            continue
+        rows.append(
+            {
+                "feature": tidy_feature_name(col, include_tag=False),
+                "group": group,
+                "count": total,
+            }
+        )
+    if not rows:
+        return go.Figure(layout={"title": "Types of games"})
+
+    df = pd.DataFrame(rows).sort_values("count", ascending=False)
+    df = df.groupby("group", group_keys=False).head(top_n)
+    df = df.sort_values(["group", "count"], ascending=[True, True])
+
+    fig = go.Figure()
+    for group, sub in df.groupby("group"):
+        fig.add_trace(
+            go.Bar(
+                x=sub["count"],
+                y=sub["feature"],
+                name=group,
+                orientation="h",
+            )
+        )
+    fig.update_layout(
+        title="Types of games",
+        barmode="group",
+        height=600,
+        margin={"l": 200},
+    )
+    return fig
+
+
+def collection_datatable(collection, games) -> pd.DataFrame:
+    """Sortable table of a user's collection.
+
+    Joins in game metadata when available. Returned as pandas; the qmd
+    wraps with `itables.show`.
+    """
+    if collection.height == 0:
+        return pd.DataFrame()
+    view = collection
+    if games is not None and games.height > 0 and "game_id" in games.columns:
+        meta_cols = [
+            c for c in games.columns if c == "game_id" or c not in view.columns
+        ]
+        view = view.join(games.select(meta_cols), on="game_id", how="left")
+    return view.to_pandas()
