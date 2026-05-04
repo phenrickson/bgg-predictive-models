@@ -51,19 +51,17 @@ together in `reports/`.
 
 ## Data layer — `src/reports/collection_data.py`
 
-Single entry point returning a dataclass holding everything the template
-needs:
+Single entry point returning a dataclass that separates user-level data
+(outcome-agnostic) from per-outcome artifacts. The template currently
+renders one outcome but the structure supports multi-outcome reports
+without a loader refactor.
 
 ```python
 @dataclass
-class CollectionReportData:
-    username: str
+class OutcomeArtifacts:
     outcome: str
     selected_candidate: str          # e.g. "logistic_row_norm"
     selected_version: int
-
-    collection: pl.DataFrame         # raw BGG snapshot, from BQ
-    games: pl.DataFrame              # game metadata (BQ)
 
     pipeline: Pipeline               # finalized model
     registration: dict
@@ -74,15 +72,31 @@ class CollectionReportData:
     val_predictions: pl.DataFrame
     test_predictions: pl.DataFrame
 
-    upcoming_predictions: pl.DataFrame  # latest deployed scores from BQ landing
+    upcoming_predictions: pl.DataFrame  # deployed-model scores from BQ landing
+
+@dataclass
+class CollectionReportData:
+    username: str
+    collection: pl.DataFrame             # raw BGG snapshot, BQ — outcome-agnostic
+    games: pl.DataFrame                  # game metadata, BQ — outcome-agnostic
+    outcomes: dict[str, OutcomeArtifacts]  # keyed by outcome name
 
 def load(
     username: str,
-    outcome: str,
+    outcomes: str | list[str] = "own",
     source: str = "local",
-    candidate: str | None = None,
+    candidates: dict[str, str] | None = None,  # per-outcome override
 ) -> CollectionReportData: ...
 ```
+
+`outcomes` accepts a single string (load one) or a list (load several).
+Phase 1 templates pass `"own"` and access `data.outcomes["own"]` for
+per-outcome sections; outcome-agnostic sections (Collection) read from
+top-level fields. Multi-outcome views later iterate `data.outcomes`.
+
+The on-disk layout already separates these levels
+(`{username}/collection/...` vs `{username}/{outcome}/...`), so this
+mirrors what's there.
 
 ### Source switch
 
@@ -154,24 +168,26 @@ params:
 ```
 
 First chunk loads everything once via `collection_data.load(...)`.
-Subsequent section chunks call into the dataclass and `viz.py` helpers.
+Outcome-agnostic sections (Collection) read from top-level fields.
+Per-outcome sections read from `data.outcomes[params.outcome]` (phase 1)
+or iterate `data.outcomes` (future multi-outcome views).
 
 Section structure (mirrors `references/analysis.qmd`):
 
 1. **About** — prose only.
-2. **Collection**
+2. **Collection** *(uses top-level `data.collection`, `data.games`)*
    - Types of Games — `plot_collection_by_category`, `plot_collection_by_year`
    - Games in Collection — `collection_datatable`
-3. **Modeling**
+3. **Modeling** *(uses `data.outcomes[outcome]`)*
    - What Predicts a Collection — `plot_feature_importance`
    - Partial Effects — `plot_partial_effects_by_group` in a Quarto tabset
-4. **Assessment**
+4. **Assessment** *(uses `data.outcomes[outcome]`)*
    - Metrics table — `metrics_table`
    - Separation plot — `plot_separation` (oof + val)
    - Top Games in Training — `predictions_datatable(oof_predictions, ...)`
    - Top Games in Validation — `predictions_datatable(val_predictions, ...)`
    - Top Games by Year — `top_n_by_year_table` over oof+val+test
-5. **Predictions**
+5. **Predictions** *(uses `data.outcomes[outcome]`)*
    - New and Upcoming Games — `predictions_datatable(upcoming_predictions, ...)` filtered to upcoming + min users_rated
    - Older Games — high-scoring older games from oof+val concat, filtered by min users_rated
 
@@ -222,3 +238,8 @@ Responsibilities:
 - Mixing in deployed-model predictions for non-Predictions sections.
   Currently only the Predictions section reads from BQ landing; if
   later we want production scores reflected elsewhere, revisit.
+- Multi-outcome reports (e.g. own + rating + complexity in one
+  document). The data layer supports this — `load(outcomes=[...])`
+  returns a dict keyed by outcome — but the template only renders one
+  outcome. A future spec adds the multi-outcome layout (tabset, side-by-side
+  sections, etc.).
