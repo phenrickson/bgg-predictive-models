@@ -73,3 +73,26 @@ def test_metrics_table_handles_missing_metrics():
     assert df.height == 0 if hasattr(df, "height") else len(df) == 0
     # pandas DataFrame at least has the split column header
     assert "split" in df.columns
+
+
+from src.collection.viz import plot_separation
+
+
+def test_plot_separation_returns_plotly_figure():
+    preds = pl.DataFrame(
+        {
+            "game_id": [1, 2, 3, 4, 5],
+            "name": ["A", "B", "C", "D", "E"],
+            "proba": [0.9, 0.1, 0.7, 0.3, 0.5],
+            "label": [True, False, True, False, False],
+        }
+    )
+    fig = plot_separation(preds, title="Test")
+    assert hasattr(fig, "data")
+    assert hasattr(fig, "layout")
+
+
+def test_plot_separation_handles_empty():
+    preds = pl.DataFrame({"proba": [], "label": []})
+    fig = plot_separation(preds, title="Empty")
+    assert hasattr(fig, "data")

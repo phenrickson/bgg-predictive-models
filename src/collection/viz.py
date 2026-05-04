@@ -429,3 +429,61 @@ def metrics_table(registration: dict) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["split"])
     return pd.DataFrame(rows)
+
+
+def plot_separation(
+    predictions,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """Predicted-proba area chart with true-positive vertical lines.
+
+    Sorts predictions by ``proba`` descending, plots ``proba`` vs rank as
+    an area, and overlays a thin vertical line at every rank where
+    ``label`` is truthy.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "proba" not in predictions.columns:
+        return go.Figure(layout={"title": title or "Separation"})
+
+    sorted_preds = predictions.sort("proba", descending=True).with_row_index(
+        "rank", offset=1
+    )
+    pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+    true_ranks = pdf.loc[pdf["label"].astype(bool), "rank"].tolist()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pdf["rank"],
+            y=pdf["proba"],
+            mode="lines",
+            fill="tozeroy",
+            line={"color": "#444444", "width": 1},
+            fillcolor="rgba(80,80,80,0.25)",
+            hovertemplate="rank=%{x}<br>proba=%{y:.4f}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    shapes = [
+        {
+            "type": "line",
+            "x0": x,
+            "x1": x,
+            "y0": 0,
+            "y1": 1,
+            "yref": "y domain",
+            "line": {"color": "#4fc3f7", "width": 1},
+            "opacity": 0.6,
+        }
+        for x in true_ranks
+    ]
+    fig.update_layout(
+        title=title or "Separation",
+        shapes=shapes,
+        xaxis_title="rank (proba descending)",
+        yaxis_title="proba",
+        height=240,
+        margin={"t": 40, "b": 40, "l": 50, "r": 12},
+    )
+    return fig
