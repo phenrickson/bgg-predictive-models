@@ -96,3 +96,6 @@ terraform-admin-key.json.githooks/sync.log
 
 # tmp
 /tmp/
+
+# Rendered Quarto reports — built artifacts
+reports/_output/
