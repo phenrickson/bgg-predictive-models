@@ -513,6 +513,24 @@ make streamlit-stop
 - **Feature Importance**: Model interpretability metrics
 - **Uncertainty**: Credible interval coverage and calibration
 
+### Collection report (Quarto)
+
+Per-user HTML report rendered from collection-experiment artifacts.
+Reads from `models/collections/` locally, or from a `gs://` mirror in CI.
+
+```bash
+# render one user
+uv run python -m reports.render --username phenrickson --outcome own
+
+# render every user under models/collections/
+uv run python -m reports.render --all-users
+```
+
+Output goes to `reports/_output/{username}.html` (gitignored). Set
+`BGG_REPORTS_OFFLINE=1` to skip BQ-backed sections (collection
+snapshot, deployed-model predictions) for credentialless runs. Spec at
+`docs/superpowers/specs/2026-05-04-collection-report-design.md`.
+
 ## Contributing
 
 1. Fork the repository

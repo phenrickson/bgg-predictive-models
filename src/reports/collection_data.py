@@ -302,7 +302,16 @@ def load(
     outcome_list: list[str] = (
         [outcomes] if isinstance(outcomes, str) else list(outcomes)
     )
-    resolved_source = "models/collections" if source == "local" else source
+    # `local` means the project's standard models/collections tree.
+    # Resolve to an absolute path so the loader works from any cwd
+    # (the Quarto kernel runs from the qmd's directory, not the project
+    # root, so a relative "models/collections" would miss).
+    if source == "local":
+        resolved_source = str(
+            (Path(__file__).resolve().parents[2] / "models" / "collections")
+        )
+    else:
+        resolved_source = source
 
     overrides = candidates or {}
     out: dict[str, OutcomeArtifacts] = {}

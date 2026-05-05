@@ -91,6 +91,17 @@ def _render_one(
     env["BGG_REPORT_USERNAME"] = username
     env["BGG_REPORT_OUTCOME"] = outcome
     env["BGG_REPORT_SOURCE"] = source
+    # If the user's GOOGLE_APPLICATION_CREDENTIALS is a relative path
+    # (the convention in this repo), resolve it against the project
+    # root so the kernel can find it from cwd=reports/.
+    gac = env.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not gac:
+        # Fall back to the standard repo location.
+        candidate_creds = project_root / "credentials" / "service-account-key.json"
+        if candidate_creds.exists():
+            env["GOOGLE_APPLICATION_CREDENTIALS"] = str(candidate_creds)
+    elif not Path(gac).is_absolute():
+        env["GOOGLE_APPLICATION_CREDENTIALS"] = str(project_root / gac)
     if candidate:
         env["BGG_REPORT_CANDIDATE"] = candidate
     else:
