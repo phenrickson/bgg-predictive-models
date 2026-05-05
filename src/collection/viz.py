@@ -889,13 +889,18 @@ def plot_separation_static(predictions, title: Optional[str] = None) -> ggplot:
     plot = (
         ggplot(pdf, aes("rank", "proba"))
         + geom_area(fill="#888888", alpha=0.4)
+        + scale_y_continuous(limits=(0, 1))
         + theme_minimal()
         + labs(
             title=title or "Separation",
             x="rank (proba descending)",
             y="proba",
         )
-        + theme(figure_size=(8, 2.2))
+        + theme(
+            figure_size=(8, 2.2),
+            panel_grid_major_x=element_blank(),
+            panel_grid_minor=element_blank(),
+        )
     )
     if true_ranks:
         plot = plot + geom_vline(
@@ -1021,5 +1026,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         + theme(
             figure_size=(8, 2.6 * ((n_groups + 1) // 2)),
             strip_text=element_text(weight="bold"),
+            panel_grid_major_y=element_blank(),
+            panel_grid_minor=element_blank(),
         )
     )
