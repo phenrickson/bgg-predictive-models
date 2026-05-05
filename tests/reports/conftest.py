@@ -19,19 +19,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 
 
-def _to_pandas_or_passthrough(x):
-    """Module-level so the fixture pipeline pickles cleanly."""
-    return x.to_pandas() if hasattr(x, "to_pandas") else x
-
-
 def _identity_pipeline() -> Pipeline:
     """A trivial Pipeline with a `preprocessor` and `model` step.
 
-    The preprocessor is a no-op identity transform; the model is a fitted
-    DummyClassifier with a fake `coef_` attached so importance extraction
-    has something to read.
+    The preprocessor is FunctionTransformer with no func (sklearn default
+    is identity), which pickles cleanly without a local-symbol reference.
+    The model is a fitted DummyClassifier with a fake `coef_` attached so
+    importance extraction has something to read.
     """
-    preprocessor = FunctionTransformer(_to_pandas_or_passthrough, validate=False)
+    preprocessor = FunctionTransformer(validate=False)
     model = DummyClassifier(strategy="constant", constant=0)
     X = np.zeros((4, 3))
     y = np.array([0, 1, 0, 1])

@@ -1,6 +1,5 @@
 ---
 title: "Predicting Board Game Collections"
-subtitle: "{{< meta username >}}'s Collection"
 author: "Phil Henrickson"
 date: today
 format:
@@ -18,16 +17,20 @@ execute:
   echo: false
   warning: false
   message: false
-params:
-  username: phenrickson
-  outcome: own
-  source: local
-  candidate: null
+  daemon: false
 ---
 
 ```{python}
 #| label: setup
 #| include: false
+import os
+import sys
+
+# Ensure project root is importable regardless of Quarto's CWD.
+_project_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import polars as pl
 import pandas as pd
 from itables import show as itables_show
@@ -46,18 +49,31 @@ from src.collection.viz import (
     top_n_by_year_table,
 )
 
-candidate_param = "{{< meta candidate >}}"
-candidates = None
-if candidate_param and candidate_param.lower() not in ("none", "null", ""):
-    candidates = {"{{< meta outcome >}}": candidate_param}
+# Render parameters come through environment variables set by render.py.
+USERNAME = os.environ.get("BGG_REPORT_USERNAME", "phenrickson")
+OUTCOME = os.environ.get("BGG_REPORT_OUTCOME", "own")
+SOURCE = os.environ.get("BGG_REPORT_SOURCE", "local")
+CANDIDATE = os.environ.get("BGG_REPORT_CANDIDATE") or None
+
+# Offline mode: stub BQ-backed fetchers with empty DataFrames so the
+# template renders without GCP credentials. Used by the smoke test.
+if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
+    from src.reports import collection_data as _cd
+
+    _empty = pl.DataFrame()
+    _cd._fetch_collection_snapshot = lambda username: _empty
+    _cd._fetch_games_metadata = lambda: _empty
+    _cd._fetch_upcoming_predictions = lambda u, o: _empty
+
+candidates = {OUTCOME: CANDIDATE} if CANDIDATE else None
 
 data = load(
-    username="{{< meta username >}}",
-    outcomes="{{< meta outcome >}}",
-    source="{{< meta source >}}",
+    username=USERNAME,
+    outcomes=OUTCOME,
+    source=SOURCE,
     candidates=candidates,
 )
-arts = data.outcomes["{{< meta outcome >}}"]
+arts = data.outcomes[OUTCOME]
 ```
 
 # About
