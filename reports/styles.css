@@ -42,3 +42,47 @@ figure.figure .figure-img {
     padding: 0 !important;
     background: transparent;
 }
+
+/* Top Games by Year — compact static grid, no DataTables. */
+table.topn-by-year {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82em;
+    margin: 0.5rem 0 1.5rem 0;
+    table-layout: fixed;
+}
+
+table.topn-by-year th,
+table.topn-by-year td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #eee;
+    text-align: left;
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+}
+
+table.topn-by-year th {
+    background: #f7f7f7;
+    font-weight: 600;
+    border-bottom: 2px solid #ddd;
+}
+
+table.topn-by-year .rank-col {
+    width: 50px;
+    text-align: center;
+    color: #666;
+    font-weight: 600;
+}
+
+table.topn-by-year td.owned {
+    background-color: #1f4e79;
+    color: #fff;
+    font-weight: 600;
+}
+
+table.topn-by-year tbody tr:hover td:not(.owned) {
+    background-color: #f4f8fb;
+}

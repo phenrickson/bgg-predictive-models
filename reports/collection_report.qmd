@@ -13,6 +13,11 @@ format:
     theme: cerulean
     css: styles.css
     fig-align: center
+    page-layout: full
+    grid:
+      body-width: 1100px
+      sidebar-width: 220px
+      margin-width: 240px
 execute:
   echo: false
   warning: false
@@ -411,13 +416,12 @@ shaded blue are games the user actually owns (true positives).
 
 ```{python}
 #| label: top-games-by-year
+#| output: asis
 all_eval = pl.concat(
     [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
     how="diagonal_relaxed",
 )
 
-# Build two parallel pivots: one for the displayed game name and one
-# for the underlying ownership label, so we can tint each cell by truth.
 _eval_view = all_eval.with_columns(pl.col("year_published").cast(pl.Int64))
 _eval_view = _eval_view.filter(pl.col("year_published") >= 2015)
 _eval_view = _eval_view.with_columns(
@@ -427,66 +431,65 @@ _eval_view = _eval_view.with_columns(
     .alias("_rank")
 ).filter(pl.col("_rank") <= 15)
 
-if _eval_view.height > 0:
+
+def _truncate_name(text: str, max_len: int = 28) -> str:
+    if not text:
+        return ""
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+if _eval_view.height == 0:
+    print("No predictions in the eval splits to display.\n")
+else:
     _years = sorted(int(y) for y in _eval_view["year_published"].unique().to_list())
     _name_pivot = (
         _eval_view.pivot(values="name", index="_rank", on="year_published")
         .sort("_rank")
-        .rename({"_rank": "rank"})
     )
-    _name_pivot = _name_pivot.select(
-        ["rank"] + [str(y) for y in _years if str(y) in _name_pivot.columns]
-    )
-    name_pdf = _name_pivot.to_pandas().set_index("rank").fillna("")
-
-    label_pdf = None
+    _label_pivot = None
     if "label" in _eval_view.columns:
         _label_pivot = (
             _eval_view.pivot(values="label", index="_rank", on="year_published")
             .sort("_rank")
-            .rename({"_rank": "rank"})
+            .to_pandas()
+            .set_index("_rank")
         )
-        _label_pivot = _label_pivot.select(
-            ["rank"] + [str(y) for y in _years if str(y) in _label_pivot.columns]
-        )
-        label_pdf = _label_pivot.to_pandas().set_index("rank")
 
-    def _style_owned(df):
-        out = pd.DataFrame("", index=df.index, columns=df.columns)
-        if label_pdf is None:
-            return out
-        for col in df.columns:
-            if col not in label_pdf.columns:
-                continue
-            for idx in df.index:
-                if idx not in label_pdf.index:
-                    continue
-                truth = label_pdf.at[idx, col]
-                if truth is True or truth == 1:
-                    out.at[idx, col] = (
-                        "background-color: #1f4e79; color: white; font-weight: 600;"
-                    )
-        return out
+    name_pdf = _name_pivot.to_pandas().set_index("_rank").fillna("")
+    name_pdf = name_pdf[[str(y) for y in _years if str(y) in name_pdf.columns]]
 
-    styler = name_pdf.style.apply(_style_owned, axis=None).set_properties(
-        **{"text-align": "left"}
-    )
-    column_defs = [
-        {"width": "180px", "targets": "_all"},
-    ]
-    itables_show(
-        styler,
-        paging=False,
-        searching=False,
-        info=False,
-        classes="display compact",
-        columnDefs=column_defs,
-        style="width: 100%",
-        scrollX=True,
-        allow_html=True,
-    )
-else:
-    print("No predictions in the eval splits to display.")
+    # Hand-render the table as raw HTML so we have full control over the
+    # header (year columns only, no DataTables chrome, no sort arrows on
+    # what should be static column headers).
+    rows_html: list[str] = []
+    rows_html.append('<table class="topn-by-year">')
+    rows_html.append("<thead><tr>")
+    rows_html.append('<th class="rank-col">Rank</th>')
+    for y in name_pdf.columns:
+        rows_html.append(f'<th>{y}</th>')
+    rows_html.append("</tr></thead><tbody>")
+
+    for rank in name_pdf.index:
+        rows_html.append("<tr>")
+        rows_html.append(f'<td class="rank-col">{int(rank)}</td>')
+        for col in name_pdf.columns:
+            val = str(name_pdf.at[rank, col]) if name_pdf.at[rank, col] else ""
+            owned = False
+            if _label_pivot is not None and col in _label_pivot.columns and rank in _label_pivot.index:
+                truth = _label_pivot.at[rank, col]
+                owned = bool(truth) if truth is not None else False
+            cell_class = "owned" if owned else ""
+            display = _truncate_name(val) if val else ""
+            title_attr = f' title="{val}"' if val and len(val) > 28 else ""
+            rows_html.append(
+                f'<td class="{cell_class}"{title_attr}>{display}</td>'
+            )
+        rows_html.append("</tr>")
+    rows_html.append("</tbody></table>")
+
+    print("```{=html}")
+    print("\n".join(rows_html))
+    print("```")
 ```
 
 # Predictions {#predictions}
