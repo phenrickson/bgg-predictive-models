@@ -175,20 +175,16 @@ plot_feature_importance(
 )
 ```
 
-## Partial Effects (faceted grid)
+## Partial Effects
 
 The same coefficients, broken out by feature family — all panels in one
-faceted figure. Static, smaller file size.
+faceted figure.
 
 ```{python}
 #| label: partial-effects-build
 #| include: false
 fi_pdf = arts.feature_importance.to_pandas()
-fi_groups = sorted(
-    {g for g in (
-        plot_partial_effects_by_group(fi_pdf).keys()
-    )}
-)
+fi_groups = sorted(plot_partial_effects_by_group(fi_pdf).keys())
 ```
 
 ```{python}
@@ -203,30 +199,6 @@ plot_feature_importance_grid(
     interactive=False,
     title="Partial effects by feature family",
 )
-```
-
-## Partial Effects (tabset, interactive)
-
-The same coefficients in plotly tabs — interactive but adds substantial
-bytes per panel. Compare against the faceted grid above.
-
-```{python}
-#| label: partial-effects-build-interactive
-#| include: false
-plots = plot_partial_effects_by_group(fi_pdf)
-```
-
-```{python}
-#| label: partial-effects-tabs
-#| output: asis
-print("::: {.panel-tabset .nav-pills}\n")
-for name, fig in plots.items():
-    print(f"### {name}\n")
-    html = fig.to_html(include_plotlyjs="cdn", full_html=False)
-    print("```{=html}")
-    print(html)
-    print("```\n")
-print(":::\n")
 ```
 
 # Assessment
