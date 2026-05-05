@@ -990,7 +990,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         + labs(title="Types of games", x="", y="count")
         + theme_minimal()
         + theme(
-            figure_size=(10, 2.5 * ((n_groups + 1) // 2)),
+            figure_size=(8, 2.6 * ((n_groups + 1) // 2)),
             strip_text=element_text(weight="bold"),
         )
     )

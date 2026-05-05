@@ -109,8 +109,9 @@ appear in their collection.
 
 ```{python}
 #| label: types-of-games
-#| fig-width: 10
-#| fig-height: 8
+#| fig-width: 8
+#| fig-height: 9
+#| out-width: 100%
 plot_collection_by_category_static(data.collection, data.games)
 ```
 
@@ -120,8 +121,9 @@ entered the hobby.
 
 ```{python}
 #| label: collection-by-year
-#| fig-width: 9
-#| fig-height: 3.5
+#| fig-width: 8
+#| fig-height: 3
+#| out-width: 100%
 plot_collection_by_year_static(data.collection, data.games)
 ```
 
@@ -164,8 +166,9 @@ Positive values increase the probability; negative values decrease it.
 
 ```{python}
 #| label: feature-importance
-#| fig-width: 9
+#| fig-width: 8
 #| fig-height: 7
+#| out-width: 100%
 plot_feature_importance(
     arts.feature_importance.to_pandas(),
     top_pos=25,
@@ -177,28 +180,52 @@ plot_feature_importance(
 
 ## Partial Effects
 
-The same coefficients, broken out by feature family — all panels in one
-faceted figure.
+The same coefficients, broken out by feature family. Use the tabs to
+inspect each group.
 
 ```{python}
 #| label: partial-effects-build
 #| include: false
+import base64
+from io import BytesIO
+
 fi_pdf = arts.feature_importance.to_pandas()
 fi_groups = sorted(plot_partial_effects_by_group(fi_pdf).keys())
+
+
+def _ggplot_to_img_html(plot, width: int = 9, height: int = 8) -> str:
+    """Render a plotnine ggplot to an embedded base64 PNG.
+
+    Plotnine's `save` accepts a buffer; we keep the bytes in memory so
+    the qmd doesn't have to manage file paths or output dirs.
+    """
+    buf = BytesIO()
+    plot.save(buf, format="png", width=width, height=height, dpi=96, verbose=False)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return (
+        f'<img src="data:image/png;base64,{encoded}" '
+        f'style="max-width:100%;height:auto;" />'
+    )
 ```
 
 ```{python}
-#| label: partial-effects-grid
-#| fig-width: 11
-#| fig-height: 11
-plot_feature_importance_grid(
-    fi_pdf,
-    groups=fi_groups,
-    top_pos=12,
-    top_neg=12,
-    interactive=False,
-    title="Partial effects by feature family",
-)
+#| label: partial-effects-tabs
+#| output: asis
+print("::: {.panel-tabset .nav-pills}\n")
+for group in fi_groups:
+    plot = plot_feature_importance(
+        fi_pdf,
+        group=group,
+        top_pos=15,
+        top_neg=15,
+        interactive=False,
+        title=group,
+    )
+    print(f"### {group}\n")
+    print("```{=html}")
+    print(_ggplot_to_img_html(plot, width=9, height=6))
+    print("```\n")
+print(":::\n")
 ```
 
 # Assessment
@@ -217,22 +244,25 @@ on the left.
 
 ```{python}
 #| label: separation-oof
-#| fig-width: 9
+#| fig-width: 8
 #| fig-height: 2.4
+#| out-width: 100%
 plot_separation_static(arts.oof_predictions, title="Out-of-fold")
 ```
 
 ```{python}
 #| label: separation-val
-#| fig-width: 9
+#| fig-width: 8
 #| fig-height: 2.4
+#| out-width: 100%
 plot_separation_static(arts.val_predictions, title="Validation")
 ```
 
 ```{python}
 #| label: separation-test
-#| fig-width: 9
+#| fig-width: 8
 #| fig-height: 2.4
+#| out-width: 100%
 plot_separation_static(arts.test_predictions, title="Test")
 ```
 
