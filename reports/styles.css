@@ -13,3 +13,22 @@
 table.dataTable {
     font-size: 0.9em;
 }
+
+/* Quarto wraps figures in <figure class="figure"> which gets a default
+   bordered/padded look from Bootstrap. The plotnine PNGs we render
+   already include the panel styling, so the outer chrome reads as a
+   stray box. Flatten it. */
+.tab-content figure.figure,
+figure.figure {
+    border: none;
+    padding: 0;
+    margin: 0 0 1rem 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.tab-content figure.figure .figure-img,
+figure.figure .figure-img {
+    margin: 0;
+    border: none;
+}

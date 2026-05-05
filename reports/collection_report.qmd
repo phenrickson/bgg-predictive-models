@@ -167,12 +167,12 @@ Positive values increase the probability; negative values decrease it.
 ```{python}
 #| label: feature-importance
 #| fig-width: 8
-#| fig-height: 12
+#| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(
     arts.feature_importance.to_pandas(),
-    top_pos=25,
-    top_neg=25,
+    top_pos=15,
+    top_neg=15,
     interactive=False,
     title="Feature importance",
 )
