@@ -32,3 +32,13 @@ figure.figure .figure-img {
     margin: 0;
     border: none;
 }
+
+/* Quarto's panel-tabset puts a 1px grey border on the .tab-content
+   container that surrounds whichever tab is active. Remove it. */
+.panel-tabset .tab-content,
+.tab-content,
+.tab-content .tab-pane {
+    border: none !important;
+    padding: 0 !important;
+    background: transparent;
+}
