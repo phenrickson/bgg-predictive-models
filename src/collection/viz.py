@@ -20,12 +20,16 @@ from plotnine import (
     aes,
     coord_flip,
     element_blank,
+    element_text,
     facet_wrap,
+    geom_area,
     geom_col,
+    geom_histogram,
     geom_vline,
     ggplot,
     labs,
     scale_fill_distiller,
+    scale_x_continuous,
     theme,
     theme_minimal,
 )
@@ -822,3 +826,171 @@ def plot_partial_effects_by_group(
             continue
         out[group] = fig
     return out
+
+
+# --- Static (plotnine) variants — for embedding in Quarto reports ---
+#
+# These exist alongside the plotly versions because plotly figures bundle
+# 4–5 MB of JS per chart, blowing up the embedded-resources HTML. plotnine
+# renders to PNG which is kilobytes. Use the static variants in the qmd
+# template; keep plotly versions for Streamlit/Dash.
+
+
+def plot_separation_static(predictions, title: Optional[str] = None) -> ggplot:
+    """plotnine version of `plot_separation`.
+
+    Sorts predictions by ``proba`` descending, plots ``proba`` as an area
+    chart against rank, and overlays a vertical line at every rank
+    where ``label`` is truthy.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "proba" not in predictions.columns:
+        return (
+            ggplot(pd.DataFrame({"rank": [], "proba": []}), aes("rank", "proba"))
+            + labs(title=title or "Separation")
+            + theme_minimal()
+        )
+
+    sorted_preds = predictions.sort("proba", descending=True).with_row_index(
+        "rank", offset=1
+    )
+    pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+    pdf["rank"] = pdf["rank"].astype(int)
+    true_ranks = pdf.loc[pdf["label"].astype(bool), "rank"].tolist()
+
+    plot = (
+        ggplot(pdf, aes("rank", "proba"))
+        + geom_area(fill="#888888", alpha=0.4)
+        + theme_minimal()
+        + labs(
+            title=title or "Separation",
+            x="rank (proba descending)",
+            y="proba",
+        )
+        + theme(figure_size=(8, 2.2))
+    )
+    if true_ranks:
+        plot = plot + geom_vline(
+            xintercept=true_ranks, color="#1976d2", alpha=0.6, size=0.3
+        )
+    return plot
+
+
+def plot_collection_by_year_static(collection, games) -> ggplot:
+    """plotnine version of `plot_collection_by_year`."""
+    import polars as pl
+
+    if collection.height == 0:
+        return (
+            ggplot(pd.DataFrame({"year_published": [], "n": []}))
+            + labs(title="Games by year")
+            + theme_minimal()
+        )
+    owned = (
+        collection.filter(pl.col("owned") == True)
+        .select("game_id")
+        .join(games.select(["game_id", "year_published"]), on="game_id", how="inner")
+    )
+    if owned.height == 0:
+        return (
+            ggplot(pd.DataFrame({"year_published": [], "n": []}))
+            + labs(title="Games by year")
+            + theme_minimal()
+        )
+    counts = owned.group_by("year_published").len().sort("year_published")
+    pdf = counts.to_pandas().rename(columns={"len": "n"})
+    pdf["year_published"] = pdf["year_published"].astype(int)
+    return (
+        ggplot(pdf, aes("year_published", "n"))
+        + geom_col(fill="#4fc3f7")
+        + labs(title="Games by year", x="year published", y="count")
+        + theme_minimal()
+        + theme(figure_size=(9, 3.5))
+    )
+
+
+def plot_collection_by_category_static(collection, games, top_n: int = 12) -> ggplot:
+    """plotnine version of `plot_collection_by_category`.
+
+    Renders a single faceted figure (one panel per family) instead of a
+    plotly subplots grid. Reuses the same data-shaping logic as the
+    plotly version.
+    """
+    import polars as pl
+
+    if collection.height == 0 or games is None or games.height == 0:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_minimal()
+        )
+
+    owned_ids = collection.filter(pl.col("owned") == True).select("game_id")
+    joined = owned_ids.join(games, on="game_id", how="inner")
+    if joined.height == 0:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_minimal()
+        )
+
+    list_groups = {
+        "categories": "Categories",
+        "mechanics": "Mechanics",
+        "designers": "Designers",
+        "artists": "Artists",
+        "publishers": "Publishers",
+        "families": "Families",
+    }
+    present_cols = [c for c in list_groups if c in joined.columns]
+    rows: list[dict[str, Any]] = []
+    for col in present_cols:
+        try:
+            exploded = (
+                joined.select(pl.col(col))
+                .explode(col)
+                .drop_nulls()
+                .group_by(col)
+                .len()
+                .sort("len", descending=True)
+                .head(top_n)
+            )
+        except Exception:
+            continue
+        for record in exploded.to_dicts():
+            value = record[col]
+            count = record["len"]
+            if value in (None, ""):
+                continue
+            rows.append(
+                {"feature": str(value), "group": list_groups[col], "count": int(count)}
+            )
+
+    if not rows:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_minimal()
+        )
+
+    pdf = pd.DataFrame(rows)
+    # Order features within each facet by count so the bars sort cleanly.
+    pdf["feature"] = pd.Categorical(
+        pdf["feature"],
+        categories=pdf.sort_values(["group", "count"])["feature"].tolist(),
+        ordered=True,
+    )
+    n_groups = pdf["group"].nunique()
+    return (
+        ggplot(pdf, aes("feature", "count"))
+        + geom_col(fill="#4fc3f7")
+        + coord_flip()
+        + facet_wrap("group", scales="free", ncol=2)
+        + labs(title="Types of games", x="", y="count")
+        + theme_minimal()
+        + theme(
+            figure_size=(10, 2.5 * ((n_groups + 1) // 2)),
+            strip_text=element_text(weight="bold"),
+        )
+    )

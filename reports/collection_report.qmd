@@ -41,10 +41,14 @@ from src.collection.viz import (
     extract_finalized_importance,
     metrics_table,
     plot_collection_by_category,
+    plot_collection_by_category_static,
     plot_collection_by_year,
+    plot_collection_by_year_static,
     plot_feature_importance,
+    plot_feature_importance_grid,
     plot_partial_effects_by_group,
     plot_separation,
+    plot_separation_static,
     predictions_datatable,
     top_n_by_year_table,
 )
@@ -105,8 +109,9 @@ appear in their collection.
 
 ```{python}
 #| label: types-of-games
-#| fig-height: 7
-plot_collection_by_category(data.collection, data.games)
+#| fig-width: 10
+#| fig-height: 8
+plot_collection_by_category_static(data.collection, data.games)
 ```
 
 The histogram below shows the years in which games in the user's
@@ -115,7 +120,9 @@ entered the hobby.
 
 ```{python}
 #| label: collection-by-year
-plot_collection_by_year(data.collection, data.games)
+#| fig-width: 9
+#| fig-height: 3.5
+plot_collection_by_year_static(data.collection, data.games)
 ```
 
 ## Games in Collection
@@ -157,38 +164,65 @@ Positive values increase the probability; negative values decrease it.
 
 ```{python}
 #| label: feature-importance
-#| fig-height: 6
+#| fig-width: 9
+#| fig-height: 7
 plot_feature_importance(
     arts.feature_importance.to_pandas(),
     top_pos=25,
     top_neg=25,
-    interactive=True,
+    interactive=False,
     title="Feature importance",
 )
 ```
 
-## Partial Effects
+## Partial Effects (faceted grid)
 
-The same coefficients, broken out by feature family. Use the tabs to
-inspect each group.
+The same coefficients, broken out by feature family — all panels in one
+faceted figure. Static, smaller file size.
 
 ```{python}
 #| label: partial-effects-build
 #| include: false
-plots = plot_partial_effects_by_group(arts.feature_importance.to_pandas())
+fi_pdf = arts.feature_importance.to_pandas()
+fi_groups = sorted(
+    {g for g in (
+        plot_partial_effects_by_group(fi_pdf).keys()
+    )}
+)
+```
+
+```{python}
+#| label: partial-effects-grid
+#| fig-width: 11
+#| fig-height: 11
+plot_feature_importance_grid(
+    fi_pdf,
+    groups=fi_groups,
+    top_pos=12,
+    top_neg=12,
+    interactive=False,
+    title="Partial effects by feature family",
+)
+```
+
+## Partial Effects (tabset, interactive)
+
+The same coefficients in plotly tabs — interactive but adds substantial
+bytes per panel. Compare against the faceted grid above.
+
+```{python}
+#| label: partial-effects-build-interactive
+#| include: false
+plots = plot_partial_effects_by_group(fi_pdf)
 ```
 
 ```{python}
 #| label: partial-effects-tabs
 #| output: asis
-# Emit the whole tabset as raw markdown. Each tab heading becomes a
-# panel; Quarto's panel-tabset shortcode picks them up because the
-# headings are flush against the chunk's output (no surrounding fences).
 print("::: {.panel-tabset .nav-pills}\n")
 for name, fig in plots.items():
     print(f"### {name}\n")
     html = fig.to_html(include_plotlyjs="cdn", full_html=False)
-    # Wrap raw HTML in Quarto's raw-html block so it renders inside the tab.
     print("```{=html}")
     print(html)
     print("```\n")
@@ -211,20 +245,23 @@ on the left.
 
 ```{python}
 #| label: separation-oof
-#| fig-height: 4
-plot_separation(arts.oof_predictions, title="Out-of-fold")
+#| fig-width: 9
+#| fig-height: 2.4
+plot_separation_static(arts.oof_predictions, title="Out-of-fold")
 ```
 
 ```{python}
 #| label: separation-val
-#| fig-height: 4
-plot_separation(arts.val_predictions, title="Validation")
+#| fig-width: 9
+#| fig-height: 2.4
+plot_separation_static(arts.val_predictions, title="Validation")
 ```
 
 ```{python}
 #| label: separation-test
-#| fig-height: 4
-plot_separation(arts.test_predictions, title="Test")
+#| fig-width: 9
+#| fig-height: 2.4
+plot_separation_static(arts.test_predictions, title="Test")
 ```
 
 ## Top Games in Training
