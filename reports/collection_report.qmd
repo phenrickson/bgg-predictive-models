@@ -167,7 +167,7 @@ Positive values increase the probability; negative values decrease it.
 ```{python}
 #| label: feature-importance
 #| fig-width: 8
-#| fig-height: 7
+#| fig-height: 12
 #| out-width: 100%
 plot_feature_importance(
     arts.feature_importance.to_pandas(),
@@ -184,49 +184,94 @@ The same coefficients, broken out by feature family. Use the tabs to
 inspect each group.
 
 ```{python}
-#| label: partial-effects-build
+#| label: partial-effects-prep
 #| include: false
-import base64
-from io import BytesIO
-
 fi_pdf = arts.feature_importance.to_pandas()
-fi_groups = sorted(plot_partial_effects_by_group(fi_pdf).keys())
-
-
-def _ggplot_to_img_html(plot, width: int = 9, height: int = 8) -> str:
-    """Render a plotnine ggplot to an embedded base64 PNG.
-
-    Plotnine's `save` accepts a buffer; we keep the bytes in memory so
-    the qmd doesn't have to manage file paths or output dirs.
-    """
-    buf = BytesIO()
-    plot.save(buf, format="png", width=width, height=height, dpi=96, verbose=False)
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    return (
-        f'<img src="data:image/png;base64,{encoded}" '
-        f'style="max-width:100%;height:auto;" />'
-    )
 ```
+
+::: {.panel-tabset .nav-pills}
+
+### Categories
 
 ```{python}
-#| label: partial-effects-tabs
-#| output: asis
-print("::: {.panel-tabset .nav-pills}\n")
-for group in fi_groups:
-    plot = plot_feature_importance(
-        fi_pdf,
-        group=group,
-        top_pos=15,
-        top_neg=15,
-        interactive=False,
-        title=group,
-    )
-    print(f"### {group}\n")
-    print("```{=html}")
-    print(_ggplot_to_img_html(plot, width=9, height=6))
-    print("```\n")
-print(":::\n")
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Categories", top_pos=15, top_neg=15,
+                        interactive=False, title="Categories")
 ```
+
+### Mechanics
+
+```{python}
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Mechanics", top_pos=15, top_neg=15,
+                        interactive=False, title="Mechanics")
+```
+
+### Designers
+
+```{python}
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
+                        interactive=False, title="Designers")
+```
+
+### Artists
+
+```{python}
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Artists", top_pos=15, top_neg=15,
+                        interactive=False, title="Artists")
+```
+
+### Families
+
+```{python}
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Families", top_pos=15, top_neg=15,
+                        interactive=False, title="Families")
+```
+
+### Publishers
+
+```{python}
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Publishers", top_pos=15, top_neg=15,
+                        interactive=False, title="Publishers")
+```
+
+### Players
+
+```{python}
+#| fig-width: 8
+#| fig-height: 5
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Players", top_pos=15, top_neg=15,
+                        interactive=False, title="Players")
+```
+
+### Missingness
+
+```{python}
+#| fig-width: 8
+#| fig-height: 4
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Missingness", top_pos=15, top_neg=15,
+                        interactive=False, title="Missingness")
+```
+
+:::
 
 # Assessment
 
