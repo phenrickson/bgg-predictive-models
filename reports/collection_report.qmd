@@ -165,29 +165,36 @@ feature, how much it shifts the log-odds of a user owning a game.
 Positive values increase the probability; negative values decrease it.
 
 ```{python}
+#| label: feature-importance-prep
+#| include: false
+fi_pdf = arts.feature_importance.to_pandas()
+# Shared x-axis + color limits so the partial-effects tabs are directly
+# comparable. Use the absolute max across all features so the scale is
+# symmetric around zero.
+_cmax = float(fi_pdf["value"].abs().max()) if len(fi_pdf) else 1.0
+FI_RANGE = (-_cmax, _cmax)
+```
+
+```{python}
 #| label: feature-importance
 #| fig-width: 8
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(
-    arts.feature_importance.to_pandas(),
+    fi_pdf,
     top_pos=15,
     top_neg=15,
     interactive=False,
     title="Feature importance",
+    value_range=FI_RANGE,
 )
 ```
 
 ## Partial Effects
 
 The same coefficients, broken out by feature family. Use the tabs to
-inspect each group.
-
-```{python}
-#| label: partial-effects-prep
-#| include: false
-fi_pdf = arts.feature_importance.to_pandas()
-```
+inspect each group. All tabs share the same x-axis range and color
+scale so groups are directly comparable.
 
 ::: {.panel-tabset .nav-pills}
 
@@ -198,7 +205,8 @@ fi_pdf = arts.feature_importance.to_pandas()
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Categories", top_pos=15, top_neg=15,
-                        interactive=False, title="Categories")
+                        interactive=False, title="Categories",
+                        value_range=FI_RANGE)
 ```
 
 ### Mechanics
@@ -208,7 +216,8 @@ plot_feature_importance(fi_pdf, group="Categories", top_pos=15, top_neg=15,
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Mechanics", top_pos=15, top_neg=15,
-                        interactive=False, title="Mechanics")
+                        interactive=False, title="Mechanics",
+                        value_range=FI_RANGE)
 ```
 
 ### Designers
@@ -218,7 +227,8 @@ plot_feature_importance(fi_pdf, group="Mechanics", top_pos=15, top_neg=15,
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
-                        interactive=False, title="Designers")
+                        interactive=False, title="Designers",
+                        value_range=FI_RANGE)
 ```
 
 ### Artists
@@ -228,7 +238,8 @@ plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Artists", top_pos=15, top_neg=15,
-                        interactive=False, title="Artists")
+                        interactive=False, title="Artists",
+                        value_range=FI_RANGE)
 ```
 
 ### Families
@@ -238,7 +249,8 @@ plot_feature_importance(fi_pdf, group="Artists", top_pos=15, top_neg=15,
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Families", top_pos=15, top_neg=15,
-                        interactive=False, title="Families")
+                        interactive=False, title="Families",
+                        value_range=FI_RANGE)
 ```
 
 ### Publishers
@@ -248,7 +260,8 @@ plot_feature_importance(fi_pdf, group="Families", top_pos=15, top_neg=15,
 #| fig-height: 7
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Publishers", top_pos=15, top_neg=15,
-                        interactive=False, title="Publishers")
+                        interactive=False, title="Publishers",
+                        value_range=FI_RANGE)
 ```
 
 ### Players
@@ -258,7 +271,8 @@ plot_feature_importance(fi_pdf, group="Publishers", top_pos=15, top_neg=15,
 #| fig-height: 5
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Players", top_pos=15, top_neg=15,
-                        interactive=False, title="Players")
+                        interactive=False, title="Players",
+                        value_range=FI_RANGE)
 ```
 
 ### Missingness
@@ -268,7 +282,8 @@ plot_feature_importance(fi_pdf, group="Players", top_pos=15, top_neg=15,
 #| fig-height: 4
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Missingness", top_pos=15, top_neg=15,
-                        interactive=False, title="Missingness")
+                        interactive=False, title="Missingness",
+                        value_range=FI_RANGE)
 ```
 
 :::

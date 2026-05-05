@@ -30,6 +30,7 @@ from plotnine import (
     labs,
     scale_fill_distiller,
     scale_x_continuous,
+    scale_y_continuous,
     theme,
     theme_minimal,
 )
@@ -119,6 +120,7 @@ def plot_feature_importance(
     title: Optional[str] = None,
     interactive: bool = False,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
+    value_range: Optional[tuple[float, float]] = None,
 ) -> Union[ggplot, go.Figure]:
     """One diverging-bar feature-importance plot.
 
@@ -135,6 +137,10 @@ def plot_feature_importance(
         name_formatter: Applied to each feature label before plotting.
             Defaults to :func:`tidy_feature_name`. Pass ``None`` for raw
             names (still with the group prefix stripped when ``group`` is set).
+        value_range: Optional ``(low, high)`` x-axis limits / color-scale
+            range. Pass the same range to multiple plots so they're
+            visually comparable (same x scale, same color stretch).
+            Defaults to the absolute max of the filtered subset.
     """
     df = _prepare(
         importance_df,
@@ -145,8 +151,8 @@ def plot_feature_importance(
     )
     plot_title = title or group or "Feature Importance"
     if interactive:
-        return _render_plotly_bars(df, title=plot_title)
-    return _render_plotnine_bars(df, title=plot_title)
+        return _render_plotly_bars(df, title=plot_title, value_range=value_range)
+    return _render_plotnine_bars(df, title=plot_title, value_range=value_range)
 
 
 def plot_feature_importance_grid(
@@ -250,16 +256,26 @@ def _prepare(
 # --- plotnine renderers (static, notebook-friendly) ---
 
 
-def _render_plotnine_bars(df: pd.DataFrame, title: str) -> ggplot:
+def _render_plotnine_bars(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> ggplot:
     # Preserve the sort order from _prepare (largest positive at top).
     feature_order = list(df["feature"])[::-1]  # ggplot draws bottom-up, so reverse
     df = df.assign(feature=pd.Categorical(df["feature"], categories=feature_order))
-    cmax = float(df["value"].abs().max()) if len(df) else 1.0
+    if value_range is not None:
+        lo, hi = value_range
+        cmax = max(abs(lo), abs(hi))
+    else:
+        cmax = float(df["value"].abs().max()) if len(df) else 1.0
+        lo, hi = -cmax, cmax
     return (
         ggplot(df, aes(x="feature", y="value", fill="value"))
         + geom_col()
         + geom_vline(xintercept=0, color="grey", linetype="dotted")
         + coord_flip()
+        + scale_y_continuous(limits=(lo, hi))
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
         + theme_minimal()
@@ -319,12 +335,22 @@ def _plotly_bar_trace(df: pd.DataFrame, cmax: float, show_colorbar: bool) -> go.
     )
 
 
-def _render_plotly_bars(df: pd.DataFrame, title: str) -> go.Figure:
-    cmax = float(df["value"].abs().max()) if len(df) else 1.0
+def _render_plotly_bars(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> go.Figure:
+    if value_range is not None:
+        lo, hi = value_range
+        cmax = max(abs(lo), abs(hi))
+    else:
+        cmax = float(df["value"].abs().max()) if len(df) else 1.0
+        lo, hi = -cmax, cmax
     fig = go.Figure(_plotly_bar_trace(df, cmax=cmax, show_colorbar=True))
     fig.update_layout(
         title=title,
         xaxis_title="Effect on outcome",
+        xaxis=dict(range=[lo, hi]),
         yaxis_title="",
         yaxis=dict(autorange="reversed"),
         height=max(400, 22 * len(df) + 100),
