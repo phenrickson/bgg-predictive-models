@@ -406,7 +406,8 @@ itables_show(
 
 ## Top Games by Year
 
-Side-by-side comparison of the model's top picks for each year.
+Side-by-side comparison of the model's top picks for each year. Cells
+shaded blue are games the user actually owns (true positives).
 
 ```{python}
 #| label: top-games-by-year
@@ -414,7 +415,78 @@ all_eval = pl.concat(
     [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
     how="diagonal_relaxed",
 )
-top_n_by_year_table(all_eval, top_n=15).to_pandas()
+
+# Build two parallel pivots: one for the displayed game name and one
+# for the underlying ownership label, so we can tint each cell by truth.
+_eval_view = all_eval.with_columns(pl.col("year_published").cast(pl.Int64))
+_eval_view = _eval_view.filter(pl.col("year_published") >= 2015)
+_eval_view = _eval_view.with_columns(
+    pl.col("proba")
+    .rank(method="ordinal", descending=True)
+    .over("year_published")
+    .alias("_rank")
+).filter(pl.col("_rank") <= 15)
+
+if _eval_view.height > 0:
+    _years = sorted(int(y) for y in _eval_view["year_published"].unique().to_list())
+    _name_pivot = (
+        _eval_view.pivot(values="name", index="_rank", on="year_published")
+        .sort("_rank")
+        .rename({"_rank": "rank"})
+    )
+    _name_pivot = _name_pivot.select(
+        ["rank"] + [str(y) for y in _years if str(y) in _name_pivot.columns]
+    )
+    name_pdf = _name_pivot.to_pandas().set_index("rank").fillna("")
+
+    label_pdf = None
+    if "label" in _eval_view.columns:
+        _label_pivot = (
+            _eval_view.pivot(values="label", index="_rank", on="year_published")
+            .sort("_rank")
+            .rename({"_rank": "rank"})
+        )
+        _label_pivot = _label_pivot.select(
+            ["rank"] + [str(y) for y in _years if str(y) in _label_pivot.columns]
+        )
+        label_pdf = _label_pivot.to_pandas().set_index("rank")
+
+    def _style_owned(df):
+        out = pd.DataFrame("", index=df.index, columns=df.columns)
+        if label_pdf is None:
+            return out
+        for col in df.columns:
+            if col not in label_pdf.columns:
+                continue
+            for idx in df.index:
+                if idx not in label_pdf.index:
+                    continue
+                truth = label_pdf.at[idx, col]
+                if truth is True or truth == 1:
+                    out.at[idx, col] = (
+                        "background-color: #1f4e79; color: white; font-weight: 600;"
+                    )
+        return out
+
+    styler = name_pdf.style.apply(_style_owned, axis=None).set_properties(
+        **{"text-align": "left"}
+    )
+    column_defs = [
+        {"width": "180px", "targets": "_all"},
+    ]
+    itables_show(
+        styler,
+        paging=False,
+        searching=False,
+        info=False,
+        classes="display compact",
+        columnDefs=column_defs,
+        style="width: 100%",
+        scrollX=True,
+        allow_html=True,
+    )
+else:
+    print("No predictions in the eval splits to display.")
 ```
 
 # Predictions {#predictions}
