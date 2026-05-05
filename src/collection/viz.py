@@ -646,12 +646,13 @@ def plot_collection_by_category(collection, games, top_n: int = 15) -> go.Figure
     if joined.height == 0:
         return go.Figure(layout={"title": "Types of games"})
 
+    # Publishers excluded: for many users the top entries are
+    # foreign-language re-publishers, not a useful signal.
     list_groups = {
         "categories": "Categories",
         "mechanics": "Mechanics",
         "designers": "Designers",
         "artists": "Artists",
-        "publishers": "Publishers",
         "families": "Families",
     }
     present_cols = [c for c in list_groups if c in joined.columns]
@@ -935,12 +936,14 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
             + theme_minimal()
         )
 
+    # Publishers is intentionally excluded — for international users the
+    # top entries are foreign-language re-publishers of already-popular
+    # games, which says more about translation rights than taste.
     list_groups = {
         "categories": "Categories",
         "mechanics": "Mechanics",
         "designers": "Designers",
         "artists": "Artists",
-        "publishers": "Publishers",
         "families": "Families",
     }
     present_cols = [c for c in list_groups if c in joined.columns]
