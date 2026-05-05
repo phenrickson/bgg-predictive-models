@@ -489,11 +489,19 @@ def plot_separation(
     return fig
 
 
-def top_n_by_year_table(predictions, top_n: int = 15):
+def top_n_by_year_table(predictions, top_n: int = 15, min_year: int | None = 2015):
     """Pivot predictions into rank × year, top-N per year.
 
     Each column is a year (as a string for stable header names); each
     row is rank 1..top_n. Cells contain the game ``name``.
+
+    Args:
+        predictions: Must have ``proba``, ``year_published``, ``name``.
+        top_n: Number of rows per year to keep.
+        min_year: Drop rows with ``year_published`` below this. Pass
+            ``None`` to disable. Defaults to 2015 — older years tend to
+            be dominated by very high-proba "classics" that crowd out
+            the recent picks people actually want to see.
     """
     import polars as pl
 
@@ -501,6 +509,10 @@ def top_n_by_year_table(predictions, top_n: int = 15):
         return pl.DataFrame()
 
     view = predictions.with_columns(pl.col("year_published").cast(pl.Int64))
+    if min_year is not None:
+        view = view.filter(pl.col("year_published") >= min_year)
+    if view.height == 0:
+        return pl.DataFrame()
     view = view.with_columns(
         pl.col("proba")
         .rank(method="ordinal", descending=True)
@@ -521,15 +533,37 @@ def top_n_by_year_table(predictions, top_n: int = 15):
     return pivot.select([c for c in ordered if c in pivot.columns])
 
 
+_PREDICTION_DISPLAY_COLS = [
+    "proba",
+    "predicted_prob",
+    "label",
+    "predicted_label",
+    "name",
+    "year_published",
+    "min_players",
+    "max_players",
+    "min_playtime",
+    "max_playtime",
+    "average_rating",
+    "average_weight",
+    "users_rated",
+    "game_id",
+]
+
+
 def predictions_datatable(
     predictions,
     games,
     top_n: int = 500,
     min_users_rated: int = 0,
+    columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Sortable predictions table for embedding in the report.
 
     Returns a pandas DataFrame; the qmd wraps it with `itables.show(...)`.
+    By default, surfaces a curated set of columns (proba/label, name,
+    year, player counts, playtime, ratings) and drops list-typed columns
+    that render badly in tables.
     """
     import polars as pl
 
@@ -538,6 +572,8 @@ def predictions_datatable(
         view = view.filter(pl.col("users_rated") >= min_users_rated)
     if "proba" in view.columns:
         view = view.sort("proba", descending=True)
+    elif "predicted_prob" in view.columns:
+        view = view.sort("predicted_prob", descending=True)
     view = view.head(top_n)
 
     if games is not None and games.height > 0 and "game_id" in games.columns:
@@ -546,7 +582,17 @@ def predictions_datatable(
         ]
         view = view.join(games.select(meta_cols), on="game_id", how="left")
 
-    return view.to_pandas()
+    # Drop list-typed and binary-blob columns; itables can't sort them
+    # and they make the table unreadable.
+    drop_cols = {
+        "categories", "mechanics", "designers", "artists", "publishers",
+        "families", "description", "thumbnail", "image",
+        "load_timestamp", "last_updated",
+    }
+    keep = columns or [c for c in _PREDICTION_DISPLAY_COLS if c in view.columns]
+    if not keep:
+        keep = [c for c in view.columns if c not in drop_cols]
+    return view.select([c for c in keep if c in view.columns]).to_pandas()
 
 
 def plot_collection_by_year(collection, games) -> go.Figure:
@@ -596,56 +642,133 @@ def plot_collection_by_category(collection, games, top_n: int = 15) -> go.Figure
     if joined.height == 0:
         return go.Figure(layout={"title": "Types of games"})
 
+    list_groups = {
+        "categories": "Categories",
+        "mechanics": "Mechanics",
+        "designers": "Designers",
+        "artists": "Artists",
+        "publishers": "Publishers",
+        "families": "Families",
+    }
+    present_cols = [c for c in list_groups if c in joined.columns]
     rows: list[dict[str, Any]] = []
-    for col in joined.columns:
-        group = feature_group(col)
-        if group == "Other":
-            continue
+    for col in present_cols:
         try:
-            total = int(joined.select(pl.col(col).sum()).item())
+            exploded = (
+                joined.select(pl.col(col))
+                .explode(col)
+                .drop_nulls()
+                .group_by(col)
+                .len()
+                .sort("len", descending=True)
+                .head(top_n)
+            )
         except Exception:
             continue
-        if total <= 0:
-            continue
-        rows.append(
-            {
-                "feature": tidy_feature_name(col, include_tag=False),
-                "group": group,
-                "count": total,
-            }
-        )
+        for record in exploded.to_dicts():
+            value = record[col]
+            count = record["len"]
+            if value in (None, ""):
+                continue
+            rows.append(
+                {"feature": str(value), "group": list_groups[col], "count": int(count)}
+            )
+
+    # Fallback: legacy dummy columns (category_*, mechanic_*, etc.)
+    if not rows:
+        for col in joined.columns:
+            group = feature_group(col)
+            if group == "Other":
+                continue
+            try:
+                total = int(joined.select(pl.col(col).sum()).item())
+            except Exception:
+                continue
+            if total <= 0:
+                continue
+            rows.append(
+                {
+                    "feature": tidy_feature_name(col, include_tag=False),
+                    "group": group,
+                    "count": total,
+                }
+            )
+
     if not rows:
         return go.Figure(layout={"title": "Types of games"})
 
-    df = pd.DataFrame(rows).sort_values("count", ascending=False)
-    df = df.groupby("group", group_keys=False).head(top_n)
-    df = df.sort_values(["group", "count"], ascending=[True, True])
+    groups_order = [
+        list_groups[c] for c in present_cols if list_groups[c] in {r["group"] for r in rows}
+    ] or sorted({r["group"] for r in rows})
 
-    fig = go.Figure()
-    for group, sub in df.groupby("group"):
+    n_groups = len(groups_order)
+    cols_per_row = 2
+    rows_grid = (n_groups + cols_per_row - 1) // cols_per_row
+    fig = make_subplots(
+        rows=rows_grid,
+        cols=cols_per_row,
+        subplot_titles=groups_order,
+        horizontal_spacing=0.3,
+        vertical_spacing=0.08,
+    )
+    for i, group in enumerate(groups_order):
+        sub = (
+            pd.DataFrame([r for r in rows if r["group"] == group])
+            .sort_values("count", ascending=True)
+        )
+        r = i // cols_per_row + 1
+        c = i % cols_per_row + 1
         fig.add_trace(
             go.Bar(
                 x=sub["count"],
                 y=sub["feature"],
-                name=group,
                 orientation="h",
-            )
+                showlegend=False,
+                marker_color="#4fc3f7",
+            ),
+            row=r,
+            col=c,
         )
+
     fig.update_layout(
         title="Types of games",
-        barmode="group",
-        height=600,
-        margin={"l": 200},
+        height=max(360, 220 * rows_grid),
+        margin={"l": 80, "r": 20, "t": 80, "b": 40},
     )
     return fig
+
+
+_COLLECTION_DISPLAY_COLS = [
+    "game_name",
+    "name",
+    "year_published",
+    "user_rating",
+    "owned",
+    "previously_owned",
+    "want",
+    "wishlist",
+    "preordered",
+    "for_trade",
+    "min_players",
+    "max_players",
+    "min_playtime",
+    "max_playtime",
+    "average_rating",
+    "average_weight",
+    "users_rated",
+    "game_id",
+]
 
 
 def collection_datatable(collection, games) -> pd.DataFrame:
     """Sortable table of a user's collection.
 
-    Joins in game metadata when available. Returned as pandas; the qmd
-    wraps with `itables.show`.
+    Joins in game metadata when available. Returns a pandas DataFrame
+    with a curated set of columns; the qmd wraps with `itables.show`.
+    Drops list-typed and blob columns that render poorly in tables.
     """
+    import polars as pl
+
     if collection.height == 0:
         return pd.DataFrame()
     view = collection
@@ -654,7 +777,19 @@ def collection_datatable(collection, games) -> pd.DataFrame:
             c for c in games.columns if c == "game_id" or c not in view.columns
         ]
         view = view.join(games.select(meta_cols), on="game_id", how="left")
-    return view.to_pandas()
+
+    # Show only owned games by default — that's what users mean by
+    # "their collection" in this report.
+    if "owned" in view.columns:
+        view = view.filter(pl.col("owned") == True)
+
+    if "user_rating" in view.columns:
+        view = view.sort("user_rating", descending=True, nulls_last=True)
+
+    keep = [c for c in _COLLECTION_DISPLAY_COLS if c in view.columns]
+    if not keep:
+        keep = view.columns
+    return view.select(keep).to_pandas()
 
 
 def plot_partial_effects_by_group(

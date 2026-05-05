@@ -178,19 +178,22 @@ inspect each group.
 plots = plot_partial_effects_by_group(arts.feature_importance.to_pandas())
 ```
 
-::: {.panel-tabset .nav-pills}
-
 ```{python}
 #| label: partial-effects-tabs
 #| output: asis
+# Emit the whole tabset as raw markdown. Each tab heading becomes a
+# panel; Quarto's panel-tabset shortcode picks them up because the
+# headings are flush against the chunk's output (no surrounding fences).
+print("::: {.panel-tabset .nav-pills}\n")
 for name, fig in plots.items():
     print(f"### {name}\n")
+    html = fig.to_html(include_plotlyjs="cdn", full_html=False)
+    # Wrap raw HTML in Quarto's raw-html block so it renders inside the tab.
     print("```{=html}")
-    print(fig.to_html(include_plotlyjs="cdn", full_html=False))
+    print(html)
     print("```\n")
+print(":::\n")
 ```
-
-:::
 
 # Assessment
 
@@ -216,6 +219,12 @@ plot_separation(arts.oof_predictions, title="Out-of-fold")
 #| label: separation-val
 #| fig-height: 4
 plot_separation(arts.val_predictions, title="Validation")
+```
+
+```{python}
+#| label: separation-test
+#| fig-height: 4
+plot_separation(arts.test_predictions, title="Test")
 ```
 
 ## Top Games in Training
