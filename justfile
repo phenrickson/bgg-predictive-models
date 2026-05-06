@@ -223,6 +223,16 @@ render user=username outcome="own" candidate="":
 render-all outcome="own":
     uv run python -m reports.render --all-users --outcome {{outcome}}
 
+# Build the navigable website: per-user wrappers + sidebar navigation,
+# with the full project rendered to reports/_site/. Excludes fixture_user.
+build-site:
+    uv run python -m reports.build_site
+
+# Generate per-user wrappers without rendering — useful while iterating
+# on the wrapper template or the sidebar config.
+build-site-wrappers:
+    uv run python -m reports.build_site --no-render
+
 # Render the report against synthetic fixture data — no BQ, no artifacts.
 # Use this for fast iteration on styling/layout: edits to the qmd, css,
 # or viz code can be checked in seconds rather than waiting on real loads.

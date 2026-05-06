@@ -1073,9 +1073,16 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
 
     pdf = pd.DataFrame(rows)
     # Order features within each facet by count so the bars sort cleanly.
+    # Real users sometimes have feature-name collisions across families
+    # (e.g. a category and a mechanic that share a label). pandas
+    # Categorical requires unique categories, so dedupe the ordered list
+    # while preserving the first occurrence.
+    ordered = pdf.sort_values(["group", "count"])["feature"].tolist()
+    seen: set[str] = set()
+    unique_ordered = [f for f in ordered if not (f in seen or seen.add(f))]
     pdf["feature"] = pd.Categorical(
         pdf["feature"],
-        categories=pdf.sort_values(["group", "count"])["feature"].tolist(),
+        categories=unique_ordered,
         ordered=True,
     )
     n_groups = pdf["group"].nunique()

@@ -2,6 +2,44 @@
    handles the bulk of the dark indigo theming; this file is for
    tweaks that are easier in plain CSS. */
 
+/* Index page: grid of user cards. Each card links to a per-user
+   report. Sized so the grid stays readable from one to a couple
+   dozen users. */
+.user-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.85rem;
+    margin: 1.25rem 0 2rem 0;
+}
+
+a.user-card {
+    display: block;
+    padding: 1rem 1.1rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    color: #e2e8f0 !important;
+    text-decoration: none !important;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+a.user-card:hover {
+    background: rgba(79, 195, 247, 0.08);
+    border-color: rgba(79, 195, 247, 0.5);
+    text-decoration: none !important;
+}
+
+.user-card-title {
+    font-weight: 600;
+    font-size: 1.05rem;
+}
+
+.user-card-sub {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin-top: 0.25rem;
+}
+
 /* Plotnine PNGs are now rendered with theme_bgg_dark() so they're
    already on a dark background. Strip every Bootstrap/Quarto figure
    chrome so the plot can blend into the page. */
@@ -165,26 +203,26 @@ table.topn-by-year tbody tr:nth-of-type(even) td:not(.owned) {
     --bs-table-striped-color: #e2e8f0 !important;
 }
 
-/* Owned-cell highlight: indigo accent with crisp white text.
-   Specificity bumped (compound selectors above are 3-level, this needs
-   to match or beat them). The tbody td.owned form is 3-level too. */
+/* Owned-cell highlight: cyan accent (deeper shade, same hue as the
+   in-plot accent) with crisp white text. Specificity bumped — the
+   compound zebra-killing selectors above are 3-level. */
 table.topn-by-year tbody td.owned,
 table.topn-by-year tbody tr td.owned,
 table.topn-by-year tbody tr:nth-of-type(odd) td.owned,
 table.topn-by-year tbody tr:nth-of-type(even) td.owned {
-    background-color: #1f3a8a !important;
+    background-color: #1976d2 !important;
     background-image: none !important;
     color: #fff !important;
     font-weight: 600;
-    --bs-table-accent-bg: #1f3a8a !important;
+    --bs-table-accent-bg: #1976d2 !important;
 }
 
 /* Subtle row hover that doesn't lighten anything to white. */
 table.topn-by-year tbody tr:hover td:not(.owned) {
-    background-color: rgba(99, 102, 241, 0.10) !important;
+    background-color: rgba(79, 195, 247, 0.10) !important;
     color: #e2e8f0 !important;
 }
 
 table.topn-by-year tbody tr:hover td.owned {
-    background-color: #2a4ca8 !important;  /* slightly brighter on hover */
+    background-color: #2196f3 !important;  /* slightly brighter on hover */
 }

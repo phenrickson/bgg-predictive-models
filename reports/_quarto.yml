@@ -1,0 +1,63 @@
+project:
+  type: website
+  output-dir: _site
+  resources:
+    - styles.css
+    - theme.scss
+  # Render the index and the per-user wrappers, but NOT the raw template
+  # (collection_report.qmd) — the wrappers `{{< include >}}` it.
+  render:
+    - "index.qmd"
+    - "collections/*.qmd"
+
+website:
+  title: "BGG Collection Reports"
+  navbar:
+    background: "#0f0f1a"
+    foreground: "#e2e8f0"
+    left:
+      - href: index.qmd
+        text: Home
+  sidebar:
+    style: floating
+    contents:
+      - href: index.qmd
+        text: Home
+      - section: "Collections"
+        contents:
+          - href: collections/GOBBluth89.qmd
+            text: GOBBluth89
+          - href: collections/TomBrewstErr.qmd
+            text: TomBrewstErr
+          - href: collections/phenrickson.qmd
+            text: phenrickson
+
+format:
+  html:
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: false
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
+    fig-align: center
+    # `article` keeps the right-TOC and right-margin regions (which
+    # `full` swallows). Grid widths tuned so body + margin notes use
+    # the available space without leaving a black gutter on the left.
+    page-layout: article
+    grid:
+      sidebar-width: 200px
+      body-width: 900px
+      margin-width: 200px
+      gutter-width: 1em
+
+execute:
+  echo: false
+  warning: false
+  message: false
+  daemon: false

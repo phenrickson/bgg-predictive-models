@@ -1,0 +1,509 @@
+# About
+
+This report examines a classification model trained to predict whether a
+user owns a game on BoardGameGeek. The model learns from features that
+are observable about a game at release — its publisher, mechanics,
+designers, playing time, and so on — and never reads BGG community
+information like average rating or weight, so it can score newly
+released games without leaking signal from the community after release.
+
+::: {.callout-note}
+To jump to the model's predictions for new and upcoming games, see the
+[Predictions](#predictions) section.
+:::
+
+# Collection
+
+The data in this project comes from BoardGameGeek. The unit of
+observation is a game. We train a classification model at the user
+level to learn the relationship between game features and games a user
+owns — what predicts a user's collection?
+
+## Types of Games
+
+::: {.column-margin}
+Counts of feature values across owned games. Publishers are intentionally
+excluded — for many users the top entries are foreign-language
+re-publishers of already-popular games.
+:::
+
+What kinds of games does the user own? The plot below shows the most
+frequent designers, publishers, mechanics, categories, and so on that
+appear in their collection.
+
+```{python}
+#| label: types-of-games
+#| fig-width: 8
+#| fig-height: 9
+#| out-width: 100%
+plot_collection_by_category_static(data.collection, data.games)
+```
+
+The histogram below shows the years in which games in the user's
+collection were published. This often hints at when someone first
+entered the hobby.
+
+```{python}
+#| label: collection-by-year
+#| fig-width: 8
+#| fig-height: 3
+#| out-width: 100%
+plot_collection_by_year_static(data.collection, data.games)
+```
+
+## `{python} f"{USERNAME}'s Collection"`
+
+::: {.column-margin}
+TODO: notes about the user's collection — what stands out about their
+taste, gaps, anything worth calling out before showing the full table.
+:::
+
+Games the user has tagged on BoardGameGeek — owned, on the wishlist,
+want-to-buy, preordered, or previously owned. Sortable by status,
+rating, players, and playtime.
+
+```{python}
+#| label: collection-table
+itables_show(
+    format_collection_table(data.collection, data.games),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+    # Column order: Game | Status | Your rating | Players | Playtime | Complexity
+    columnDefs=[
+        {"className": "dt-center", "targets": [1, 2, 3, 4, 5]},
+        {"width": "100px", "targets": [1]},
+        {"width": "90px", "targets": [2]},
+        {"width": "80px", "targets": [3]},
+        {"width": "110px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+    ],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+# Modeling
+
+For each user we train a binary classifier whose target is whether the
+user owns a given game. The training process examines historical games
+and learns which features tend to co-occur with games a user owns.
+Features are dummies indicating presence/absence of designers, artists,
+publishers, plus continuous features for playing time, player counts,
+and recommended minimum age.
+
+::: {.callout-note}
+The model only uses features observable at release. It does not consume
+BGG community signals (average rating, weight, number of users rated)
+so it can score upcoming games before the community has weighed in.
+:::
+
+## What Predicts A Collection?
+
+::: {.column-margin}
+Each bar indicates how much an individual feature pushes the model towards or away from predicting "owned". Positive features (bars to the right) increase the user's probability of owning a game; negative features decrease the user's probability.
+:::
+
+Beyond predictions, the model tells us *what* it learned. For a
+penalized logistic regression the coefficients tell us, for each
+feature, how much it shifts the user's probability (technically, the log-odds) of owning a game.
+
+```{python}
+#| label: feature-importance-prep
+#| include: false
+fi_pdf = arts.feature_importance.to_pandas()
+# Shared x-axis + color limits so the partial-effects tabs are directly
+# comparable. Use the absolute max across all features so the scale is
+# symmetric around zero.
+_cmax = float(fi_pdf["value"].abs().max()) if len(fi_pdf) else 1.0
+FI_RANGE = (-_cmax, _cmax)
+```
+
+```{python}
+#| label: feature-importance
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Feature importance",
+    value_range=FI_RANGE,
+)
+```
+
+## Partial Effects
+
+::: {.column-margin}
+What designers, artists, or mechanics does a user tend to add to their collection? Examining the relative effects of individual features can paint a picture of what the user tends to like.
+:::
+
+The same coefficients, broken out by feature family. Use the tabs to
+inspect each group. All tabs share the same x-axis range and color
+scale so groups are directly comparable.
+
+::: {.panel-tabset .nav-pills}
+
+### Categories
+
+```{python}
+#| label: feature-importance-categories
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Categories", top_pos=15, top_neg=15,
+                        interactive=False, title="Categories",
+                        value_range=FI_RANGE)
+```
+
+### Mechanics
+
+```{python}
+#| label: feature-importance-mechanics
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    group="Mechanics",
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Mechanics",
+    value_range=FI_RANGE,
+)
+```
+
+### Designers
+
+```{python}
+#| label: feature-importance-designers
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
+                        interactive=False, title="Designers",
+                        value_range=FI_RANGE)
+```
+
+### Artists
+
+```{python}
+#| label: feature-importance-artists
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(fi_pdf, group="Artists", top_pos=15, top_neg=15,
+                        interactive=False, title="Artists",
+                        value_range=FI_RANGE)
+```
+
+### Families
+
+```{python}
+#| label: feature-importance-families
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    group="Families",
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Families",
+    value_range=FI_RANGE,
+)
+```
+
+### Publishers
+
+```{python}
+#| label: feature-importance-publishers
+#| fig-width: 8
+#| fig-height: 7
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    group="Publishers",
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Publishers",
+    value_range=FI_RANGE,
+)
+```
+
+### Player Counts
+
+```{python}
+#| label: feature-importance-players
+#| fig-width: 8
+#| fig-height: 5
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    group="Players",
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Players",
+    value_range=FI_RANGE,
+)
+```
+
+### Missingness
+
+```{python}
+#| label: feature-importance-missigness
+#| fig-width: 8
+#| fig-height: 4
+#| out-width: 100%
+plot_feature_importance(
+    fi_pdf,
+    group="Missingness",
+    top_pos=15,
+    top_neg=15,
+    interactive=False,
+    title="Missingness",
+    value_range=FI_RANGE,
+)
+```
+
+:::
+
+# Assessment
+
+How well did the model do? The metrics below are computed on the
+training (out-of-fold), validation, and test splits.
+
+```{python}
+#| label: metrics-table
+metrics_table(arts.registration)
+```
+
+A separation plot ranks every prediction from highest to lowest. Each
+blue tick is a game the user owns. A good model places its blue ticks
+on the left.
+
+```{python}
+#| label: separation-oof
+#| fig-width: 8
+#| fig-height: 2.4
+#| out-width: 100%
+plot_separation_static(arts.oof_predictions, title="Out-of-fold")
+```
+
+```{python}
+#| label: separation-val
+#| fig-width: 8
+#| fig-height: 2.4
+#| out-width: 100%
+plot_separation_static(arts.val_predictions, title="Validation")
+```
+
+```{python}
+#| label: separation-test
+#| fig-width: 8
+#| fig-height: 2.4
+#| out-width: 100%
+plot_separation_static(arts.test_predictions, title="Test")
+```
+
+## Top Games in Training
+
+::: {.column-margin}
+A user's model is trained by learning how *features* of games (mechanics, categories, playing time) relate to a user's probability of owning a game. 
+:::
+
+The highest-scored games from the training (out-of-fold) split. "Owned"
+is the actual label (whether the user owns this game).
+
+```{python}
+#| label: top-games-training-prep
+#| include: false
+oof_joined = (
+    arts.oof_predictions
+    .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
+    .sort("proba", descending=True)
+)
+val_joined = (
+    arts.val_predictions
+    .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
+    .sort("proba", descending=True)
+)
+test_joined = (
+    arts.test_predictions
+    .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
+    .sort("proba", descending=True)
+)
+```
+
+```{python}
+#| label: top-games-training
+itables_show(
+    format_eval_table(oof_joined, top_n=100),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [0, 2]}],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+## Top Games in Validation
+
+```{python}
+#| label: top-games-validation
+itables_show(
+    format_eval_table(val_joined, top_n=100),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [0, 2]}],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+## Top Games by Year
+
+::: {.column-margin}
+In evaluating a user's model, we can also ask, retroactively which games would it have identified as top picks for recent years?
+:::
+
+Side-by-side comparison of the model's top picks for each year. Cells
+shaded blue are games the user actually owns (true positives).
+
+```{python}
+#| label: top-games-by-year
+#| column: page-right
+#| output: asis
+all_eval = pl.concat(
+    [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
+    how="diagonal_relaxed",
+)
+html = build_topn_by_year_html(all_eval, top_n_per_year=15, since_year=2015)
+if html:
+    print("```{=html}")
+    print(html)
+    print("```")
+else:
+    print("No predictions in the eval splits to display.\n")
+```
+
+# Predictions {#predictions}
+
+## New and Upcoming Games
+
+::: {.column-margin}
+TODO: notes about specific upcoming games worth flagging — anything
+the model is unusually high on, anything that surprised you.
+:::
+
+Predictions for recent and upcoming releases, generated by the deployed
+model. Filtered to games published *after* the model's training window
+(`finalize_through`). The **Status** column shows whether the game is
+already in the user's collection.
+
+```{python}
+#| label: predictions-upcoming
+#| column: page-right
+status_lookup = build_status_lookup(data.collection)
+
+# The model was trained on data through `finalize_through`, so anything
+# published in or before that year is in-sample. "New and Upcoming"
+# means strictly after.
+finalize_through = arts.registration.get("finalize_through")
+upcoming = arts.upcoming_predictions.join(data.games, on="game_id", how="inner")
+if finalize_through is not None:
+    upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
+upcoming = upcoming.sort("predicted_prob", descending=True)
+
+itables_show(
+    format_predictions_with_images(
+        upcoming,
+        status_lookup=status_lookup,
+        top_n=100,
+        show_actual=False,
+    ),
+    paging=True,
+    pageLength=10,
+    classes="display compact",
+    columnDefs=[
+        {"className": "dt-center", "targets": [0, 4, 5]},
+        {"width": "60px", "targets": [0]},
+        {"width": "90px", "targets": [1]},
+        {"width": "200px", "targets": [2]},
+        {"width": "80px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+    ],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+## Older Games
+
+Older games that the model liked for the user during training/evaluation. These are the highest scoring games that the user does not currently own; these might be good ones to check out.
+
+::: {.column-margin} 
+These are technically 'misses' by the model, but in practice they represent games that are very consistent with what is in the user's collection and can be thought of as recommendations.
+:::
+
+```{python}
+#| label: predictions-older
+older = (
+    pl.concat(
+        [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
+        how="diagonal_relaxed",
+    )
+    .join(data.games, on="game_id", how="inner")
+    .filter(pl.col("label") != "yes")
+)
+if "users_rated" in older.columns:
+    older = older.filter(pl.col("users_rated") >= 5)
+older = older.sort("proba", descending=True)
+
+itables_show(
+    format_eval_predictions(older, top_n=200),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+    columnDefs=[
+        {"className": "dt-center", "targets": [0, 2]},
+        {"width": "60px", "targets": [0]},
+    ],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+# Model Details
+
+Provenance for the model that produced these predictions.
+
+```{python}
+#| label: model-details
+details = format_model_details(
+    arts.registration,
+    outcome=arts.outcome,
+    candidate=arts.selected_candidate,
+    version=arts.selected_version,
+)
+
+itables_show(
+    details,
+    paging=False,
+    searching=False,
+    info=False,
+    classes="display compact",
+    style="width: 100%",
+    columnDefs=[
+        {"width": "240px", "targets": [0]},
+    ],
+)
+```

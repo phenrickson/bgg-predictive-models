@@ -70,6 +70,7 @@ def _render_one(
     source: str,
     candidate: str | None,
     output_dir: Path,
+    fixture: bool = False,
 ) -> int:
     """Run quarto render for one (user, outcome). Returns the process
     exit code; 0 = success."""
@@ -81,26 +82,29 @@ def _render_one(
     # gets confused when --output-dir is outside the qmd directory.
     output_dir.mkdir(parents=True, exist_ok=True)
     rendered_name = f"{username}.html"
+    # Quarto params are passed via -P key=value. Booleans are accepted
+    # as bare lowercase strings.
     cmd = [
         "quarto",
         "render",
         str(qmd_path),
         "--output",
         rendered_name,
+        "-P", f"username={username}",
+        "-P", f"outcome={outcome}",
+        "-P", f"source={source}",
+        "-P", f"candidate={candidate or ''}",
+        "-P", f"fixture={'true' if fixture else 'false'}",
     ]
     logger.info("Rendering: %s", " ".join(cmd))
 
     # Quarto resolves the python kernel via QUARTO_PYTHON. Point it at
-    # the uv-managed venv so it inherits our deps. The qmd setup chunk
-    # reads its params from BGG_REPORT_* environment variables.
+    # the uv-managed venv so it inherits our deps.
     env = os.environ.copy()
     venv_python = project_root / ".venv" / "bin" / "python"
     if venv_python.exists():
         env["QUARTO_PYTHON"] = str(venv_python)
     env["BGG_PROJECT_ROOT"] = str(project_root)
-    env["BGG_REPORT_USERNAME"] = username
-    env["BGG_REPORT_OUTCOME"] = outcome
-    env["BGG_REPORT_SOURCE"] = source
     # If the user's GOOGLE_APPLICATION_CREDENTIALS is a relative path
     # (the convention in this repo), resolve it against the project
     # root so the kernel can find it from cwd=reports/.
@@ -112,17 +116,26 @@ def _render_one(
             env["GOOGLE_APPLICATION_CREDENTIALS"] = str(candidate_creds)
     elif not Path(gac).is_absolute():
         env["GOOGLE_APPLICATION_CREDENTIALS"] = str(project_root / gac)
-    if candidate:
-        env["BGG_REPORT_CANDIDATE"] = candidate
-    else:
-        env.pop("BGG_REPORT_CANDIDATE", None)
     proc = subprocess.run(cmd, env=env, cwd=qmd_path.parent)
     if proc.returncode != 0:
         return proc.returncode
 
-    rendered = qmd_path.parent / rendered_name
-    if not rendered.exists():
-        logger.error("Quarto reported success but %s is missing", rendered)
+    # With reports/_quarto.yml in place, Quarto treats reports/ as a
+    # project and writes outputs to its `output-dir` (default `_site`).
+    # Without the project file it falls back to writing next to the qmd.
+    # Check both locations.
+    project_output = qmd_path.parent / "_site" / rendered_name
+    sibling_output = qmd_path.parent / rendered_name
+    if project_output.exists():
+        rendered = project_output
+    elif sibling_output.exists():
+        rendered = sibling_output
+    else:
+        logger.error(
+            "Quarto reported success but %s is missing (also checked %s)",
+            sibling_output,
+            project_output,
+        )
         return 1
     target = output_dir / rendered_name
     rendered.replace(target)
@@ -153,7 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.fixture:
-        os.environ["BGG_REPORT_FIXTURE"] = "1"
+        # Fixture mode short-circuits BQ entirely; offline stubs match
+        # the no-creds story.
         os.environ["BGG_REPORTS_OFFLINE"] = "1"
 
     if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
@@ -208,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             candidate=args.candidate,
             output_dir=output_dir,
+            fixture=args.fixture,
         )
         if rc != 0:
             logger.error("Render failed for %s (rc=%s)", username, rc)

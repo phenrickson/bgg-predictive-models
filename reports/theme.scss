@@ -8,11 +8,13 @@ $font-family-monospace: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace 
 $font-size-base: 0.95rem !default;
 $line-height-base: 1.55 !default;
 
-// Brand palette
-$primary: #6366f1 !default;          // indigo
+// Brand palette — `$primary` is the cyan accent used in plots so the
+// theme's UI chrome (links, tabset, code, callouts, TOC active) stays
+// in the same hue family as the data visualizations.
+$primary: #4fc3f7 !default;          // cyan
 $secondary: #94a3b8 !default;        // slate
 $success: #10b981 !default;          // emerald
-$info: #4fc3f7 !default;              // light blue (kept for callouts/links)
+$info: #4fc3f7 !default;              // cyan (alias of $primary)
 $warning: #f59e0b !default;
 $danger: #ef4444 !default;
 
@@ -27,8 +29,8 @@ $border-color: rgba(255, 255, 255, 0.1) !default;
 $border-color-translucent: rgba(255, 255, 255, 0.08) !default;
 
 // Code block colors
-$code-color: #c4b5fd !default;       // soft indigo on dark
-$code-bg: rgba(99, 102, 241, 0.08) !default;
+$code-color: #81d4fa !default;       // soft cyan on dark
+$code-bg: rgba(79, 195, 247, 0.08) !default;
 
 $pre-color: #e2e8f0 !default;
 $pre-bg: rgba(0, 0, 0, 0.3) !default;
@@ -37,8 +39,9 @@ $pre-bg: rgba(0, 0, 0, 0.3) !default;
 $headings-color: #e2e8f0 !default;
 $headings-font-weight: 600 !default;
 
-// Links — light blue, matching the accent used in the game-types plot.
-$link-color: #4fc3f7 !default;
+// Links — inherit `$primary` (cyan) so text accents stay in the same
+// family as the in-plot accent.
+$link-color: $primary !default;
 $link-hover-color: #81d4fa !default;
 $link-decoration: none !default;
 $link-hover-decoration: underline !default;
@@ -47,7 +50,7 @@ $link-hover-decoration: underline !default;
 $table-color: #e2e8f0 !default;
 $table-bg: transparent !default;
 $table-striped-bg: rgba(255, 255, 255, 0.03) !default;
-$table-hover-bg: rgba(99, 102, 241, 0.08) !default;
+$table-hover-bg: rgba(79, 195, 247, 0.08) !default;
 $table-border-color: rgba(255, 255, 255, 0.08) !default;
 
 // Quarto-specific tokens
@@ -121,7 +124,7 @@ table.dataTable tbody tr {
 }
 
 table.dataTable tbody tr:hover {
-    background: rgba(99, 102, 241, 0.08) !important;
+    background: rgba(79, 195, 247, 0.08) !important;
 }
 
 table.dataTable tbody td,
@@ -168,7 +171,7 @@ code:not(pre code) {
 }
 
 .panel-tabset .nav-pills .nav-link.active {
-    background: rgba(99, 102, 241, 0.15);
+    background: rgba(79, 195, 247, 0.15);
     color: #fff;
 }
 
