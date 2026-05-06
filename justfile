@@ -206,3 +206,25 @@ users-sweep users outcome="own":
         echo "FAILED: ${failed[@]}" >&2
         exit 1
     fi
+
+# Render the collection report for a user. Reads artifacts from
+# models/collections/ locally and pulls collection/games/upcoming
+# predictions from BigQuery (set BGG_REPORTS_OFFLINE=1 in .env to
+# stub the BQ-backed sections).
+#   just render                          # default user
+#   just render GOBBluth89               # other user
+#   just render GOBBluth89 ever_owned    # other user + outcome
+render user=username outcome="own" candidate="":
+    uv run python -m reports.render \
+        --username {{user}} --outcome {{outcome}} \
+        $([ -n "{{candidate}}" ] && echo "--candidate {{candidate}}")
+
+# Render the collection report for every user under models/collections/.
+render-all outcome="own":
+    uv run python -m reports.render --all-users --outcome {{outcome}}
+
+# Render the report against synthetic fixture data — no BQ, no artifacts.
+# Use this for fast iteration on styling/layout: edits to the qmd, css,
+# or viz code can be checked in seconds rather than waiting on real loads.
+render-sandbox:
+    uv run python -m reports.render --fixture

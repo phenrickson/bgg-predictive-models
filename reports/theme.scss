@@ -37,9 +37,11 @@ $pre-bg: rgba(0, 0, 0, 0.3) !default;
 $headings-color: #e2e8f0 !default;
 $headings-font-weight: 600 !default;
 
-// Links
-$link-color: #6366f1 !default;
-$link-hover-color: #a5b4fc !default;
+// Links — light blue, matching the accent used in the game-types plot.
+$link-color: #4fc3f7 !default;
+$link-hover-color: #81d4fa !default;
+$link-decoration: none !default;
+$link-hover-decoration: underline !default;
 
 // Tables
 $table-color: #e2e8f0 !default;
@@ -56,10 +58,27 @@ $toc-active-border: $primary !default;
 /*-- scss:rules --*/
 
 // Body gradient — matches dash-viewer's app shell.
+// Paint `html` with the same base color so the browser's overscroll
+// area (rubber-band scroll above the top of the page) shows the dark
+// surface instead of the html default white.
+html {
+    background: #0f0f1a;
+}
+
 body {
     background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #0f172a 100%);
     background-attachment: fixed;
     color: $body-color;
+}
+
+// Bootstrap also targets `<a>` directly with text-decoration in some
+// builds. Belt-and-suspenders: kill the underline at the rule level.
+a {
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
 }
 
 // Title block (top of the report).

@@ -49,6 +49,16 @@ from pathlib import Path
 DEFAULT_CANDIDATE = "logistic_row_norm"
 
 
+class MissingArtifactsError(FileNotFoundError):
+    """Raised when no finalized model artifacts exist for a (user, outcome).
+
+    Inherits from FileNotFoundError so callers that already handle
+    "missing data" via that base class still work, but the named type
+    lets the CLI driver render a friendly message instead of a generic
+    traceback.
+    """
+
+
 def _list_candidate_versions(user_outcome_dir: Path, candidate: str) -> list[int]:
     """Return all integer versions for a candidate dir, ascending."""
     cand_dir = user_outcome_dir / candidate
@@ -103,16 +113,44 @@ def select_candidate(
            latest finalized version.
         2. Otherwise prefer DEFAULT_CANDIDATE if it has a finalized version.
         3. Otherwise pick any finalized candidate (alphabetically first).
-        4. Raise ValueError if nothing is finalized.
+        4. Raise MissingArtifactsError if nothing is finalized.
     """
-    user_outcome_dir = Path(root) / username / outcome
+    user_dir = Path(root) / username
+    user_outcome_dir = user_dir / outcome
+
+    if not user_dir.exists():
+        raise MissingArtifactsError(
+            f"No artifacts found for user {username!r} at {user_dir}. "
+            f"Train a model first (`just sweep` or `just train`), or check "
+            f"that the username spelling matches the directory name."
+        )
+    if not user_outcome_dir.exists():
+        available_outcomes = sorted(
+            p.name for p in user_dir.iterdir() if p.is_dir()
+        )
+        hint = (
+            f" Available outcomes: {', '.join(available_outcomes)}."
+            if available_outcomes
+            else ""
+        )
+        raise MissingArtifactsError(
+            f"No artifacts for outcome {outcome!r} under {username!r} at "
+            f"{user_outcome_dir}.{hint}"
+        )
+
     finalized = dict(_list_finalized_candidates(user_outcome_dir))
 
     if candidate is not None:
         if candidate not in finalized:
-            raise ValueError(
+            available = sorted(finalized.keys())
+            hint = (
+                f" Finalized candidates: {', '.join(available)}."
+                if available
+                else " No candidates are finalized yet — run `just finalize` first."
+            )
+            raise MissingArtifactsError(
                 f"Candidate {candidate!r} is not finalized for "
-                f"{username}/{outcome} under {root}"
+                f"{username}/{outcome}.{hint}"
             )
         return candidate, finalized[candidate]
 
@@ -120,8 +158,9 @@ def select_candidate(
         return DEFAULT_CANDIDATE, finalized[DEFAULT_CANDIDATE]
 
     if not finalized:
-        raise ValueError(
-            f"No finalized candidate found for {username}/{outcome} under {root}"
+        raise MissingArtifactsError(
+            f"No finalized candidate for {username}/{outcome} under {root}. "
+            f"Run `just finalize` (or `just finalize-all`) before rendering."
         )
 
     cand = sorted(finalized.keys())[0]

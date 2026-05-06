@@ -22,6 +22,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Load .env at import time so envvars (including BGG_REPORTS_OFFLINE,
+# GOOGLE_APPLICATION_CREDENTIALS, etc.) are available to both this
+# driver and the Quarto kernel it spawns.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+except ImportError:
+    pass
+
 logger = logging.getLogger("reports.render")
 
 
@@ -132,7 +142,19 @@ def main(argv: list[str] | None = None) -> int:
         default="reports/_output",
         help="Directory to write rendered HTML",
     )
+    parser.add_argument(
+        "--fixture",
+        action="store_true",
+        help=(
+            "Render against synthetic data (src.reports.fixtures) instead "
+            "of loading real artifacts. Use for fast styling iteration."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.fixture:
+        os.environ["BGG_REPORT_FIXTURE"] = "1"
+        os.environ["BGG_REPORTS_OFFLINE"] = "1"
 
     if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
         _install_offline_stubs()
@@ -142,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.all_users and args.username:
         parser.error("Pass --username or --all-users, not both")
+    if args.fixture and not args.username:
+        args.username = "fixture_user"
     if not args.all_users and not args.username:
         parser.error("Pass --username or --all-users")
 
@@ -155,6 +179,29 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[str] = []
     for username in users:
+        # Pre-flight: confirm the user has finalized artifacts before
+        # spinning up Quarto. Skipped in fixture mode (no real artifacts
+        # are needed) and for non-local sources (gs:// listing is harder
+        # and the kernel will surface its own error if needed).
+        if not args.fixture and args.source == "local":
+            from src.reports.collection_data import (
+                MissingArtifactsError,
+                select_candidate,
+            )
+
+            local_root = Path(__file__).resolve().parents[1] / "models" / "collections"
+            try:
+                select_candidate(
+                    local_root,
+                    username,
+                    args.outcome,
+                    candidate=args.candidate,
+                )
+            except MissingArtifactsError as exc:
+                logger.error("%s", exc)
+                failures.append(username)
+                continue
+
         rc = _render_one(
             username=username,
             outcome=args.outcome,

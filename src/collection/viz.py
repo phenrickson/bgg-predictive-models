@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Sequence, Union
 
+import matplotlib as _mpl
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -20,6 +21,8 @@ from plotnine import (
     aes,
     coord_flip,
     element_blank,
+    element_line,
+    element_rect,
     element_text,
     facet_wrap,
     geom_area,
@@ -29,11 +32,67 @@ from plotnine import (
     ggplot,
     labs,
     scale_fill_distiller,
+    scale_fill_gradient2,
     scale_x_continuous,
     scale_y_continuous,
     theme,
     theme_minimal,
 )
+
+
+# --- Shared theme: matches the bgg-dash-viewer dark indigo palette ---
+#
+# `theme_bgg_dark()` is the canonical plotnine theme used by the
+# collection report so every static figure shares the same look:
+# deep navy panel, light slate text, indigo accents, no extra
+# chartjunk gridlines. Use it instead of `theme_minimal()` for
+# anything that ends up in the report.
+
+_BGG_TEXT = "#e2e8f0"
+_BGG_MUTED = "#a0aec5"
+_BGG_GRID = "#ffffff14"        # very faint white grid (8% alpha)
+_BGG_FONT_FAMILY = ["Roboto", "Helvetica Neue", "Arial", "DejaVu Sans"]
+
+# matplotlib's figure canvas defaults to opaque white. plotnine's
+# `plot_background=element_rect(fill="none")` only paints the axes
+# face; the surrounding figure (and the saved PNG) keeps the white
+# default unless we override these rcParams. Set them at import time
+# so every render — including Quarto's auto-savefig path — produces
+# a transparent PNG that blends with the dark page.
+_mpl.rcParams["figure.facecolor"] = "none"
+_mpl.rcParams["savefig.facecolor"] = "none"
+_mpl.rcParams["savefig.transparent"] = True
+_mpl.rcParams["axes.facecolor"] = "none"
+
+
+def theme_bgg_dark(base_size: int = 11) -> theme:
+    """Plotnine theme that matches the bgg-dash-viewer dark indigo style.
+
+    Plot and panel backgrounds are transparent so the page shows
+    through — the data sits directly on the page, no nested cards.
+    Text uses the page's slate/white palette; gridlines are faint
+    white so they're visible without competing for attention.
+
+    The PNG is saved with a transparent background by configuring
+    matplotlib via plotnine's theme rather than at save time, so
+    callers don't have to know about it.
+    """
+    return theme_minimal(base_size=base_size) + theme(
+        text=element_text(family=_BGG_FONT_FAMILY, color=_BGG_TEXT),
+        plot_background=element_rect(fill="none", color="none"),
+        panel_background=element_rect(fill="none", color="none"),
+        panel_grid_major=element_line(color=_BGG_GRID, size=0.4),
+        panel_grid_minor=element_blank(),
+        axis_text=element_text(color=_BGG_MUTED),
+        axis_title=element_text(color=_BGG_MUTED),
+        plot_title=element_text(color=_BGG_TEXT, weight="bold"),
+        plot_subtitle=element_text(color=_BGG_MUTED),
+        strip_background=element_rect(fill="none", color="none"),
+        strip_text=element_text(color=_BGG_TEXT, weight="bold"),
+        legend_background=element_rect(fill="none", color="none"),
+        legend_text=element_text(color=_BGG_MUTED),
+        legend_title=element_text(color=_BGG_TEXT),
+    )
 
 
 # Map feature-name prefix to display-group label. Extend as new feature
@@ -278,7 +337,7 @@ def _render_plotnine_bars(
         + scale_y_continuous(limits=(lo, hi))
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
-        + theme_minimal()
+        + theme_bgg_dark()
         + theme(panel_grid_major_y=element_blank())
     )
 
@@ -308,7 +367,7 @@ def _render_plotnine_grid(df: pd.DataFrame, title: str) -> ggplot:
         + scale_x_discrete(labels=_drop_salt)
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
-        + theme_minimal()
+        + theme_bgg_dark()
         + theme(panel_grid_major_y=element_blank())
     )
 
@@ -437,12 +496,12 @@ def extract_finalized_importance(
     return out.sort_values("abs_value", ascending=False).reset_index(drop=True)
 
 
-def metrics_table(registration: dict) -> pd.DataFrame:
+def metrics_table(registration: dict, *, decimals: int = 3) -> pd.DataFrame:
     """One-row-per-split metrics frame from a registration.json.
 
     Splits surfaced (in this order): ``val``, ``oof``, ``test``. Missing
-    splits are dropped. Numeric metrics are kept as-is so downstream
-    formatters can apply their own rounding.
+    splits are dropped. Float metrics are rounded to ``decimals`` places
+    for display.
     """
     rows: list[dict[str, Any]] = []
     splits = {
@@ -454,7 +513,11 @@ def metrics_table(registration: dict) -> pd.DataFrame:
         if not metrics:
             continue
         row: dict[str, Any] = {"split": split_name}
-        row.update({k: v for k, v in metrics.items() if isinstance(v, (int, float))})
+        for k, v in metrics.items():
+            if isinstance(v, float):
+                row[k] = round(v, decimals)
+            elif isinstance(v, int):
+                row[k] = v
         rows.append(row)
     if not rows:
         return pd.DataFrame(columns=["split"])
@@ -876,7 +939,7 @@ def plot_separation_static(predictions, title: Optional[str] = None) -> ggplot:
         return (
             ggplot(pd.DataFrame({"rank": [], "proba": []}), aes("rank", "proba"))
             + labs(title=title or "Separation")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
 
     sorted_preds = predictions.sort("proba", descending=True).with_row_index(
@@ -890,7 +953,7 @@ def plot_separation_static(predictions, title: Optional[str] = None) -> ggplot:
         ggplot(pdf, aes("rank", "proba"))
         + geom_area(fill="#888888", alpha=0.4)
         + scale_y_continuous(limits=(0, 1))
-        + theme_minimal()
+        + theme_bgg_dark()
         + labs(
             title=title or "Separation",
             x="rank (proba descending)",
@@ -917,7 +980,7 @@ def plot_collection_by_year_static(collection, games) -> ggplot:
         return (
             ggplot(pd.DataFrame({"year_published": [], "n": []}))
             + labs(title="Games by year")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
     owned = (
         collection.filter(pl.col("owned") == True)
@@ -928,7 +991,7 @@ def plot_collection_by_year_static(collection, games) -> ggplot:
         return (
             ggplot(pd.DataFrame({"year_published": [], "n": []}))
             + labs(title="Games by year")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
     counts = owned.group_by("year_published").len().sort("year_published")
     pdf = counts.to_pandas().rename(columns={"len": "n"})
@@ -937,7 +1000,7 @@ def plot_collection_by_year_static(collection, games) -> ggplot:
         ggplot(pdf, aes("year_published", "n"))
         + geom_col(fill="#4fc3f7")
         + labs(title="Games by year", x="year published", y="count")
-        + theme_minimal()
+        + theme_bgg_dark()
         + theme(figure_size=(9, 3.5))
     )
 
@@ -955,7 +1018,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         return (
             ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
             + labs(title="Types of games")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
 
     owned_ids = collection.filter(pl.col("owned") == True).select("game_id")
@@ -964,7 +1027,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         return (
             ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
             + labs(title="Types of games")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
 
     # Publishers is intentionally excluded — for international users the
@@ -1005,7 +1068,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         return (
             ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
             + labs(title="Types of games")
-            + theme_minimal()
+            + theme_bgg_dark()
         )
 
     pdf = pd.DataFrame(rows)
@@ -1022,7 +1085,7 @@ def plot_collection_by_category_static(collection, games, top_n: int = 12) -> gg
         + coord_flip()
         + facet_wrap("group", scales="free", ncol=2)
         + labs(title="Types of games", x="", y="count")
-        + theme_minimal()
+        + theme_bgg_dark()
         + theme(
             figure_size=(8, 2.6 * ((n_groups + 1) // 2)),
             strip_text=element_text(weight="bold"),

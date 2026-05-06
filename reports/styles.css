@@ -2,14 +2,32 @@
    handles the bulk of the dark indigo theming; this file is for
    tweaks that are easier in plain CSS. */
 
-/* Plotnine PNGs render with a light background by default. Wrap them
-   in a subtle dark card so they don't look like a foreign tab on a
-   dark page. */
-figure.figure img.figure-img {
-    background: rgba(255, 255, 255, 0.96);
-    padding: 8px 4px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+/* Plotnine PNGs are now rendered with theme_bgg_dark() so they're
+   already on a dark background. Strip every Bootstrap/Quarto figure
+   chrome so the plot can blend into the page. */
+figure,
+figure.figure,
+.figure,
+.cell-output-display figure,
+.cell-output-display figure.figure {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 0 1.25rem 0 !important;
+    box-shadow: none !important;
+}
+
+figure img,
+figure.figure img,
+figure img.figure-img,
+figure.figure img.figure-img,
+.figure img,
+img.figure-img {
+    background: transparent !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
 }
 
 .scroll {
@@ -54,19 +72,53 @@ figure.figure .figure-img {
     background: transparent;
 }
 
-/* Top Games by Year — compact static grid, no DataTables. */
+/* Top Games by Year — compact static grid, no DataTables.
+   Built to render on the dark theme, so all Bootstrap table defaults
+   (striping, hover, white backgrounds) need to be overridden. */
+
+/* Scrollable wrapper: cap height so the table doesn't dominate the
+   page; vertical scroll inside the box. The sticky thead below keeps
+   the year headers visible while scrolling. */
+.topn-by-year-scroll {
+    max-height: 520px;
+    overflow-y: auto;
+    margin: 0.5rem 0 1.5rem 0;
+}
+
+table.topn-by-year,
+table.topn-by-year tr,
+table.topn-by-year tbody,
+table.topn-by-year thead,
+table.topn-by-year td,
+table.topn-by-year th {
+    background: transparent !important;
+    color: #e2e8f0 !important;
+}
+
+/* Keep the year header row visible while scrolling. The sticky
+   element needs an opaque-ish background so rows don't bleed through.
+   Using the page's deep navy with high alpha looks correct on the
+   dark theme. */
+.topn-by-year-scroll table.topn-by-year thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #14142a !important;
+}
+
 table.topn-by-year {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.82em;
-    margin: 0.5rem 0 1.5rem 0;
+    margin: 0;
     table-layout: fixed;
 }
 
 table.topn-by-year th,
 table.topn-by-year td {
     padding: 12px 8px;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-top: none !important;
     text-align: left;
     vertical-align: middle;
     overflow: hidden;
@@ -77,25 +129,62 @@ table.topn-by-year td {
     max-width: 160px;
 }
 
-table.topn-by-year th {
-    background: #f7f7f7;
+table.topn-by-year thead th {
+    background: rgba(255, 255, 255, 0.04) !important;
+    color: #94a3b8 !important;
     font-weight: 600;
-    border-bottom: 2px solid #ddd;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.12) !important;
 }
 
 table.topn-by-year .rank-col {
     width: 50px;
     text-align: center;
-    color: #666;
+    color: #94a3b8 !important;
     font-weight: 600;
 }
 
-table.topn-by-year td.owned {
-    background-color: #1f4e79;
-    color: #fff;
-    font-weight: 600;
+/* Kill Bootstrap zebra striping. Bootstrap applies tinting via
+   --bs-table-accent-bg / --bs-table-bg-* on every cell, so we need to
+   neutralize those vars on tr AND td, for both odd and even rows.
+   Excludes td.owned so the indigo highlight survives. */
+table.topn-by-year tbody tr,
+table.topn-by-year tbody tr td:not(.owned),
+table.topn-by-year tbody tr:nth-of-type(odd),
+table.topn-by-year tbody tr:nth-of-type(even),
+table.topn-by-year tbody tr:nth-of-type(odd) > *:not(.owned),
+table.topn-by-year tbody tr:nth-of-type(even) > *:not(.owned),
+table.topn-by-year tbody tr:nth-of-type(odd) td:not(.owned),
+table.topn-by-year tbody tr:nth-of-type(even) td:not(.owned) {
+    background-color: transparent !important;
+    background-image: none !important;
+    color: #e2e8f0 !important;
+    --bs-table-accent-bg: transparent !important;
+    --bs-table-bg-state: transparent !important;
+    --bs-table-bg-type: transparent !important;
+    --bs-table-striped-bg: transparent !important;
+    --bs-table-striped-color: #e2e8f0 !important;
 }
 
+/* Owned-cell highlight: indigo accent with crisp white text.
+   Specificity bumped (compound selectors above are 3-level, this needs
+   to match or beat them). The tbody td.owned form is 3-level too. */
+table.topn-by-year tbody td.owned,
+table.topn-by-year tbody tr td.owned,
+table.topn-by-year tbody tr:nth-of-type(odd) td.owned,
+table.topn-by-year tbody tr:nth-of-type(even) td.owned {
+    background-color: #1f3a8a !important;
+    background-image: none !important;
+    color: #fff !important;
+    font-weight: 600;
+    --bs-table-accent-bg: #1f3a8a !important;
+}
+
+/* Subtle row hover that doesn't lighten anything to white. */
 table.topn-by-year tbody tr:hover td:not(.owned) {
-    background-color: #f4f8fb;
+    background-color: rgba(99, 102, 241, 0.10) !important;
+    color: #e2e8f0 !important;
+}
+
+table.topn-by-year tbody tr:hover td.owned {
+    background-color: #2a4ca8 !important;  /* slightly brighter on hover */
 }
