@@ -10,8 +10,11 @@ format:
     code-fold: true
     code-summary: "Show the code"
     embed-resources: true
-    theme: cerulean
+    theme:
+      - cosmo
+      - theme.scss
     css: styles.css
+    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
     fig-align: center
 execute:
   echo: false

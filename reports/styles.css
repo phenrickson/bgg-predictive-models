@@ -1,5 +1,16 @@
-/* Styles for the collection report. Minimal — Quarto's cerulean theme
-   does most of the work. */
+/* Styles for the collection report. The cosmo + theme.scss layer
+   handles the bulk of the dark indigo theming; this file is for
+   tweaks that are easier in plain CSS. */
+
+/* Plotnine PNGs render with a light background by default. Wrap them
+   in a subtle dark card so they don't look like a foreign tab on a
+   dark page. */
+figure.figure img.figure-img {
+    background: rgba(255, 255, 255, 0.96);
+    padding: 8px 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
 
 .scroll {
     max-height: 600px;
