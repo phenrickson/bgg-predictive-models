@@ -103,7 +103,7 @@ owns — what predicts a user's collection?
 
 ## Types of Games
 
-::: {.margin-left-note}
+::: {.column-margin}
 Counts of feature values across owned games. Publishers are intentionally
 excluded — for many users the top entries are foreign-language
 re-publishers of already-popular games.
@@ -166,7 +166,7 @@ so it can score upcoming games before the community has weighed in.
 
 ## What Predicts A Collection?
 
-::: {.margin-left-note}
+::: {.column-margin}
 Coefficients are on the log-odds scale. A coefficient of 0.05 on a
 feature shifts the log-odds of ownership by 0.05 when that feature is
 present, holding everything else constant.
