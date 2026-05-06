@@ -78,6 +78,34 @@ data = load(
     candidates=candidates,
 )
 arts = data.outcomes[OUTCOME]
+
+
+def _bgg_link(game_id: int, name: str, year: int | None) -> str:
+    year_part = ""
+    if year is not None and not (isinstance(year, float) and pd.isna(year)):
+        try:
+            year_part = f" ({int(year)})"
+        except (TypeError, ValueError):
+            year_part = ""
+    return (
+        f'<a href="https://boardgamegeek.com/boardgame/{int(game_id)}" '
+        f'target="_blank" rel="noopener">{name}{year_part}</a>'
+    )
+
+
+def _img_tag(url: str | None) -> str:
+    if not url or (isinstance(url, float) and pd.isna(url)):
+        return ""
+    return f'<img src="{url}" style="height:64px;width:auto;border-radius:4px;" />'
+
+
+def _truncate(text: str | None, max_len: int = 220) -> str:
+    if not text or (isinstance(text, float) and pd.isna(text)):
+        return ""
+    text = str(text).replace("&#10;", " ").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
 ```
 
 # About
@@ -135,17 +163,117 @@ plot_collection_by_year_static(data.collection, data.games)
 
 ## Games in Collection
 
-The full collection, sortable and filterable. Use the table to find a
-game for the next game night.
+The user's owned games, sortable by your rating, year, players, and
+playtime.
 
 ```{python}
 #| label: collection-table
 #| column: page-right
+
+def _fmt_range(lo, hi, suffix: str = "") -> str:
+    """Render a min/max pair as 'lo–hi' or 'lo' when they're equal."""
+    if lo is None and hi is None:
+        return ""
+    if lo is None:
+        return f"{hi}{suffix}"
+    if hi is None or lo == hi:
+        return f"{lo}{suffix}"
+    return f"{lo}–{hi}{suffix}"
+
+
+def _format_collection(collection: pl.DataFrame, games: pl.DataFrame) -> pd.DataFrame:
+    """Compact owned-games table: Image / Game / Year / Your rating /
+    Players / Playtime / Weight. Filters to owned, sorts by user_rating."""
+    if collection.height == 0:
+        return pd.DataFrame()
+    view = collection
+    if games is not None and games.height > 0 and "game_id" in games.columns:
+        meta_cols = [
+            c for c in games.columns if c == "game_id" or c not in view.columns
+        ]
+        view = view.join(games.select(meta_cols), on="game_id", how="left")
+
+    if "owned" in view.columns:
+        view = view.filter(pl.col("owned") == True)
+    if "user_rating" in view.columns:
+        view = view.sort("user_rating", descending=True, nulls_last=True)
+
+    pdf = view.to_pandas()
+    if pdf.empty:
+        return pd.DataFrame()
+
+    def _safe(col, default=None):
+        return pdf[col].tolist() if col in pdf.columns else [default] * len(pdf)
+
+    ids = _safe("game_id", default=0)
+    names = [
+        n if isinstance(n, str) and n else (gn or "")
+        for n, gn in zip(_safe("name", ""), _safe("game_name", ""))
+    ]
+    years = _safe("year_published", None)
+    images = _safe("image", None)
+    ratings = _safe("user_rating", None)
+    min_p = _safe("min_players", None)
+    max_p = _safe("max_players", None)
+    min_t = _safe("min_playtime", None)
+    max_t = _safe("max_playtime", None)
+    weights = _safe("average_weight", None)
+
+    def _fmt_rating(r) -> str:
+        if r is None or pd.isna(r) or r == 0:
+            return ""
+        return f"{float(r):.1f}"
+
+    def _fmt_weight(w) -> str:
+        if w is None or pd.isna(w):
+            return ""
+        return f"{float(w):.2f}"
+
+    def _fmt_int(x):
+        if x is None or pd.isna(x):
+            return None
+        return int(x)
+
+    return pd.DataFrame(
+        {
+            "Image": [_img_tag(u) for u in images],
+            "Game": [
+                _bgg_link(int(g) if g else 0, n, y)
+                for g, n, y in zip(ids, names, years)
+            ],
+            "Year": [
+                "" if (y is None or pd.isna(y)) else str(int(y)) for y in years
+            ],
+            "Your rating": [_fmt_rating(r) for r in ratings],
+            "Players": [
+                _fmt_range(_fmt_int(lo), _fmt_int(hi))
+                for lo, hi in zip(min_p, max_p)
+            ],
+            "Playtime": [
+                _fmt_range(_fmt_int(lo), _fmt_int(hi), " min")
+                for lo, hi in zip(min_t, max_t)
+            ],
+            "Weight": [_fmt_weight(w) for w in weights],
+        }
+    )
+
+
 itables_show(
-    collection_datatable(data.collection, data.games),
+    _format_collection(data.collection, data.games),
     paging=True,
     pageLength=15,
     classes="display compact",
+    columnDefs=[
+        {"className": "dt-center", "targets": [2, 3, 4, 5, 6]},
+        {"width": "90px", "targets": [0]},
+        {"width": "60px", "targets": [2]},
+        {"width": "90px", "targets": [3]},
+        {"width": "80px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+        {"width": "70px", "targets": [6]},
+    ],
+    style="width: 100%",
+    allow_html=True,
 )
 ```
 
@@ -167,9 +295,10 @@ so it can score upcoming games before the community has weighed in.
 ## What Predicts A Collection?
 
 ::: {.column-margin}
-Coefficients are on the log-odds scale. A coefficient of 0.05 on a
-feature shifts the log-odds of ownership by 0.05 when that feature is
-present, holding everything else constant.
+Each bar shows how much a single feature pushes the model toward or
+away from predicting "owned" — bars to the right of zero make
+ownership more likely, bars to the left make it less likely. The
+length is the strength of the effect.
 :::
 
 Beyond predictions, the model tells us *what* it learned. For a
@@ -544,29 +673,6 @@ upcoming = (
 if finalize_through is not None:
     upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
 upcoming = upcoming.sort("predicted_prob", descending=True)
-
-
-def _bgg_link(game_id: int, name: str, year: int | None) -> str:
-    year_part = f" ({int(year)})" if year is not None else ""
-    return (
-        f'<a href="https://boardgamegeek.com/boardgame/{int(game_id)}" '
-        f'target="_blank" rel="noopener">{name}{year_part}</a>'
-    )
-
-
-def _img_tag(url: str | None) -> str:
-    if not url:
-        return ""
-    return f'<img src="{url}" style="height:64px;width:auto;border-radius:4px;" />'
-
-
-def _truncate(text: str | None, max_len: int = 220) -> str:
-    if not text:
-        return ""
-    text = text.replace("&#10;", " ").replace("\n", " ").strip()
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3].rstrip() + "..."
 
 
 def _format_predictions_with_images(
