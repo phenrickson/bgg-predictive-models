@@ -13,11 +13,6 @@ format:
     theme: cerulean
     css: styles.css
     fig-align: center
-    page-layout: full
-    grid:
-      body-width: 1100px
-      sidebar-width: 220px
-      margin-width: 240px
 execute:
   echo: false
   warning: false
@@ -139,6 +134,7 @@ game for the next game night.
 
 ```{python}
 #| label: collection-table
+#| column: page
 itables_show(
     collection_datatable(data.collection, data.games),
     paging=True,
@@ -398,6 +394,7 @@ itables_show(
 
 ```{python}
 #| label: top-games-validation
+#| column: page
 itables_show(
     _eval_table(val_joined, top_n=100),
     paging=True,
@@ -416,6 +413,7 @@ shaded blue are games the user actually owns (true positives).
 
 ```{python}
 #| label: top-games-by-year
+#| column: screen-inset
 #| output: asis
 all_eval = pl.concat(
     [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
@@ -503,6 +501,7 @@ already in the user's collection.
 
 ```{python}
 #| label: predictions-upcoming
+#| column: page
 
 # Build a per-game status from the user's collection. Priority:
 # Own > Preordered > Wishlist > Want > Prev. Owned > —.
@@ -621,6 +620,7 @@ to games with enough community ratings to be plausible recommendations.
 
 ```{python}
 #| label: predictions-older
+#| column: page
 older = (
     pl.concat([arts.oof_predictions, arts.val_predictions], how="diagonal_relaxed")
     .join(data.games, on="game_id", how="inner")
