@@ -103,6 +103,12 @@ owns — what predicts a user's collection?
 
 ## Types of Games
 
+::: {.margin-left-note}
+Counts of feature values across owned games. Publishers are intentionally
+excluded — for many users the top entries are foreign-language
+re-publishers of already-popular games.
+:::
+
 What kinds of games does the user own? The plot below shows the most
 frequent designers, publishers, mechanics, categories, and so on that
 appear in their collection.
@@ -134,7 +140,7 @@ game for the next game night.
 
 ```{python}
 #| label: collection-table
-#| column: page
+#| column: page-right
 itables_show(
     collection_datatable(data.collection, data.games),
     paging=True,
@@ -159,6 +165,12 @@ so it can score upcoming games before the community has weighed in.
 :::
 
 ## What Predicts A Collection?
+
+::: {.margin-left-note}
+Coefficients are on the log-odds scale. A coefficient of 0.05 on a
+feature shifts the log-odds of ownership by 0.05 when that feature is
+present, holding everything else constant.
+:::
 
 Beyond predictions, the model tells us *what* it learned. For a
 penalized logistic regression the coefficients tell us, for each
@@ -394,7 +406,7 @@ itables_show(
 
 ```{python}
 #| label: top-games-validation
-#| column: page
+#| column: page-right
 itables_show(
     _eval_table(val_joined, top_n=100),
     paging=True,
@@ -413,7 +425,7 @@ shaded blue are games the user actually owns (true positives).
 
 ```{python}
 #| label: top-games-by-year
-#| column: screen-inset
+#| column: page-right
 #| output: asis
 all_eval = pl.concat(
     [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
@@ -501,7 +513,7 @@ already in the user's collection.
 
 ```{python}
 #| label: predictions-upcoming
-#| column: page
+#| column: page-right
 
 # Build a per-game status from the user's collection. Priority:
 # Own > Preordered > Wishlist > Want > Prev. Owned > —.
@@ -620,7 +632,7 @@ to games with enough community ratings to be plausible recommendations.
 
 ```{python}
 #| label: predictions-older
-#| column: page
+#| column: page-right
 older = (
     pl.concat([arts.oof_predictions, arts.val_predictions], how="diagonal_relaxed")
     .join(data.games, on="game_id", how="inner")

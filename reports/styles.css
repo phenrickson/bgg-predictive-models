@@ -43,6 +43,43 @@ figure.figure .figure-img {
     background: transparent;
 }
 
+/* Left-margin notes. Quarto only supports right margins natively
+   (.column-margin), so we provide a left-side equivalent via a custom
+   class. The body block stays in its normal grid column; this class
+   floats a sidebar element to the left of it.
+
+   Use in the qmd as:
+       ::: {.margin-left-note}
+       Short note about whatever the next paragraph or table is.
+       :::
+
+   The note shows up to the left of the article body on screens wide
+   enough to have a left gutter (>= 1200px or so). On narrower screens
+   it falls back to a normal block above the body so it isn't lost. */
+.margin-left-note {
+    color: #666;
+    font-size: 0.85em;
+    line-height: 1.4;
+    border-left: 3px solid #4fc3f7;
+    padding: 0.25rem 0.75rem;
+    background: #fafbfc;
+    margin: 0 0 1rem 0;
+}
+
+@media (min-width: 1200px) {
+    .margin-left-note {
+        position: absolute;
+        left: max(1rem, calc(50% - 540px));
+        width: 220px;
+        margin: 0;
+        background: transparent;
+        border-left: none;
+        border-right: 3px solid #4fc3f7;
+        padding: 0.25rem 0.75rem 0.25rem 0;
+        text-align: right;
+    }
+}
+
 /* Top Games by Year — compact static grid, no DataTables. */
 table.topn-by-year {
     width: 100%;
