@@ -120,22 +120,9 @@ def _render_one(
     if proc.returncode != 0:
         return proc.returncode
 
-    # With reports/_quarto.yml in place, Quarto treats reports/ as a
-    # project and writes outputs to its `output-dir` (default `_site`).
-    # Without the project file it falls back to writing next to the qmd.
-    # Check both locations.
-    project_output = qmd_path.parent / "_site" / rendered_name
-    sibling_output = qmd_path.parent / rendered_name
-    if project_output.exists():
-        rendered = project_output
-    elif sibling_output.exists():
-        rendered = sibling_output
-    else:
-        logger.error(
-            "Quarto reported success but %s is missing (also checked %s)",
-            sibling_output,
-            project_output,
-        )
+    rendered = qmd_path.parent / rendered_name
+    if not rendered.exists():
+        logger.error("Quarto reported success but %s is missing", rendered)
         return 1
     target = output_dir / rendered_name
     rendered.replace(target)
