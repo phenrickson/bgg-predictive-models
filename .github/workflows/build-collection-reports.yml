@@ -85,12 +85,14 @@ jobs:
       - name: List rendered reports
         run: ls -la reports/_output/
 
-      # Generate the index page with links to each rendered report,
-      # built from whatever HTMLs ended up in _output/. Uses the
-      # standalone Quarto render path (no website project).
+      # Generate the index page with links to each rendered report.
+      # Pass the same gs:// source as the per-user renders so the
+      # index scans the cloud artifact tree, not the empty local
+      # checkout (which has no models/collections/).
       - name: Render index page
         run: |
           uv run python -m reports.build_index \
+            --source "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections" \
             --output-dir reports/_output
 
       - name: Configure GitHub Pages
