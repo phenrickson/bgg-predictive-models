@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.1] - 2026-05-07
+
+### Added
+
+- **GCS sync for collection experiments**: `just sync-artifacts <user>`
+  and `just sync-artifacts-all` mirror local
+  `models/collections/<user>/...` into
+  `gs://bgg-predictive-models/<env>/collections/<user>/...` via
+  `gsutil rsync`. Inverse recipes `just pull-artifacts <user>` /
+  `pull-artifacts-all` seed a local tree from the cloud copy (useful
+  on a fresh machine). All four are additive by default; pass
+  `--prune` to also delete cloud-or-local files absent on the other
+  side.
+- **Index page** (`reports/index.qmd` + `reports/build_index.py`): a
+  standalone Quarto page that scans the artifact source (local or
+  `gs://`) for users with finalized models, surfaces each user's
+  newest finalized candidate with headline metrics, and renders a
+  card grid + summary table linking to the per-user HTMLs.
+  `just render-index` builds it locally.
+- **CI workflow** (`.github/workflows/build-collection-reports.yml`):
+  weekly cron + manual dispatch + push-on-reports-code-change.
+  Authenticates to GCP using the existing `GCP_SA_KEY_BGG_ML` secret
+  (no IAM additions required), renders every user with finalized
+  artifacts from `gs://...`, builds the index page, and deploys the
+  output to GitHub Pages via `actions/deploy-pages`. One-time setup:
+  enable Pages on the repo with source = "GitHub Actions" and seed
+  GCS with `just sync-artifacts-all`.
+
 ## [0.6.0] - 2026-05-07
 
 ### Added
