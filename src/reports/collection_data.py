@@ -59,54 +59,80 @@ class MissingArtifactsError(FileNotFoundError):
     """
 
 
-def _list_candidate_versions(user_outcome_dir: Path, candidate: str) -> list[int]:
-    """Return all integer versions for a candidate dir, ascending."""
-    cand_dir = user_outcome_dir / candidate
-    if not cand_dir.exists():
+import json as _json
+import pickle as _pickle
+
+import fsspec
+
+
+def _fs_for(uri: str):
+    """Return (fs, path-without-protocol) for a local path or gs:// URI."""
+    if uri.startswith("gs://"):
+        return fsspec.filesystem("gs"), uri.removeprefix("gs://").rstrip("/")
+    return fsspec.filesystem("file"), str(uri).rstrip("/")
+
+
+def _ls_dirs(uri: str) -> list[str]:
+    """Return the basenames of immediate subdirectories of `uri`. Empty list
+    if `uri` doesn't exist or has no subdirectories."""
+    fs, path = _fs_for(uri)
+    if not fs.exists(path):
         return []
+    return sorted(Path(p).name for p in fs.ls(path) if fs.isdir(p))
+
+
+def _file_exists(uri: str) -> bool:
+    fs, path = _fs_for(uri)
+    return fs.exists(path)
+
+
+def _list_candidate_versions(user_outcome_dir: str, candidate: str) -> list[int]:
+    """Return all integer versions for a candidate dir, ascending."""
+    cand_dir = f"{user_outcome_dir}/{candidate}"
     versions: list[int] = []
-    for child in cand_dir.iterdir():
-        if not (child.is_dir() and child.name.startswith("v")):
+    for name in _ls_dirs(cand_dir):
+        if not name.startswith("v"):
             continue
         try:
-            versions.append(int(child.name[1:]))
+            versions.append(int(name[1:]))
         except ValueError:
             continue
     return sorted(versions)
 
 
-def _is_finalized(user_outcome_dir: Path, candidate: str, version: int) -> bool:
+def _is_finalized(user_outcome_dir: str, candidate: str, version: int) -> bool:
     """A candidate version is 'finalized' iff it has finalized.pkl."""
-    return (user_outcome_dir / candidate / f"v{version}" / "finalized.pkl").exists()
+    return _file_exists(f"{user_outcome_dir}/{candidate}/v{version}/finalized.pkl")
 
 
-def _list_finalized_candidates(user_outcome_dir: Path) -> list[tuple[str, int]]:
+def _list_finalized_candidates(user_outcome_dir: str) -> list[tuple[str, int]]:
     """Return (candidate, latest_finalized_version) for every candidate in the
     outcome dir that has at least one finalized version."""
-    if not user_outcome_dir.exists():
-        return []
     out: list[tuple[str, int]] = []
-    for child in user_outcome_dir.iterdir():
-        if not child.is_dir() or child.name.startswith("_") or child.name.startswith("v"):
+    for name in _ls_dirs(user_outcome_dir):
+        if name.startswith("_") or name.startswith("v"):
             continue
-        cand = child.name
         finalized_versions = [
             v
-            for v in _list_candidate_versions(user_outcome_dir, cand)
-            if _is_finalized(user_outcome_dir, cand, v)
+            for v in _list_candidate_versions(user_outcome_dir, name)
+            if _is_finalized(user_outcome_dir, name, v)
         ]
         if finalized_versions:
-            out.append((cand, max(finalized_versions)))
+            out.append((name, max(finalized_versions)))
     return sorted(out)
 
 
 def select_candidate(
-    root: Path,
+    root: str | Path,
     username: str,
     outcome: str,
     candidate: str | None = None,
 ) -> tuple[str, int]:
     """Pick a (candidate, version) for a user/outcome.
+
+    `root` is a source string — either a local path or a ``gs://`` URI.
+    Both are resolved via fsspec so the same logic works locally and
+    against cloud storage.
 
     Resolution order:
         1. If `candidate` is given and has a finalized version, use its
@@ -115,19 +141,18 @@ def select_candidate(
         3. Otherwise pick any finalized candidate (alphabetically first).
         4. Raise MissingArtifactsError if nothing is finalized.
     """
-    user_dir = Path(root) / username
-    user_outcome_dir = user_dir / outcome
+    root_str = str(root).rstrip("/")
+    user_dir = f"{root_str}/{username}"
+    user_outcome_dir = f"{user_dir}/{outcome}"
 
-    if not user_dir.exists():
+    if not _file_exists(user_dir):
         raise MissingArtifactsError(
             f"No artifacts found for user {username!r} at {user_dir}. "
             f"Train a model first (`just sweep` or `just train`), or check "
             f"that the username spelling matches the directory name."
         )
-    if not user_outcome_dir.exists():
-        available_outcomes = sorted(
-            p.name for p in user_dir.iterdir() if p.is_dir()
-        )
+    if not _file_exists(user_outcome_dir):
+        available_outcomes = _ls_dirs(user_dir)
         hint = (
             f" Available outcomes: {', '.join(available_outcomes)}."
             if available_outcomes
@@ -159,18 +184,12 @@ def select_candidate(
 
     if not finalized:
         raise MissingArtifactsError(
-            f"No finalized candidate for {username}/{outcome} under {root}. "
+            f"No finalized candidate for {username}/{outcome} under {root_str}. "
             f"Run `just finalize` (or `just finalize-all`) before rendering."
         )
 
     cand = sorted(finalized.keys())[0]
     return cand, finalized[cand]
-
-
-import json as _json
-import pickle as _pickle
-
-import fsspec
 
 
 def _read_bytes(uri: str) -> bytes:
@@ -277,19 +296,11 @@ def _load_outcome(
     candidate_override: str | None,
 ) -> OutcomeArtifacts:
     """Load all per-outcome artifacts. Pure filesystem reads + pipeline
-    introspection; no BQ."""
-    if Path(source).exists() and not source.startswith("gs://"):
-        candidate, version = select_candidate(
-            Path(source), username, outcome, candidate=candidate_override
-        )
-    else:
-        if candidate_override is None:
-            raise NotImplementedError(
-                "GCS source requires an explicit candidate override until "
-                "GCS-aware candidate selection is implemented."
-            )
-        candidate = candidate_override
-        version = 1
+    introspection; no BQ. ``source`` may be a local path or a ``gs://``
+    URI; select_candidate handles both via fsspec."""
+    candidate, version = select_candidate(
+        source, username, outcome, candidate=candidate_override
+    )
 
     cand_root = _candidate_root(source, username, outcome, candidate, version)
     registration = _read_json(f"{cand_root}/registration.json")

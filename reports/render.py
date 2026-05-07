@@ -182,18 +182,23 @@ def main(argv: list[str] | None = None) -> int:
     for username in users:
         # Pre-flight: confirm the user has finalized artifacts before
         # spinning up Quarto. Skipped in fixture mode (no real artifacts
-        # are needed) and for non-local sources (gs:// listing is harder
-        # and the kernel will surface its own error if needed).
-        if not args.fixture and args.source == "local":
+        # are needed). Works against both local paths and gs:// URIs
+        # via fsspec inside select_candidate.
+        if not args.fixture:
             from src.reports.collection_data import (
                 MissingArtifactsError,
                 select_candidate,
             )
 
-            local_root = Path(__file__).resolve().parents[1] / "models" / "collections"
+            if args.source == "local":
+                root = str(
+                    Path(__file__).resolve().parents[1] / "models" / "collections"
+                )
+            else:
+                root = args.source
             try:
                 select_candidate(
-                    local_root,
+                    root,
                     username,
                     args.outcome,
                     candidate=args.candidate,
