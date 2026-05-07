@@ -1,0 +1,84 @@
+name: Build Collection Reports Image
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'reports/**'
+      - 'src/reports/**'
+      - 'src/collection/viz.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'docker/reports.Dockerfile'
+      - '.github/workflows/docker-reports-build.yml'
+  workflow_dispatch: {}
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  build:
+    name: Build and push reports image
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        run: |
+          mkdir -p credentials
+          echo '${{ secrets.GCP_SA_KEY_BGG_ML }}' > credentials/service-account-key.json
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev
+          gcloud artifacts repositories create bgg-predictive-models \
+            --repository-format=docker --location=us-central1 --quiet || true
+
+      - name: Set Environment Tag
+        id: env-tag
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_tag=prod" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            echo "env_tag=dev" >> $GITHUB_OUTPUT
+          else
+            echo "env_tag=test" >> $GITHUB_OUTPUT
+          fi
+
+      # Pull the base collections image first so the FROM step in the
+      # Dockerfile resolves quickly and we have it cached for layer reuse.
+      - name: Pull base image
+        run: |
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env-tag.outputs.env_tag }}
+
+      - name: Build Docker image
+        run: |
+          docker build -f docker/reports.Dockerfile \
+            --build-arg BASE_IMAGE=us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env-tag.outputs.env_tag }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ github.sha }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }} \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ github.sha }}
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
