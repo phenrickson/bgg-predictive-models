@@ -12,7 +12,9 @@ set dotenv-load
 #
 #   just username=alice train
 username := "phenrickson"
-environment := "dev"
+# Pull `environment` from the .env file (loaded via `set dotenv-load`
+# above). Falls back to "dev" if .env doesn't define ENVIRONMENT.
+environment := env("ENVIRONMENT", "dev")
 local_root := "models/collections"
 
 # Show available recipes
