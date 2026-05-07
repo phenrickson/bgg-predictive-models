@@ -11,8 +11,9 @@ No fitting or scoring happens here.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 
+import matplotlib as _mpl
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -20,15 +21,78 @@ from plotnine import (
     aes,
     coord_flip,
     element_blank,
+    element_line,
+    element_rect,
+    element_text,
     facet_wrap,
+    geom_area,
     geom_col,
+    geom_histogram,
     geom_vline,
     ggplot,
     labs,
     scale_fill_distiller,
+    scale_fill_gradient2,
+    scale_x_continuous,
+    scale_y_continuous,
     theme,
     theme_minimal,
 )
+
+
+# --- Shared theme: matches the bgg-dash-viewer dark indigo palette ---
+#
+# `theme_bgg_dark()` is the canonical plotnine theme used by the
+# collection report so every static figure shares the same look:
+# deep navy panel, light slate text, indigo accents, no extra
+# chartjunk gridlines. Use it instead of `theme_minimal()` for
+# anything that ends up in the report.
+
+_BGG_TEXT = "#e2e8f0"
+_BGG_MUTED = "#a0aec5"
+_BGG_GRID = "#ffffff14"        # very faint white grid (8% alpha)
+_BGG_FONT_FAMILY = ["Roboto", "Helvetica Neue", "Arial", "DejaVu Sans"]
+
+# matplotlib's figure canvas defaults to opaque white. plotnine's
+# `plot_background=element_rect(fill="none")` only paints the axes
+# face; the surrounding figure (and the saved PNG) keeps the white
+# default unless we override these rcParams. Set them at import time
+# so every render — including Quarto's auto-savefig path — produces
+# a transparent PNG that blends with the dark page.
+_mpl.rcParams["figure.facecolor"] = "none"
+_mpl.rcParams["savefig.facecolor"] = "none"
+_mpl.rcParams["savefig.transparent"] = True
+_mpl.rcParams["axes.facecolor"] = "none"
+
+
+def theme_bgg_dark(base_size: int = 11) -> theme:
+    """Plotnine theme that matches the bgg-dash-viewer dark indigo style.
+
+    Plot and panel backgrounds are transparent so the page shows
+    through — the data sits directly on the page, no nested cards.
+    Text uses the page's slate/white palette; gridlines are faint
+    white so they're visible without competing for attention.
+
+    The PNG is saved with a transparent background by configuring
+    matplotlib via plotnine's theme rather than at save time, so
+    callers don't have to know about it.
+    """
+    return theme_minimal(base_size=base_size) + theme(
+        text=element_text(family=_BGG_FONT_FAMILY, color=_BGG_TEXT),
+        plot_background=element_rect(fill="none", color="none"),
+        panel_background=element_rect(fill="none", color="none"),
+        panel_grid_major=element_line(color=_BGG_GRID, size=0.4),
+        panel_grid_minor=element_blank(),
+        axis_text=element_text(color=_BGG_MUTED),
+        axis_title=element_text(color=_BGG_MUTED),
+        plot_title=element_text(color=_BGG_TEXT, weight="bold"),
+        plot_subtitle=element_text(color=_BGG_MUTED),
+        strip_background=element_rect(fill="none", color="none"),
+        strip_text=element_text(color=_BGG_TEXT, weight="bold"),
+        legend_background=element_rect(fill="none", color="none"),
+        legend_text=element_text(color=_BGG_MUTED),
+        legend_title=element_text(color=_BGG_TEXT),
+    )
 
 
 # Map feature-name prefix to display-group label. Extend as new feature
@@ -115,22 +179,39 @@ def plot_feature_importance(
     title: Optional[str] = None,
     interactive: bool = False,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
+    value_range: Optional[tuple[float, float]] = None,
+    kind: str = "linear",
 ) -> Union[ggplot, go.Figure]:
-    """One diverging-bar feature-importance plot.
+    """One feature-importance bar plot.
+
+    For ``kind="linear"`` (the default) the bars are signed and rendered
+    with a diverging red/blue palette — appropriate for logistic /
+    ridge / lasso coefficients. For ``kind="tree"`` the bars are
+    one-sided cyan magnitude bars — appropriate for LightGBM /
+    XGBoost / random forest importance, where ``value`` is always
+    non-negative.
 
     Args:
         importance_df: Must have ``feature`` and ``value`` columns.
         group: If set (e.g. ``"Designers"``), filter to features in that
             group and strip the prefix from labels. ``None`` plots across
             all features.
-        top_pos: Top N positive-value features to keep.
-        top_neg: Top N negative-value features to keep.
+        top_pos: Top N positive-value features to keep. For tree models
+            this is the top N by absolute value (which equals the top N
+            by raw value, since values are non-negative).
+        top_neg: Top N negative-value features to keep. Ignored when
+            ``kind="tree"``.
         title: Plot title. Defaults to ``group`` (or ``"Feature Importance"``).
         interactive: If ``True``, return a plotly figure for Dash.
             Otherwise (default) return a plotnine figure for notebooks.
         name_formatter: Applied to each feature label before plotting.
             Defaults to :func:`tidy_feature_name`. Pass ``None`` for raw
             names (still with the group prefix stripped when ``group`` is set).
+        value_range: Optional ``(low, high)`` x-axis limits / color-scale
+            range. Pass the same range to multiple plots so they're
+            visually comparable (same x scale, same color stretch).
+            Defaults to the absolute max of the filtered subset.
+        kind: ``"linear"`` (signed/diverging) or ``"tree"`` (magnitude).
     """
     df = _prepare(
         importance_df,
@@ -138,11 +219,14 @@ def plot_feature_importance(
         top_pos=top_pos,
         top_neg=top_neg,
         name_formatter=name_formatter,
+        kind=kind,
     )
     plot_title = title or group or "Feature Importance"
     if interactive:
-        return _render_plotly_bars(df, title=plot_title)
-    return _render_plotnine_bars(df, title=plot_title)
+        return _render_plotly_bars(df, title=plot_title, value_range=value_range)
+    if kind == "tree":
+        return _render_plotnine_bars_tree(df, title=plot_title, value_range=value_range)
+    return _render_plotnine_bars(df, title=plot_title, value_range=value_range)
 
 
 def plot_feature_importance_grid(
@@ -202,10 +286,15 @@ def _prepare(
     top_pos: int,
     top_neg: int,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
+    kind: str = "linear",
 ) -> pd.DataFrame:
-    """Filter to ``group`` (if set), take top-N each side, sort descending,
-    then apply ``name_formatter``. Returns a fresh frame with ``feature``
+    """Filter to ``group`` (if set), take top-N, sort descending, then
+    apply ``name_formatter``. Returns a fresh frame with ``feature``
     and ``value`` columns ready to plot.
+
+    For linear models we keep the top-N positive AND top-N negative bars.
+    For tree models the values are non-negative, so we keep only the
+    top ``top_pos`` by raw value.
 
     When ``group`` is set the surrounding plot already identifies the
     family, so the default formatter is invoked with ``include_tag=False``
@@ -216,13 +305,21 @@ def _prepare(
     if group is not None:
         mask = df["feature"].map(feature_group) == group
         df = df.loc[mask].copy()
-    pos = df[df["value"] > 0].nlargest(top_pos, "value")
-    neg = df[df["value"] < 0].nsmallest(top_neg, "value")
-    out = (
-        pd.concat([pos, neg], ignore_index=True)
-        .sort_values("value", ascending=False)
-        .reset_index(drop=True)
-    )
+    if kind == "tree":
+        out = (
+            df[df["value"] > 0]
+            .nlargest(top_pos, "value")
+            .sort_values("value", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        pos = df[df["value"] > 0].nlargest(top_pos, "value")
+        neg = df[df["value"] < 0].nsmallest(top_neg, "value")
+        out = (
+            pd.concat([pos, neg], ignore_index=True)
+            .sort_values("value", ascending=False)
+            .reset_index(drop=True)
+        )
     if name_formatter is not None:
         if name_formatter is tidy_feature_name and group is not None:
             # Drop the "Family:" tag when the surrounding chart already
@@ -246,19 +343,52 @@ def _prepare(
 # --- plotnine renderers (static, notebook-friendly) ---
 
 
-def _render_plotnine_bars(df: pd.DataFrame, title: str) -> ggplot:
+def _render_plotnine_bars(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> ggplot:
     # Preserve the sort order from _prepare (largest positive at top).
     feature_order = list(df["feature"])[::-1]  # ggplot draws bottom-up, so reverse
     df = df.assign(feature=pd.Categorical(df["feature"], categories=feature_order))
-    cmax = float(df["value"].abs().max()) if len(df) else 1.0
+    if value_range is not None:
+        lo, hi = value_range
+        cmax = max(abs(lo), abs(hi))
+    else:
+        cmax = float(df["value"].abs().max()) if len(df) else 1.0
+        lo, hi = -cmax, cmax
     return (
         ggplot(df, aes(x="feature", y="value", fill="value"))
         + geom_col()
         + geom_vline(xintercept=0, color="grey", linetype="dotted")
         + coord_flip()
+        + scale_y_continuous(limits=(lo, hi))
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
-        + theme_minimal()
+        + theme_bgg_dark()
+        + theme(panel_grid_major_y=element_blank())
+    )
+
+
+def _render_plotnine_bars_tree(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> ggplot:
+    """One-sided cyan magnitude bars for tree-model importance."""
+    feature_order = list(df["feature"])[::-1]
+    df = df.assign(feature=pd.Categorical(df["feature"], categories=feature_order))
+    if value_range is not None:
+        _, hi = value_range
+    else:
+        hi = float(df["value"].max()) if len(df) else 1.0
+    return (
+        ggplot(df, aes(x="feature", y="value"))
+        + geom_col(fill="#4fc3f7")
+        + coord_flip()
+        + scale_y_continuous(limits=(0, hi))
+        + labs(title=title, x="", y="Importance")
+        + theme_bgg_dark()
         + theme(panel_grid_major_y=element_blank())
     )
 
@@ -288,7 +418,7 @@ def _render_plotnine_grid(df: pd.DataFrame, title: str) -> ggplot:
         + scale_x_discrete(labels=_drop_salt)
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
-        + theme_minimal()
+        + theme_bgg_dark()
         + theme(panel_grid_major_y=element_blank())
     )
 
@@ -315,12 +445,22 @@ def _plotly_bar_trace(df: pd.DataFrame, cmax: float, show_colorbar: bool) -> go.
     )
 
 
-def _render_plotly_bars(df: pd.DataFrame, title: str) -> go.Figure:
-    cmax = float(df["value"].abs().max()) if len(df) else 1.0
+def _render_plotly_bars(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> go.Figure:
+    if value_range is not None:
+        lo, hi = value_range
+        cmax = max(abs(lo), abs(hi))
+    else:
+        cmax = float(df["value"].abs().max()) if len(df) else 1.0
+        lo, hi = -cmax, cmax
     fig = go.Figure(_plotly_bar_trace(df, cmax=cmax, show_colorbar=True))
     fig.update_layout(
         title=title,
         xaxis_title="Effect on outcome",
+        xaxis=dict(range=[lo, hi]),
         yaxis_title="",
         yaxis=dict(autorange="reversed"),
         height=max(400, 22 * len(df) + 100),
@@ -358,3 +498,656 @@ def _render_plotly_grid(
         margin=dict(l=180, r=60, t=80, b=60),
     )
     return fig
+
+
+def extract_finalized_importance(
+    pipeline,
+    train_sample: pd.DataFrame,
+) -> Optional[pd.DataFrame]:
+    """Return feature importance for a fitted Pipeline.
+
+    Pulls ``feature_importances_`` (tree models) or ``coef_`` (linear
+    models) from ``pipeline.named_steps['model']``. Recovers
+    post-preprocessing feature names by transforming a small sample of
+    canonical training data through ``pipeline.named_steps['preprocessor']``
+    — sklearn's ``get_feature_names_out`` is unreliable on this stack.
+
+    Returns a DataFrame with columns ``feature``, ``value``, ``abs_value``,
+    sorted by ``abs_value`` descending. Returns ``None`` if the model
+    exposes neither attribute.
+    """
+    import numpy as np
+
+    model_step = pipeline.named_steps["model"]
+    if hasattr(model_step, "feature_importances_"):
+        values = np.asarray(model_step.feature_importances_)
+    elif hasattr(model_step, "coef_"):
+        values = np.asarray(model_step.coef_).ravel()
+    else:
+        return None
+
+    names: Optional[list[str]] = None
+    try:
+        preprocessor = pipeline.named_steps["preprocessor"]
+        transformed = preprocessor.transform(train_sample.head(5))
+        if hasattr(transformed, "columns"):
+            names = list(transformed.columns)
+    except Exception:
+        names = None
+    if names is None:
+        try:
+            names = list(pipeline[:-1].get_feature_names_out())
+        except Exception:
+            names = None
+    if names is None or len(names) != len(values):
+        names = [f"f{i}" for i in range(len(values))]
+
+    out = pd.DataFrame({"feature": names, "value": values})
+    out["abs_value"] = out["value"].abs()
+    return out.sort_values("abs_value", ascending=False).reset_index(drop=True)
+
+
+def metrics_table(registration: dict, *, decimals: int = 3) -> pd.DataFrame:
+    """One-row-per-split metrics frame from a registration.json.
+
+    Splits surfaced (in this order): ``val``, ``oof``, ``test``. Missing
+    splits are dropped. Float metrics are rounded to ``decimals`` places
+    for display.
+    """
+    rows: list[dict[str, Any]] = []
+    splits = {
+        "val": registration.get("val_metrics") or {},
+        "oof": (registration.get("oof_metrics") or {}).get("overall") or {},
+        "test": registration.get("metrics") or {},
+    }
+    for split_name, metrics in splits.items():
+        if not metrics:
+            continue
+        row: dict[str, Any] = {"split": split_name}
+        for k, v in metrics.items():
+            if isinstance(v, float):
+                row[k] = round(v, decimals)
+            elif isinstance(v, int):
+                row[k] = v
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=["split"])
+    return pd.DataFrame(rows)
+
+
+def plot_separation(
+    predictions,
+    title: Optional[str] = None,
+) -> go.Figure:
+    """Predicted-proba area chart with true-positive vertical lines.
+
+    Sorts predictions by ``proba`` descending, plots ``proba`` vs rank as
+    an area, and overlays a thin vertical line at every rank where
+    ``label`` is truthy.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "proba" not in predictions.columns:
+        return go.Figure(layout={"title": title or "Separation"})
+
+    sorted_preds = predictions.sort("proba", descending=True).with_row_index(
+        "rank", offset=1
+    )
+    pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+    true_ranks = pdf.loc[pdf["label"].astype(bool), "rank"].tolist()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pdf["rank"],
+            y=pdf["proba"],
+            mode="lines",
+            fill="tozeroy",
+            line={"color": "#444444", "width": 1},
+            fillcolor="rgba(80,80,80,0.25)",
+            hovertemplate="rank=%{x}<br>proba=%{y:.4f}<extra></extra>",
+            showlegend=False,
+        )
+    )
+    shapes = [
+        {
+            "type": "line",
+            "x0": x,
+            "x1": x,
+            "y0": 0,
+            "y1": 1,
+            "yref": "y domain",
+            "line": {"color": "#4fc3f7", "width": 1},
+            "opacity": 0.6,
+        }
+        for x in true_ranks
+    ]
+    fig.update_layout(
+        title=title or "Separation",
+        shapes=shapes,
+        xaxis_title="rank (proba descending)",
+        yaxis_title="proba",
+        height=240,
+        margin={"t": 40, "b": 40, "l": 50, "r": 12},
+    )
+    return fig
+
+
+def top_n_by_year_table(predictions, top_n: int = 15, min_year: int | None = 2015):
+    """Pivot predictions into rank × year, top-N per year.
+
+    Each column is a year (as a string for stable header names); each
+    row is rank 1..top_n. Cells contain the game ``name``.
+
+    Args:
+        predictions: Must have ``proba``, ``year_published``, ``name``.
+        top_n: Number of rows per year to keep.
+        min_year: Drop rows with ``year_published`` below this. Pass
+            ``None`` to disable. Defaults to 2015 — older years tend to
+            be dominated by very high-proba "classics" that crowd out
+            the recent picks people actually want to see.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "year_published" not in predictions.columns:
+        return pl.DataFrame()
+
+    view = predictions.with_columns(pl.col("year_published").cast(pl.Int64))
+    if min_year is not None:
+        view = view.filter(pl.col("year_published") >= min_year)
+    if view.height == 0:
+        return pl.DataFrame()
+    view = view.with_columns(
+        pl.col("proba")
+        .rank(method="ordinal", descending=True)
+        .over("year_published")
+        .alias("_rank")
+    ).filter(pl.col("_rank") <= top_n)
+
+    if view.height == 0:
+        return pl.DataFrame()
+
+    pivot = (
+        view.pivot(values="name", index="_rank", on="year_published")
+        .sort("_rank")
+        .rename({"_rank": "rank"})
+    )
+    year_cols = sorted(int(y) for y in view["year_published"].unique().to_list())
+    ordered = ["rank"] + [str(y) for y in year_cols]
+    return pivot.select([c for c in ordered if c in pivot.columns])
+
+
+_PREDICTION_DISPLAY_COLS = [
+    "proba",
+    "predicted_prob",
+    "label",
+    "predicted_label",
+    "name",
+    "year_published",
+    "min_players",
+    "max_players",
+    "min_playtime",
+    "max_playtime",
+    "average_rating",
+    "average_weight",
+    "users_rated",
+    "game_id",
+]
+
+
+def predictions_datatable(
+    predictions,
+    games,
+    top_n: int = 500,
+    min_users_rated: int = 0,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Sortable predictions table for embedding in the report.
+
+    Returns a pandas DataFrame; the qmd wraps it with `itables.show(...)`.
+    By default, surfaces a curated set of columns (proba/label, name,
+    year, player counts, playtime, ratings) and drops list-typed columns
+    that render badly in tables.
+    """
+    import polars as pl
+
+    view = predictions
+    if min_users_rated > 0 and "users_rated" in view.columns:
+        view = view.filter(pl.col("users_rated") >= min_users_rated)
+    if "proba" in view.columns:
+        view = view.sort("proba", descending=True)
+    elif "predicted_prob" in view.columns:
+        view = view.sort("predicted_prob", descending=True)
+    view = view.head(top_n)
+
+    if games is not None and games.height > 0 and "game_id" in games.columns:
+        meta_cols = [
+            c for c in games.columns if c == "game_id" or c not in view.columns
+        ]
+        view = view.join(games.select(meta_cols), on="game_id", how="left")
+
+    # Drop list-typed and binary-blob columns; itables can't sort them
+    # and they make the table unreadable.
+    drop_cols = {
+        "categories", "mechanics", "designers", "artists", "publishers",
+        "families", "description", "thumbnail", "image",
+        "load_timestamp", "last_updated",
+    }
+    keep = columns or [c for c in _PREDICTION_DISPLAY_COLS if c in view.columns]
+    if not keep:
+        keep = [c for c in view.columns if c not in drop_cols]
+    return view.select([c for c in keep if c in view.columns]).to_pandas()
+
+
+def plot_collection_by_year(collection, games) -> go.Figure:
+    """Histogram of ``year_published`` for owned games."""
+    import polars as pl
+
+    if collection.height == 0:
+        return go.Figure(layout={"title": "Games by year"})
+    owned = (
+        collection.filter(pl.col("owned") == True)
+        .select("game_id")
+        .join(games.select(["game_id", "year_published"]), on="game_id", how="inner")
+    )
+    if owned.height == 0:
+        return go.Figure(layout={"title": "Games by year"})
+    counts = owned.group_by("year_published").len().sort("year_published")
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=counts["year_published"].to_list(),
+                y=counts["len"].to_list(),
+            )
+        ]
+    )
+    fig.update_layout(
+        title="Games by year",
+        xaxis_title="year_published",
+        yaxis_title="count",
+        height=320,
+    )
+    return fig
+
+
+def plot_collection_by_category(collection, games, top_n: int = 15) -> go.Figure:
+    """Top-N feature flags in the user's owned games, faceted by family.
+
+    Aggregates dummy columns matching known feature-group prefixes
+    (categories, mechanics, designers, etc.) over the joined collection,
+    then plots the most-frequent within each group.
+    """
+    import polars as pl
+
+    if collection.height == 0:
+        return go.Figure(layout={"title": "Types of games"})
+    owned = collection.filter(pl.col("owned") == True).select("game_id")
+    joined = owned.join(games, on="game_id", how="inner")
+    if joined.height == 0:
+        return go.Figure(layout={"title": "Types of games"})
+
+    # Publishers excluded: for many users the top entries are
+    # foreign-language re-publishers, not a useful signal.
+    list_groups = {
+        "categories": "Categories",
+        "mechanics": "Mechanics",
+        "designers": "Designers",
+        "artists": "Artists",
+        "families": "Families",
+    }
+    present_cols = [c for c in list_groups if c in joined.columns]
+    rows: list[dict[str, Any]] = []
+    for col in present_cols:
+        try:
+            exploded = (
+                joined.select(pl.col(col))
+                .explode(col)
+                .drop_nulls()
+                .group_by(col)
+                .len()
+                .sort("len", descending=True)
+                .head(top_n)
+            )
+        except Exception:
+            continue
+        for record in exploded.to_dicts():
+            value = record[col]
+            count = record["len"]
+            if value in (None, ""):
+                continue
+            rows.append(
+                {"feature": str(value), "group": list_groups[col], "count": int(count)}
+            )
+
+    # Fallback: legacy dummy columns (category_*, mechanic_*, etc.)
+    if not rows:
+        for col in joined.columns:
+            group = feature_group(col)
+            if group == "Other":
+                continue
+            try:
+                total = int(joined.select(pl.col(col).sum()).item())
+            except Exception:
+                continue
+            if total <= 0:
+                continue
+            rows.append(
+                {
+                    "feature": tidy_feature_name(col, include_tag=False),
+                    "group": group,
+                    "count": total,
+                }
+            )
+
+    if not rows:
+        return go.Figure(layout={"title": "Types of games"})
+
+    groups_order = [
+        list_groups[c] for c in present_cols if list_groups[c] in {r["group"] for r in rows}
+    ] or sorted({r["group"] for r in rows})
+
+    n_groups = len(groups_order)
+    cols_per_row = 2
+    rows_grid = (n_groups + cols_per_row - 1) // cols_per_row
+    fig = make_subplots(
+        rows=rows_grid,
+        cols=cols_per_row,
+        subplot_titles=groups_order,
+        horizontal_spacing=0.3,
+        vertical_spacing=0.08,
+    )
+    for i, group in enumerate(groups_order):
+        sub = (
+            pd.DataFrame([r for r in rows if r["group"] == group])
+            .sort_values("count", ascending=True)
+        )
+        r = i // cols_per_row + 1
+        c = i % cols_per_row + 1
+        fig.add_trace(
+            go.Bar(
+                x=sub["count"],
+                y=sub["feature"],
+                orientation="h",
+                showlegend=False,
+                marker_color="#4fc3f7",
+            ),
+            row=r,
+            col=c,
+        )
+
+    fig.update_layout(
+        title="Types of games",
+        height=max(360, 220 * rows_grid),
+        margin={"l": 80, "r": 20, "t": 80, "b": 40},
+    )
+    return fig
+
+
+_COLLECTION_DISPLAY_COLS = [
+    "game_name",
+    "name",
+    "year_published",
+    "user_rating",
+    "owned",
+    "previously_owned",
+    "want",
+    "wishlist",
+    "preordered",
+    "for_trade",
+    "min_players",
+    "max_players",
+    "min_playtime",
+    "max_playtime",
+    "average_rating",
+    "average_weight",
+    "users_rated",
+    "game_id",
+]
+
+
+def collection_datatable(collection, games) -> pd.DataFrame:
+    """Sortable table of a user's collection.
+
+    Joins in game metadata when available. Returns a pandas DataFrame
+    with a curated set of columns; the qmd wraps with `itables.show`.
+    Drops list-typed and blob columns that render poorly in tables.
+    """
+    import polars as pl
+
+    if collection.height == 0:
+        return pd.DataFrame()
+    view = collection
+    if games is not None and games.height > 0 and "game_id" in games.columns:
+        meta_cols = [
+            c for c in games.columns if c == "game_id" or c not in view.columns
+        ]
+        view = view.join(games.select(meta_cols), on="game_id", how="left")
+
+    # Show only owned games by default — that's what users mean by
+    # "their collection" in this report.
+    if "owned" in view.columns:
+        view = view.filter(pl.col("owned") == True)
+
+    if "user_rating" in view.columns:
+        view = view.sort("user_rating", descending=True, nulls_last=True)
+
+    keep = [c for c in _COLLECTION_DISPLAY_COLS if c in view.columns]
+    if not keep:
+        keep = view.columns
+    return view.select(keep).to_pandas()
+
+
+def plot_partial_effects_by_group(
+    feature_importance: pd.DataFrame,
+    top_n: int = 15,
+) -> dict[str, go.Figure]:
+    """Build one feature-importance plot per known group.
+
+    Returns a dict keyed by group label. Empty groups are omitted.
+    """
+    if feature_importance is None or len(feature_importance) == 0:
+        return {}
+    groups = sorted(
+        {feature_group(name) for name in feature_importance["feature"].tolist()}
+    )
+    out: dict[str, go.Figure] = {}
+    for group in groups:
+        if group == "Other":
+            continue
+        try:
+            fig = plot_feature_importance(
+                feature_importance,
+                group=group,
+                top_pos=top_n,
+                top_neg=top_n,
+                interactive=True,
+                title=group,
+            )
+        except Exception:
+            continue
+        out[group] = fig
+    return out
+
+
+# --- Static (plotnine) variants — for embedding in Quarto reports ---
+#
+# These exist alongside the plotly versions because plotly figures bundle
+# 4–5 MB of JS per chart, blowing up the embedded-resources HTML. plotnine
+# renders to PNG which is kilobytes. Use the static variants in the qmd
+# template; keep plotly versions for Streamlit/Dash.
+
+
+def plot_separation_static(predictions, title: Optional[str] = None) -> ggplot:
+    """plotnine version of `plot_separation`.
+
+    Sorts predictions by ``proba`` descending, plots ``proba`` as an area
+    chart against rank, and overlays a vertical line at every rank
+    where ``label`` is truthy.
+    """
+    import polars as pl
+
+    if predictions.height == 0 or "proba" not in predictions.columns:
+        return (
+            ggplot(pd.DataFrame({"rank": [], "proba": []}), aes("rank", "proba"))
+            + labs(title=title or "Separation")
+            + theme_bgg_dark()
+        )
+
+    sorted_preds = predictions.sort("proba", descending=True).with_row_index(
+        "rank", offset=1
+    )
+    pdf = sorted_preds.select(["rank", "proba", "label"]).to_pandas()
+    pdf["rank"] = pdf["rank"].astype(int)
+    true_ranks = pdf.loc[pdf["label"].astype(bool), "rank"].tolist()
+
+    plot = (
+        ggplot(pdf, aes("rank", "proba"))
+        + geom_area(fill="#888888", alpha=0.4)
+        + scale_y_continuous(limits=(0, 1))
+        + theme_bgg_dark()
+        + labs(
+            title=title or "Separation",
+            x="rank (proba descending)",
+            y="proba",
+        )
+        + theme(
+            figure_size=(8, 2.2),
+            panel_grid_major_x=element_blank(),
+            panel_grid_minor=element_blank(),
+        )
+    )
+    if true_ranks:
+        plot = plot + geom_vline(
+            xintercept=true_ranks, color="#1976d2", alpha=0.6, size=0.3
+        )
+    return plot
+
+
+def plot_collection_by_year_static(collection, games) -> ggplot:
+    """plotnine version of `plot_collection_by_year`."""
+    import polars as pl
+
+    if collection.height == 0:
+        return (
+            ggplot(pd.DataFrame({"year_published": [], "n": []}))
+            + labs(title="Games by year")
+            + theme_bgg_dark()
+        )
+    owned = (
+        collection.filter(pl.col("owned") == True)
+        .select("game_id")
+        .join(games.select(["game_id", "year_published"]), on="game_id", how="inner")
+    )
+    if owned.height == 0:
+        return (
+            ggplot(pd.DataFrame({"year_published": [], "n": []}))
+            + labs(title="Games by year")
+            + theme_bgg_dark()
+        )
+    counts = owned.group_by("year_published").len().sort("year_published")
+    pdf = counts.to_pandas().rename(columns={"len": "n"})
+    pdf["year_published"] = pdf["year_published"].astype(int)
+    return (
+        ggplot(pdf, aes("year_published", "n"))
+        + geom_col(fill="#4fc3f7")
+        + labs(title="Games by year", x="year published", y="count")
+        + theme_bgg_dark()
+        + theme(figure_size=(9, 3.5))
+    )
+
+
+def plot_collection_by_category_static(collection, games, top_n: int = 12) -> ggplot:
+    """plotnine version of `plot_collection_by_category`.
+
+    Renders a single faceted figure (one panel per family) instead of a
+    plotly subplots grid. Reuses the same data-shaping logic as the
+    plotly version.
+    """
+    import polars as pl
+
+    if collection.height == 0 or games is None or games.height == 0:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_bgg_dark()
+        )
+
+    owned_ids = collection.filter(pl.col("owned") == True).select("game_id")
+    joined = owned_ids.join(games, on="game_id", how="inner")
+    if joined.height == 0:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_bgg_dark()
+        )
+
+    # Publishers is intentionally excluded — for international users the
+    # top entries are foreign-language re-publishers of already-popular
+    # games, which says more about translation rights than taste.
+    list_groups = {
+        "categories": "Categories",
+        "mechanics": "Mechanics",
+        "designers": "Designers",
+        "artists": "Artists",
+        "families": "Families",
+    }
+    present_cols = [c for c in list_groups if c in joined.columns]
+    rows: list[dict[str, Any]] = []
+    for col in present_cols:
+        try:
+            exploded = (
+                joined.select(pl.col(col))
+                .explode(col)
+                .drop_nulls()
+                .group_by(col)
+                .len()
+                .sort("len", descending=True)
+                .head(top_n)
+            )
+        except Exception:
+            continue
+        for record in exploded.to_dicts():
+            value = record[col]
+            count = record["len"]
+            if value in (None, ""):
+                continue
+            rows.append(
+                {"feature": str(value), "group": list_groups[col], "count": int(count)}
+            )
+
+    if not rows:
+        return (
+            ggplot(pd.DataFrame({"feature": [], "count": [], "group": []}))
+            + labs(title="Types of games")
+            + theme_bgg_dark()
+        )
+
+    pdf = pd.DataFrame(rows)
+    # Order features within each facet by count so the bars sort cleanly.
+    # Real users sometimes have feature-name collisions across families
+    # (e.g. a category and a mechanic that share a label). pandas
+    # Categorical requires unique categories, so dedupe the ordered list
+    # while preserving the first occurrence.
+    ordered = pdf.sort_values(["group", "count"])["feature"].tolist()
+    seen: set[str] = set()
+    unique_ordered = [f for f in ordered if not (f in seen or seen.add(f))]
+    pdf["feature"] = pd.Categorical(
+        pdf["feature"],
+        categories=unique_ordered,
+        ordered=True,
+    )
+    n_groups = pdf["group"].nunique()
+    return (
+        ggplot(pdf, aes("feature", "count"))
+        + geom_col(fill="#4fc3f7")
+        + coord_flip()
+        + facet_wrap("group", scales="free", ncol=2)
+        + labs(title="Types of games", x="", y="count")
+        + theme_bgg_dark()
+        + theme(
+            figure_size=(8, 2.6 * ((n_groups + 1) // 2)),
+            strip_text=element_text(weight="bold"),
+            panel_grid_major_y=element_blank(),
+            panel_grid_minor=element_blank(),
+        )
+    )

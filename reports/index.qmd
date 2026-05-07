@@ -1,0 +1,185 @@
+---
+title: "BGG Collection Reports"
+subtitle: "What a model thinks about your boardgame collection"
+author: "Phil Henrickson"
+date: today
+format:
+  html:
+    toc: false
+    embed-resources: true
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
+execute:
+  echo: false
+  warning: false
+  message: false
+  daemon: false
+params:
+  source: local
+---
+
+```{python}
+#| tags: [parameters]
+#| include: false
+source = "local"
+```
+
+```{python}
+#| label: setup
+#| include: false
+import os
+import sys
+from pathlib import Path
+
+_project_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+import json
+from collections import defaultdict
+
+import fsspec
+
+# Resolve `local` to the canonical models/collections path.
+if source == "local":
+    artifacts_root = str(
+        (Path(__file__).resolve().parent.parent / "models" / "collections")
+        if "__file__" in dir()
+        else Path(_project_root) / "models" / "collections"
+    )
+else:
+    artifacts_root = source.rstrip("/")
+
+# Discover users + their newest finalized candidate by listing the tree.
+fs = fsspec.filesystem("gs" if artifacts_root.startswith("gs://") else "file")
+prefix = artifacts_root.removeprefix("gs://") if artifacts_root.startswith("gs://") else artifacts_root
+
+
+def _ls_dirs(p: str) -> list[str]:
+    if not fs.exists(p):
+        return []
+    return [Path(x).name for x in fs.ls(p) if fs.isdir(x)]
+
+
+users_summary: list[dict] = []
+for user in sorted(_ls_dirs(prefix)):
+    user_path = f"{prefix}/{user}"
+    # We only surface users with a finalized "own" model — that's what
+    # the per-user reports currently render.
+    own_path = f"{user_path}/own"
+    if not fs.exists(own_path):
+        continue
+    finalized: list[dict] = []
+    for cand in _ls_dirs(own_path):
+        for v in sorted(_ls_dirs(f"{own_path}/{cand}")):
+            if not v.startswith("v"):
+                continue
+            reg_path = f"{own_path}/{cand}/{v}/registration.json"
+            final_path = f"{own_path}/{cand}/{v}/finalized.pkl"
+            if not (fs.exists(reg_path) and fs.exists(final_path)):
+                continue
+            try:
+                with fs.open(reg_path, "rt") as fh:
+                    reg = json.load(fh)
+            except Exception:
+                continue
+            finalized.append((cand, int(v[1:]), reg))
+    if not finalized:
+        continue
+    # Pick the most recently finalized (latest finalized_at) version.
+    finalized.sort(key=lambda x: x[2].get("finalized_at") or "", reverse=True)
+    cand, version, reg = finalized[0]
+    spec = reg.get("candidate_spec") or {}
+    cfg = spec.get("classification_config") or spec.get("regression_config") or {}
+    users_summary.append({
+        "username": user,
+        "candidate": cand,
+        "version": version,
+        "model_type": (cfg.get("model_type") or "—"),
+        "roc_auc": (reg.get("metrics") or {}).get("roc_auc"),
+        "pr_auc": (reg.get("metrics") or {}).get("pr_auc"),
+        "finalized_at": reg.get("finalized_at"),
+        "n_train": reg.get("n_train_used"),
+    })
+```
+
+```{python}
+#| label: user-grid
+#| output: asis
+def _fmt(v, decimals=3):
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.{decimals}f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _short_dt(value):
+    if not value:
+        return "—"
+    return str(value).split("T")[0]
+
+
+if not users_summary:
+    print("_No reports have been generated yet._")
+else:
+    print("```{=html}")
+    print('<div class="user-grid">')
+    for u in users_summary:
+        print(
+            f'<a class="user-card" href="{u["username"]}.html">'
+            f'<div class="user-card-title">{u["username"]}</div>'
+            f'<div class="user-card-sub">'
+            f'{u["model_type"]} · ROC-AUC {_fmt(u["roc_auc"])}'
+            f'</div>'
+            f'</a>'
+        )
+    print("</div>")
+    print("```")
+```
+
+## About
+
+Each report below summarizes a per-user classification model that
+predicts whether the user owns a given board game on BoardGameGeek.
+Models learn from features observable at release — publishers,
+mechanics, designers, playing time — and never read BGG community
+signals like average rating or weight, so they can score upcoming
+games without leaking signal from the community after release.
+
+```{python}
+#| label: summary-table
+import pandas as pd
+
+if users_summary:
+    df = pd.DataFrame([
+        {
+            "User": f'<a href="{u["username"]}.html">{u["username"]}</a>',
+            "Model": u["model_type"],
+            "Candidate": u["candidate"],
+            "ROC-AUC": _fmt(u["roc_auc"]),
+            "PR-AUC": _fmt(u["pr_auc"]),
+            "Train rows": (
+                f'{int(u["n_train"]):,}'
+                if u["n_train"] is not None
+                else "—"
+            ),
+            "Finalized": _short_dt(u["finalized_at"]),
+        }
+        for u in users_summary
+    ])
+    from itables import show as itables_show
+    itables_show(
+        df,
+        paging=False,
+        searching=False,
+        info=False,
+        classes="display compact",
+        style="width: 100%",
+        allow_html=True,
+    )
+```

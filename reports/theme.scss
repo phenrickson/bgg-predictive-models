@@ -1,0 +1,215 @@
+/*-- scss:defaults --*/
+
+// Match bgg-dash-viewer's dark indigo theme.
+
+// Typography
+$font-family-sans-serif: "Roboto", "Helvetica Neue", Arial, sans-serif !default;
+$font-family-monospace: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace !default;
+$font-size-base: 0.95rem !default;
+$line-height-base: 1.55 !default;
+
+// Brand palette — `$primary` is the cyan accent used in plots so the
+// theme's UI chrome (links, tabset, code, callouts, TOC active) stays
+// in the same hue family as the data visualizations.
+$primary: #4fc3f7 !default;          // cyan
+$secondary: #94a3b8 !default;        // slate
+$success: #10b981 !default;          // emerald
+$info: #4fc3f7 !default;              // cyan (alias of $primary)
+$warning: #f59e0b !default;
+$danger: #ef4444 !default;
+
+// Surfaces — dark navy/indigo
+$body-bg: #0f0f1a !default;
+$body-color: #e2e8f0 !default;
+
+$body-secondary-bg: #1a1a2e !default;
+$body-tertiary-bg: #16213e !default;
+
+$border-color: rgba(255, 255, 255, 0.1) !default;
+$border-color-translucent: rgba(255, 255, 255, 0.08) !default;
+
+// Code block colors
+$code-color: #81d4fa !default;       // soft cyan on dark
+$code-bg: rgba(79, 195, 247, 0.08) !default;
+
+$pre-color: #e2e8f0 !default;
+$pre-bg: rgba(0, 0, 0, 0.3) !default;
+
+// Headings
+$headings-color: #e2e8f0 !default;
+$headings-font-weight: 600 !default;
+
+// Links — inherit `$primary` (cyan) so text accents stay in the same
+// family as the in-plot accent.
+$link-color: $primary !default;
+$link-hover-color: #81d4fa !default;
+$link-decoration: none !default;
+$link-hover-decoration: underline !default;
+
+// Tables
+$table-color: #e2e8f0 !default;
+$table-bg: transparent !default;
+$table-striped-bg: rgba(255, 255, 255, 0.03) !default;
+$table-hover-bg: rgba(79, 195, 247, 0.08) !default;
+$table-border-color: rgba(255, 255, 255, 0.08) !default;
+
+// Quarto-specific tokens
+$navbar-bg: #1a1a2e !default;
+$toc-color: #94a3b8 !default;
+$toc-active-border: $primary !default;
+
+/*-- scss:rules --*/
+
+// Body gradient — matches dash-viewer's app shell.
+// Paint `html` with the same base color so the browser's overscroll
+// area (rubber-band scroll above the top of the page) shows the dark
+// surface instead of the html default white.
+html {
+    background: #0f0f1a;
+}
+
+body {
+    background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #0f172a 100%);
+    background-attachment: fixed;
+    color: $body-color;
+}
+
+// Bootstrap also targets `<a>` directly with text-decoration in some
+// builds. Belt-and-suspenders: kill the underline at the rule level.
+a {
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+// Title block (top of the report).
+header#title-block-header {
+    .title {
+        color: $body-color;
+        font-weight: 700;
+    }
+    .subtitle,
+    .quarto-title-meta-heading,
+    .quarto-title-meta-contents {
+        color: $secondary;
+    }
+}
+
+// Section headings.
+h1, h2, h3, h4, h5, h6 {
+    color: $headings-color;
+}
+
+// Quarto's "section" h2 with the chain link.
+.quarto-section-identifier,
+.anchorjs-link {
+    color: $primary;
+}
+
+// Tables — dark surface, subtle borders.
+table {
+    color: $body-color;
+}
+
+table.dataTable thead {
+    background: rgba(255, 255, 255, 0.04);
+    color: $body-color;
+}
+
+table.dataTable tbody tr {
+    background: transparent !important;
+    color: $body-color;
+}
+
+table.dataTable tbody tr:hover {
+    background: rgba(79, 195, 247, 0.08) !important;
+}
+
+table.dataTable tbody td,
+table.dataTable thead th {
+    border-color: $table-border-color !important;
+}
+
+// DataTables search/filter chrome
+.dataTables_wrapper .dataTables_length,
+.dataTables_wrapper .dataTables_filter,
+.dataTables_wrapper .dataTables_info,
+.dataTables_wrapper .dataTables_paginate {
+    color: $secondary !important;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+    color: $secondary !important;
+}
+
+.dataTables_wrapper .dataTables_paginate .paginate_button.current {
+    background: $primary !important;
+    color: #fff !important;
+    border-color: $primary !important;
+}
+
+// Code blocks
+pre code,
+pre {
+    background: $pre-bg !important;
+    color: $pre-color;
+    border: 1px solid $border-color;
+}
+
+code:not(pre code) {
+    color: $code-color;
+    background: $code-bg;
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+}
+
+// Tabset (panel-tabset .nav-pills)
+.panel-tabset .nav-pills .nav-link {
+    color: $secondary;
+}
+
+.panel-tabset .nav-pills .nav-link.active {
+    background: rgba(79, 195, 247, 0.15);
+    color: #fff;
+}
+
+// Right-margin notes (column-margin / .aside)
+.column-margin,
+aside,
+.aside {
+    color: $secondary;
+    font-size: 0.85em;
+    line-height: 1.4;
+    border-left: 2px solid $primary;
+    padding-left: 0.75rem;
+}
+
+// Callouts
+.callout-note {
+    border-left-color: $info !important;
+    background: rgba(79, 195, 247, 0.06);
+}
+
+// TOC
+#TOC,
+.sidebar-navigation {
+    color: $secondary;
+}
+
+#TOC a,
+.sidebar-navigation a {
+    color: $secondary !important;
+}
+
+#TOC a:hover,
+.sidebar-navigation a:hover {
+    color: $primary !important;
+}
+
+#TOC a.active,
+.sidebar-navigation a.active {
+    color: $primary !important;
+    border-left-color: $primary !important;
+}

@@ -2,6 +2,106 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.1] - 2026-05-07
+
+### Added
+
+- **GCS sync for collection experiments**: `just sync-artifacts <user>`
+  and `just sync-artifacts-all` mirror local
+  `models/collections/<user>/...` into
+  `gs://bgg-predictive-models/<env>/collections/<user>/...` via
+  `gsutil rsync`. Inverse recipes `just pull-artifacts <user>` /
+  `pull-artifacts-all` seed a local tree from the cloud copy (useful
+  on a fresh machine). All four are additive by default; pass
+  `--prune` to also delete cloud-or-local files absent on the other
+  side.
+- **Index page** (`reports/index.qmd` + `reports/build_index.py`): a
+  standalone Quarto page that scans the artifact source (local or
+  `gs://`) for users with finalized models, surfaces each user's
+  newest finalized candidate with headline metrics, and renders a
+  card grid + summary table linking to the per-user HTMLs.
+  `just render-index` builds it locally.
+- **CI workflow** (`.github/workflows/build-collection-reports.yml`):
+  weekly cron + manual dispatch + push-on-reports-code-change.
+  Authenticates to GCP using the existing `GCP_SA_KEY_BGG_ML` secret
+  (no IAM additions required), renders every user with finalized
+  artifacts from `gs://...`, builds the index page, and deploys the
+  output to GitHub Pages via `actions/deploy-pages`. One-time setup:
+  enable Pages on the repo with source = "GitHub Actions" and seed
+  GCS with `just sync-artifacts-all`.
+
+## [0.6.0] - 2026-05-07
+
+### Added
+
+- **Per-user collection report**: a Quarto-based HTML report that
+  summarizes a finalized collection model from end to end —
+  collection composition, what the model learned, performance on
+  held-out games, and ranked predictions for new/upcoming and older
+  releases. Lives under `reports/`; rendered HTMLs land in
+  `reports/_output/`. Driven by `collection_report.qmd` plus a small
+  Python module package:
+  - `src/reports/collection_data.py` — typed
+    `CollectionReportData` / `OutcomeArtifacts` aggregates loaded from
+    local artifacts (`models/collections/`) or `gs://` via fsspec, with
+    `select_candidate()` defaulting to the configured deployed
+    candidate (or `logistic_row_norm` as the fallback). Raises a typed
+    `MissingArtifactsError` with actionable hints when a user/outcome
+    has nothing finalized yet.
+  - `src/reports/tables.py` — table builders for collection,
+    eval-set top-N, predictions-with-images, and the model-details
+    provenance block; plus `build_topn_by_year_html` for the
+    side-by-side year grid.
+  - `src/reports/format.py` — small HTML/text formatters
+    (`bgg_link`, `img_tag`, `truncate`, etc.) and `model_kind()` which
+    classifies a registration's model type as `"linear"` vs `"tree"`.
+  - `src/reports/fixtures.py` — `build_fake_report_data()` returns a
+    schema-faithful synthetic `CollectionReportData` for fast styling
+    iteration. Used by `just render-sandbox` (no BQ, no artifact reads).
+  - `reports/render.py` — CLI driver. Pre-flights
+    `select_candidate()` so missing-artifact failures surface as a
+    one-line message instead of a Quarto kernel traceback. Passes
+    Quarto params via `-P key=value` (no env-var coupling).
+- **Plotting refresh** in `src/collection/viz.py`:
+  - `theme_bgg_dark()` — shared plotnine theme matching the
+    `bgg-dash-viewer` dark indigo palette, with transparent figure +
+    axes backgrounds (matplotlib rcParams set at import time so saved
+    PNGs aren't capped with a white canvas).
+  - Static plotnine variants of the existing plotly charts:
+    `plot_separation_static`, `plot_collection_by_year_static`,
+    `plot_collection_by_category_static`. The Streamlit-facing plotly
+    versions stay.
+  - `plot_feature_importance` now takes `kind="linear" | "tree"` and
+    dispatches to a signed diverging-bar renderer or a one-sided cyan
+    magnitude renderer. The collection report branches the section
+    prose on `model_kind(arts.registration)` so logistic and LightGBM
+    candidates each get an interpretation that fits.
+  - `plot_collection_by_category_static` dedupes ordered categories
+    so users with feature-name collisions across families render
+    cleanly.
+  - `metrics_table()` rounds floats to 3 decimals by default
+    (`decimals=` override available).
+- **Justfile**: positional CLI for every single-user recipe. The
+  module-level `username := "phenrickson"` becomes the default for
+  the new first positional `user` argument, so:
+  - `just train rahdo own lgbm_default`
+  - `just finalize rahdo own lgbm_row_norm`
+  - `just promote rahdo`
+  - `just render rahdo`
+  - `just verify rahdo own`
+  Bare invocations (`just train`) still work; the
+  `just username=alice train` named-arg form continues to work as an
+  escape hatch. New report recipes: `render`, `render-all`,
+  `render-sandbox`. `sweep`, `train-compare`, `users-sweep`, and
+  `promote-all` now invoke the inner recipes positionally instead of
+  via `just username=…`.
+
+### Changed
+
+- `reports/_output/`, `reports/.quarto/`, and `*.quarto_ipynb` are
+  ignored — built artifacts shouldn't enter version control.
+- Project dependencies: `fsspec`, `gcsfs`, `papermill` (dev).
+
 ## [0.5.1] - 2026-04-30
 
 ### Added
