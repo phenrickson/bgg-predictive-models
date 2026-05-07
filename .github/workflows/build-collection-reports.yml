@@ -1,0 +1,114 @@
+name: Build Collection Reports
+
+on:
+  schedule:
+    # Sunday 09:00 UTC — after the weekly collection-scoring run.
+    - cron: '0 9 * * 0'
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - 'reports/**'
+      - 'src/reports/**'
+      - 'src/collection/viz.py'
+      - '.github/workflows/build-collection-reports.yml'
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+# Pages deployments require these permissions and a single in-flight
+# deploy at a time.
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    outputs:
+      pages-artifact: ${{ steps.pages-upload.outputs.artifact_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set environment name
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install project
+        run: uv sync --frozen
+
+      # Render every user with finalized artifacts under
+      # gs://bgg-predictive-models/<env>/collections/. The render
+      # driver pre-flights select_candidate() per user and skips
+      # cleanly if a user has no finalized version, so this is
+      # continue-on-error by design.
+      - name: Render reports from GCS
+        run: |
+          uv run python -m reports.render \
+            --all-users \
+            --source "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections" \
+            --output-dir reports/_output
+
+      - name: List rendered reports
+        run: ls -la reports/_output/
+
+      # Generate the index page with links to each rendered report,
+      # built from whatever HTMLs ended up in _output/. Uses the
+      # standalone Quarto render path (no website project).
+      - name: Render index page
+        run: |
+          uv run python -m reports.build_index \
+            --output-dir reports/_output
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        id: pages-upload
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/_output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

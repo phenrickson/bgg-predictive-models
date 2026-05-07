@@ -234,8 +234,101 @@ render user=username outcome="own" candidate="":
 render-all outcome="own":
     uv run python -m reports.render --all-users --outcome {{outcome}}
 
+# Render the index page (reports/index.qmd) which lists all users with
+# finalized models and links to their per-user reports. Builds from the
+# local artifact tree by default; pass `source=gs://...` to build from
+# cloud storage instead (used by the CI workflow).
+render-index source="local":
+    uv run python -m reports.build_index --source {{source}}
+
 # Render the report against synthetic fixture data — no BQ, no artifacts.
 # Use this for fast iteration on styling/layout: edits to the qmd, css,
 # or viz code can be checked in seconds rather than waiting on real loads.
 render-sandbox:
     uv run python -m reports.render --fixture
+
+# --- Artifact sync to GCS ---
+#
+# Local experiment artifacts live under models/collections/<user>/...
+# Mirror them into gs://<bucket>/<env>/collections/<user>/... so the
+# scheduled reports workflow (CI) can render directly from cloud
+# storage. Only finalized versions are useful for the report; we sync
+# the whole tree so future runs pick up new candidates automatically.
+gcs_artifacts_root := "gs://bgg-predictive-models/" + environment + "/collections"
+
+# Sync one user's collection artifacts to GCS.
+#   just sync-artifacts rahdo
+#   just sync-artifacts rahdo --prune    # remove cloud files not in local
+sync-artifacts user=username prune="":
+    #!/usr/bin/env bash
+    set -e
+    src="{{local_root}}/{{user}}"
+    dst="{{gcs_artifacts_root}}/{{user}}"
+    if [ ! -d "$src" ]; then
+        echo "No local artifacts for user '{{user}}' at $src" >&2
+        exit 1
+    fi
+    echo "syncing $src -> $dst"
+    if [ -n "{{prune}}" ]; then
+        gsutil -m rsync -r -d "$src" "$dst"
+    else
+        gsutil -m rsync -r "$src" "$dst"
+    fi
+
+# Sync every local user's collection artifacts to GCS. Skips users with
+# no local directory; continue-on-error.
+sync-artifacts-all prune="":
+    #!/usr/bin/env bash
+    failed=()
+    for user_dir in {{local_root}}/*/; do
+        u=$(basename "$user_dir")
+        echo "===== $u ====="
+        if ! just sync-artifacts "$u" {{prune}}; then
+            failed+=("$u")
+        fi
+    done
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "FAILED: ${failed[@]}" >&2
+        exit 1
+    fi
+
+# Pull one user's collection artifacts FROM GCS into the local tree.
+# Use this on a fresh machine to seed models/collections/ from the
+# canonical cloud copy. No prune by default — pass `--prune` to also
+# remove local files missing from the cloud.
+#   just pull-artifacts rahdo
+#   just pull-artifacts rahdo --prune
+pull-artifacts user=username prune="":
+    #!/usr/bin/env bash
+    set -e
+    src="{{gcs_artifacts_root}}/{{user}}"
+    dst="{{local_root}}/{{user}}"
+    mkdir -p "$dst"
+    echo "pulling $src -> $dst"
+    if [ -n "{{prune}}" ]; then
+        gsutil -m rsync -r -d "$src" "$dst"
+    else
+        gsutil -m rsync -r "$src" "$dst"
+    fi
+
+# Pull every user under gs://.../collections/ into the local tree.
+# Continue-on-error.
+pull-artifacts-all prune="":
+    #!/usr/bin/env bash
+    failed=()
+    users=$(gsutil ls "{{gcs_artifacts_root}}/" 2>/dev/null \
+        | sed -e 's|/$||' -e "s|^{{gcs_artifacts_root}}/||")
+    if [ -z "$users" ]; then
+        echo "No users found at {{gcs_artifacts_root}}/" >&2
+        exit 1
+    fi
+    for u in $users; do
+        echo "===== $u ====="
+        if ! just pull-artifacts "$u" {{prune}}; then
+            failed+=("$u")
+        fi
+    done
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo "FAILED: ${failed[@]}" >&2
+        exit 1
+    fi
