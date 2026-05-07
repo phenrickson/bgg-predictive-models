@@ -1,7 +1,16 @@
 set dotenv-load
 
-# Defaults — override per-invocation, e.g.
-#   just username=alice train outcome=own candidate=lgbm_default
+# Defaults — every single-user recipe takes `user` as its first
+# positional argument. Pass it like a CLI:
+#
+#   just train rahdo own lgbm_default
+#   just finalize rahdo own lgbm_row_norm
+#   just promote rahdo
+#
+# Bare invocations (`just train`) fall back to the `username` variable
+# below. Override per-invocation only if you really need to:
+#
+#   just username=alice train
 username := "phenrickson"
 environment := "dev"
 local_root := "models/collections"
@@ -13,28 +22,28 @@ default:
 # Fetch a user's collection from BGG and upsert into BigQuery.
 # Run this before `sweep` for a user whose collection has not been
 # loaded yet.
-load:
+load user=username:
     uv run python -m src.collection.load \
-        --username {{username}} --environment {{environment}}
+        --username {{user}} --environment {{environment}}
 
 # Persist canonical train/val/test splits for an outcome.
-split outcome="own":
+split user=username outcome="own":
     uv run python -m src.collection.split \
-        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}}
 
 # Train one candidate (named in config.collections.candidates) against
 # the latest canonical splits.
-train outcome="own" candidate="lgbm_default" splits_version="":
+train user=username outcome="own" candidate="lgbm_default" splits_version="":
     uv run python -m src.collection.train \
-        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
         --local-root {{local_root}} \
         $([ -n "{{splits_version}}" ] && echo "--splits-version {{splits_version}}")
 
 # Train every candidate listed in config.collections.candidates for an outcome.
 # Continue-on-error: runs every candidate, exits non-zero at the end if any failed.
-train-all outcome="own":
+train-all user=username outcome="own":
     #!/usr/bin/env bash
     failed=()
     candidates=$(uv run python -c 'from src.collection.candidates import load_candidates; from src.utils.config import load_config; print("\n".join(load_candidates(load_config().raw_config)))')
@@ -45,7 +54,7 @@ train-all outcome="own":
     for c in $candidates; do
         echo "--- $c ---"
         if ! uv run python -m src.collection.train \
-            --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+            --username {{user}} --environment {{environment}} --outcome {{outcome}} \
             --candidate "$c" --local-root {{local_root}}; then
             failed+=("$c")
         fi
@@ -56,9 +65,9 @@ train-all outcome="own":
     fi
 
 # Print or write a comparison table for an outcome.
-compare outcome="own" out="" candidates="":
+compare user=username outcome="own" out="" candidates="":
     uv run python -m src.collection.compare \
-        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}} \
         $([ -n "{{out}}" ] && echo "--out {{out}}") \
         $([ -n "{{candidates}}" ] && echo "--candidates {{candidates}}")
@@ -66,9 +75,9 @@ compare outcome="own" out="" candidates="":
 # Refit a trained candidate on train+val+test through finalize_through.
 # Defaults to collections.finalize_through from config.yaml; override with
 # finalize_through=2025 if you need a different cutoff.
-finalize outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
+finalize user=username outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
     uv run python -m src.collection.finalize \
-        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
         $([ "{{version}}" != "latest" ] && echo "--version {{version}}") \
         $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}") \
@@ -76,7 +85,7 @@ finalize outcome="own" candidate="lgbm_default" version="latest" finalize_throug
 
 # Finalize every candidate listed in config.collections.candidates for an outcome.
 # Continue-on-error: runs every candidate, exits non-zero at the end if any failed.
-finalize-all outcome="own" finalize_through="":
+finalize-all user=username outcome="own" finalize_through="":
     #!/usr/bin/env bash
     failed=()
     candidates=$(uv run python -c 'from src.collection.candidates import load_candidates; from src.utils.config import load_config; print("\n".join(load_candidates(load_config().raw_config)))')
@@ -87,7 +96,7 @@ finalize-all outcome="own" finalize_through="":
     for c in $candidates; do
         echo "--- $c ---"
         if ! uv run python -m src.collection.finalize \
-            --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+            --username {{user}} --environment {{environment}} --outcome {{outcome}} \
             --candidate "$c" --local-root {{local_root}} \
             $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}"); then
             failed+=("$c")
@@ -101,22 +110,22 @@ finalize-all outcome="own" finalize_through="":
 # Register a finalized collection model to GCS for the standalone scoring
 # service AND insert a row in the BQ registry. Strict-finalized: requires
 # finalized.pkl (run `finalize` first).
-promote outcome="own" candidate="lgbm_default" version="latest" description="":
+promote user=username outcome="own" candidate="lgbm_default" version="latest" description="":
     uv run python -m services.collections.register_model \
-        --username {{username}} --environment {{environment}} --outcome {{outcome}} \
+        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
-        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}/{{outcome}}")"
+        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{user}}/{{outcome}}")"
 
 # Register one candidate across multiple outcomes in one shot.
-#   just promote-many outcomes="own,ever_owned,rated" candidate=lgbm_row_norm
-promote-many outcomes candidate="lgbm_default" version="latest" description="":
+#   just promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
+promote-many user=username outcomes="own" candidate="lgbm_default" version="latest" description="":
     uv run python -m services.collections.register_all \
-        --username {{username}} --environment {{environment}} \
+        --username {{user}} --environment {{environment}} \
         --outcomes "{{outcomes}}" \
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
-        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{username}}")"
+        --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{user}}")"
 
 # Promote the configured candidate (collections.deploy.{outcome}.candidate)
 # for every user in collections.users. Skips users without a finalized
@@ -124,7 +133,7 @@ promote-many outcomes candidate="lgbm_default" version="latest" description="":
 # genuinely failed.
 #
 #   just promote-all
-#   just promote-all outcome=own
+#   just promote-all own
 promote-all outcome="own":
     @users=$(uv run python -c "import yaml; \
         c = yaml.safe_load(open('config.yaml')); \
@@ -142,7 +151,7 @@ promote-all outcome="own":
             continue; \
         fi; \
         echo "=== promote $u {{outcome}} $cand ==="; \
-        if just username=$u promote {{outcome}} $cand; then \
+        if just promote $u {{outcome}} $cand; then \
             deployed=$((deployed + 1)); \
         else \
             echo "FAIL: $u"; \
@@ -154,39 +163,41 @@ promote-all outcome="own":
 
 # List registered collection models for a user from GCS.
 #   just verify
-#   just verify outcome=own
-verify outcome="":
+#   just verify rahdo
+#   just verify rahdo own
+verify user=username outcome="":
     uv run python -m services.collections.verify_models \
-        --username {{username}} \
+        --username {{user}} \
         $([ -n "{{outcome}}" ] && echo "--outcome {{outcome}}")
 
 # End-to-end experiment cycle: split → train all → compare.
 # Always runs `compare` if `split` succeeded, even when some candidates fail.
 # Exits non-zero if any candidate failed, so cron/CI still notices.
-sweep outcome="own":
+sweep user=username outcome="own":
     #!/usr/bin/env bash
     set -e
-    just username={{username}} split {{outcome}}
+    just split {{user}} {{outcome}}
     set +e
-    just username={{username}} train-all {{outcome}}
+    just train-all {{user}} {{outcome}}
     train_status=$?
-    just username={{username}} compare {{outcome}}
+    just compare {{user}} {{outcome}}
     exit $train_status
 
 # Train all candidates and compare against the most recent existing split.
 # Same as `sweep` but skips the split step — use when iterating on candidates
 # against a fixed split.
-train-compare outcome="own":
+train-compare user=username outcome="own":
     #!/usr/bin/env bash
     set +e
-    just username={{username}} train-all {{outcome}}
+    just train-all {{user}} {{outcome}}
     train_status=$?
-    just username={{username}} compare {{outcome}}
+    just compare {{user}} {{outcome}}
     exit $train_status
 
 # Sweep across a list of users. Skips users who already have at least
 # one trained candidate for the outcome. Continue-on-error.
 #   just users-sweep "alice bob carol"
+#   just users-sweep "alice bob" ever_owned
 users-sweep users outcome="own":
     #!/usr/bin/env bash
     shopt -s nullglob
@@ -198,7 +209,7 @@ users-sweep users outcome="own":
             continue
         fi
         echo "===== $u ====="
-        if ! just username=$u sweep {{outcome}}; then
+        if ! just sweep $u {{outcome}}; then
             failed+=("$u")
         fi
     done
