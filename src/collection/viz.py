@@ -180,16 +180,27 @@ def plot_feature_importance(
     interactive: bool = False,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
     value_range: Optional[tuple[float, float]] = None,
+    kind: str = "linear",
 ) -> Union[ggplot, go.Figure]:
-    """One diverging-bar feature-importance plot.
+    """One feature-importance bar plot.
+
+    For ``kind="linear"`` (the default) the bars are signed and rendered
+    with a diverging red/blue palette — appropriate for logistic /
+    ridge / lasso coefficients. For ``kind="tree"`` the bars are
+    one-sided cyan magnitude bars — appropriate for LightGBM /
+    XGBoost / random forest importance, where ``value`` is always
+    non-negative.
 
     Args:
         importance_df: Must have ``feature`` and ``value`` columns.
         group: If set (e.g. ``"Designers"``), filter to features in that
             group and strip the prefix from labels. ``None`` plots across
             all features.
-        top_pos: Top N positive-value features to keep.
-        top_neg: Top N negative-value features to keep.
+        top_pos: Top N positive-value features to keep. For tree models
+            this is the top N by absolute value (which equals the top N
+            by raw value, since values are non-negative).
+        top_neg: Top N negative-value features to keep. Ignored when
+            ``kind="tree"``.
         title: Plot title. Defaults to ``group`` (or ``"Feature Importance"``).
         interactive: If ``True``, return a plotly figure for Dash.
             Otherwise (default) return a plotnine figure for notebooks.
@@ -200,6 +211,7 @@ def plot_feature_importance(
             range. Pass the same range to multiple plots so they're
             visually comparable (same x scale, same color stretch).
             Defaults to the absolute max of the filtered subset.
+        kind: ``"linear"`` (signed/diverging) or ``"tree"`` (magnitude).
     """
     df = _prepare(
         importance_df,
@@ -207,10 +219,13 @@ def plot_feature_importance(
         top_pos=top_pos,
         top_neg=top_neg,
         name_formatter=name_formatter,
+        kind=kind,
     )
     plot_title = title or group or "Feature Importance"
     if interactive:
         return _render_plotly_bars(df, title=plot_title, value_range=value_range)
+    if kind == "tree":
+        return _render_plotnine_bars_tree(df, title=plot_title, value_range=value_range)
     return _render_plotnine_bars(df, title=plot_title, value_range=value_range)
 
 
@@ -271,10 +286,15 @@ def _prepare(
     top_pos: int,
     top_neg: int,
     name_formatter: Optional[Callable[[str], str]] = tidy_feature_name,
+    kind: str = "linear",
 ) -> pd.DataFrame:
-    """Filter to ``group`` (if set), take top-N each side, sort descending,
-    then apply ``name_formatter``. Returns a fresh frame with ``feature``
+    """Filter to ``group`` (if set), take top-N, sort descending, then
+    apply ``name_formatter``. Returns a fresh frame with ``feature``
     and ``value`` columns ready to plot.
+
+    For linear models we keep the top-N positive AND top-N negative bars.
+    For tree models the values are non-negative, so we keep only the
+    top ``top_pos`` by raw value.
 
     When ``group`` is set the surrounding plot already identifies the
     family, so the default formatter is invoked with ``include_tag=False``
@@ -285,13 +305,21 @@ def _prepare(
     if group is not None:
         mask = df["feature"].map(feature_group) == group
         df = df.loc[mask].copy()
-    pos = df[df["value"] > 0].nlargest(top_pos, "value")
-    neg = df[df["value"] < 0].nsmallest(top_neg, "value")
-    out = (
-        pd.concat([pos, neg], ignore_index=True)
-        .sort_values("value", ascending=False)
-        .reset_index(drop=True)
-    )
+    if kind == "tree":
+        out = (
+            df[df["value"] > 0]
+            .nlargest(top_pos, "value")
+            .sort_values("value", ascending=False)
+            .reset_index(drop=True)
+        )
+    else:
+        pos = df[df["value"] > 0].nlargest(top_pos, "value")
+        neg = df[df["value"] < 0].nsmallest(top_neg, "value")
+        out = (
+            pd.concat([pos, neg], ignore_index=True)
+            .sort_values("value", ascending=False)
+            .reset_index(drop=True)
+        )
     if name_formatter is not None:
         if name_formatter is tidy_feature_name and group is not None:
             # Drop the "Family:" tag when the surrounding chart already
@@ -337,6 +365,29 @@ def _render_plotnine_bars(
         + scale_y_continuous(limits=(lo, hi))
         + scale_fill_distiller(type="div", palette="RdBu", limits=(-cmax, cmax))
         + labs(title=title, x="", y="Effect on outcome", fill="Effect")
+        + theme_bgg_dark()
+        + theme(panel_grid_major_y=element_blank())
+    )
+
+
+def _render_plotnine_bars_tree(
+    df: pd.DataFrame,
+    title: str,
+    value_range: Optional[tuple[float, float]] = None,
+) -> ggplot:
+    """One-sided cyan magnitude bars for tree-model importance."""
+    feature_order = list(df["feature"])[::-1]
+    df = df.assign(feature=pd.Categorical(df["feature"], categories=feature_order))
+    if value_range is not None:
+        _, hi = value_range
+    else:
+        hi = float(df["value"].max()) if len(df) else 1.0
+    return (
+        ggplot(df, aes(x="feature", y="value"))
+        + geom_col(fill="#4fc3f7")
+        + coord_flip()
+        + scale_y_continuous(limits=(0, hi))
+        + labs(title=title, x="", y="Importance")
         + theme_bgg_dark()
         + theme(panel_grid_major_y=element_blank())
     )

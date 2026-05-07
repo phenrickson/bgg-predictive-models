@@ -7,6 +7,40 @@ from typing import Any, Callable
 import pandas as pd
 
 
+_TREE_MODEL_TYPES = {
+    "lightgbm",
+    "xgboost",
+    "random_forest",
+    "gradient_boosting",
+    "catboost",
+}
+_LINEAR_MODEL_TYPES = {
+    "logistic",
+    "logistic_regression",
+    "linear",
+    "linear_regression",
+    "ridge",
+    "lasso",
+    "elasticnet",
+}
+
+
+def model_kind(registration: dict) -> str:
+    """Return ``"tree"`` or ``"linear"`` for a model based on its
+    registration.json. Defaults to ``"linear"`` when the type is
+    unknown — that's the older behavior and the safer fallback for
+    plotting (signed coefficients render fine for nonneg values too).
+    """
+    spec = registration.get("candidate_spec") or {}
+    cfg = spec.get("classification_config") or spec.get("regression_config") or {}
+    mtype = (cfg.get("model_type") or "").lower()
+    if mtype in _TREE_MODEL_TYPES:
+        return "tree"
+    if mtype in _LINEAR_MODEL_TYPES:
+        return "linear"
+    return "linear"
+
+
 def bgg_link(game_id: int, name: str, year: int | None) -> str:
     year_part = ""
     if year is not None and not (isinstance(year, float) and pd.isna(year)):

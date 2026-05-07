@@ -69,6 +69,7 @@ from src.reports.tables import (
     format_model_details,
     format_predictions_with_images,
 )
+from src.reports.format import model_kind
 from src.collection.viz import (
     metrics_table,
     plot_collection_by_category_static,
@@ -212,25 +213,62 @@ BGG community signals (average rating, weight, number of users rated)
 so it can score upcoming games before the community has weighed in.
 :::
 
-## What Predicts A Collection?
-
-::: {.column-margin}
-Each bar indicates how much an individual feature pushes the model towards or away from predicting "owned". Positive features (bars to the right) increase the user's probability of owning a game; negative features decrease the user's probability.
-:::
-
-Beyond predictions, the model tells us *what* it learned. For a
-penalized logistic regression the coefficients tell us, for each
-feature, how much it shifts the user's probability (technically, the log-odds) of owning a game.
+## Feature Importance
 
 ```{python}
 #| label: feature-importance-prep
 #| include: false
 fi_pdf = arts.feature_importance.to_pandas()
-# Shared x-axis + color limits so the partial-effects tabs are directly
-# comparable. Use the absolute max across all features so the scale is
-# symmetric around zero.
+MODEL_KIND = model_kind(arts.registration)
+# Shared x-axis range so the partial-effects tabs are directly
+# comparable. Linear models get a symmetric range (signed coefficients);
+# tree models get a one-sided range (non-negative importance).
 _cmax = float(fi_pdf["value"].abs().max()) if len(fi_pdf) else 1.0
-FI_RANGE = (-_cmax, _cmax)
+if MODEL_KIND == "tree":
+    FI_RANGE = (0.0, _cmax)
+else:
+    FI_RANGE = (-_cmax, _cmax)
+```
+
+```{python}
+#| label: feature-importance-margin-note
+#| output: asis
+print("::: {.column-margin}")
+if MODEL_KIND == "tree":
+    print(
+        "Each bar shows how much the model relied on a feature when "
+        "deciding whether the user owns a game. Bigger bars = more "
+        "important. Tree models don't expose a sign — only magnitude."
+    )
+else:
+    print(
+        "Each bar indicates how much an individual feature pushes the "
+        "model towards or away from predicting \"owned\". Positive "
+        "features (bars to the right) increase the user's probability "
+        "of owning a game; negative features decrease the user's "
+        "probability."
+    )
+print(":::")
+```
+
+```{python}
+#| label: feature-importance-prose
+#| output: asis
+if MODEL_KIND == "tree":
+    print(
+        "Beyond predictions, the model tells us *what* it learned. For "
+        "a tree-based model (gradient-boosted trees, random forest) the "
+        "importance score tells us how much each feature contributed to "
+        "the model's split decisions. There's no signed direction — "
+        "just relative magnitude."
+    )
+else:
+    print(
+        "Beyond predictions, the model tells us *what* it learned. For "
+        "a penalized logistic regression the coefficients tell us, for "
+        "each feature, how much it shifts the user's probability "
+        "(technically, the log-odds) of owning a game."
+    )
 ```
 
 ```{python}
@@ -245,18 +283,48 @@ plot_feature_importance(
     interactive=False,
     title="Feature importance",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
 ## Partial Effects
 
-::: {.column-margin}
-What designers, artists, or mechanics does a user tend to add to their collection? Examining the relative effects of individual features can paint a picture of what the user tends to like.
-:::
+```{python}
+#| label: partial-effects-margin-note
+#| output: asis
+print("::: {.column-margin}")
+if MODEL_KIND == "tree":
+    print(
+        "Top features within each family by importance. Helps see "
+        "which mechanics, categories, designers, etc. the model "
+        "leaned on most."
+    )
+else:
+    print(
+        "What designers, artists, or mechanics does a user tend to "
+        "add to their collection? Examining the relative effects of "
+        "individual features can paint a picture of what the user "
+        "tends to like."
+    )
+print(":::")
+```
 
-The same coefficients, broken out by feature family. Use the tabs to
-inspect each group. All tabs share the same x-axis range and color
-scale so groups are directly comparable.
+```{python}
+#| label: partial-effects-prose
+#| output: asis
+if MODEL_KIND == "tree":
+    print(
+        "The same importance scores, broken out by feature family. "
+        "Use the tabs to inspect each group. All tabs share the same "
+        "x-axis range so groups are directly comparable."
+    )
+else:
+    print(
+        "The same coefficients, broken out by feature family. Use the "
+        "tabs to inspect each group. All tabs share the same x-axis "
+        "range and color scale so groups are directly comparable."
+    )
+```
 
 ::: {.panel-tabset .nav-pills}
 
@@ -269,7 +337,9 @@ scale so groups are directly comparable.
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Categories", top_pos=15, top_neg=15,
                         interactive=False, title="Categories",
-                        value_range=FI_RANGE)
+                        value_range=FI_RANGE,
+                        kind=MODEL_KIND,
+)
 ```
 
 ### Mechanics
@@ -287,6 +357,7 @@ plot_feature_importance(
     interactive=False,
     title="Mechanics",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
@@ -299,7 +370,9 @@ plot_feature_importance(
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
                         interactive=False, title="Designers",
-                        value_range=FI_RANGE)
+                        value_range=FI_RANGE,
+                        kind=MODEL_KIND,
+)
 ```
 
 ### Artists
@@ -311,7 +384,9 @@ plot_feature_importance(fi_pdf, group="Designers", top_pos=15, top_neg=15,
 #| out-width: 100%
 plot_feature_importance(fi_pdf, group="Artists", top_pos=15, top_neg=15,
                         interactive=False, title="Artists",
-                        value_range=FI_RANGE)
+                        value_range=FI_RANGE,
+                        kind=MODEL_KIND,
+)
 ```
 
 ### Families
@@ -329,6 +404,7 @@ plot_feature_importance(
     interactive=False,
     title="Families",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
@@ -347,6 +423,7 @@ plot_feature_importance(
     interactive=False,
     title="Publishers",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
@@ -365,6 +442,7 @@ plot_feature_importance(
     interactive=False,
     title="Players",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
@@ -383,6 +461,7 @@ plot_feature_importance(
     interactive=False,
     title="Missingness",
     value_range=FI_RANGE,
+    kind=MODEL_KIND,
 )
 ```
 
@@ -443,13 +522,11 @@ oof_joined = (
     .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
     .sort("proba", descending=True)
 )
-val_joined = (
-    arts.val_predictions
-    .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
-    .sort("proba", descending=True)
-)
-test_joined = (
-    arts.test_predictions
+val_test_joined = (
+    pl.concat(
+        [arts.val_predictions, arts.test_predictions],
+        how="diagonal_relaxed",
+    )
     .join(data.games.select(["game_id", "name", "year_published"]), on="game_id", how="left")
     .sort("proba", descending=True)
 )
@@ -468,12 +545,12 @@ itables_show(
 )
 ```
 
-## Top Games in Validation
+## Top Games in Testing
 
 ```{python}
-#| label: top-games-validation
+#| label: top-games-val-test
 itables_show(
-    format_eval_table(val_joined, top_n=100),
+    format_eval_table(val_test_joined, top_n=100),
     paging=True,
     pageLength=15,
     classes="display compact",
@@ -574,9 +651,13 @@ older = (
     pl.concat(
         [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
         how="diagonal_relaxed",
-    )
-    .join(data.games, on="game_id", how="inner")
-    .filter(pl.col("label") != "yes")
+    ).join(data.games, on="game_id", how="inner")
+    # `label` is a boolean (or 0/1) here — true = user owns it. We want
+    # not-owned games for the recommendations list, so cast and negate.
+    .filter(~pl.col("label").cast(pl.Boolean))
+    # Drop the label column so the table doesn't render an "Owned"
+    # column of all-"no" values.
+    .drop("label")
 )
 if "users_rated" in older.columns:
     older = older.filter(pl.col("users_rated") >= 5)
