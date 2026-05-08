@@ -93,6 +93,37 @@ def build_split(
     return paths
 
 
+def build_yoy_splits(
+    snapshot_version: int,
+    yoy_start: int,
+    yoy_end: int,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+    time_col: str = "year_published",
+) -> list:
+    """Generate the YoY family of splits.
+
+    For each test year y in [yoy_start, yoy_end], creates split ``yoy_{y}``
+    with train through y-2, tune on y-1, test on y. Mirrors the logic in
+    ``src/models/time_based_evaluation.py::generate_time_splits``.
+    """
+    paths = []
+    for test_year in range(yoy_start, yoy_end + 1):
+        result = build_split(
+            snapshot_version=snapshot_version,
+            split_name=f"yoy_{test_year}",
+            train_through=test_year - 2,
+            tune_start=test_year - 1,
+            tune_through=test_year - 1,
+            test_start=test_year,
+            test_through=test_year,
+            base_dir=base_dir,
+            time_col=time_col,
+        )
+        paths.append(result)
+    logger.info(f"Built {len(paths)} YoY splits ({yoy_start}..{yoy_end})")
+    return paths
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--snapshot-version", type=int, required=True)
@@ -103,7 +134,26 @@ def main() -> int:
     parser.add_argument("--test-start", type=int, default=None)
     parser.add_argument("--test-through", type=int, default=None)
     parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
+    parser.add_argument("--yoy", action="store_true", default=False,
+                        help="Build a family of YoY splits instead of one named split")
+    parser.add_argument("--yoy-start", type=int, default=None)
+    parser.add_argument("--yoy-end", type=int, default=None)
     args = parser.parse_args()
+
+    if args.yoy:
+        setup_logging()
+        if args.yoy_start is None or args.yoy_end is None:
+            config = load_config()
+            args.yoy_start = args.yoy_start or config.years.eval.start
+            args.yoy_end = args.yoy_end or config.years.eval.end
+        build_yoy_splits(
+            snapshot_version=args.snapshot_version,
+            yoy_start=args.yoy_start,
+            yoy_end=args.yoy_end,
+            base_dir=args.base_dir,
+        )
+        print(f"yoy splits: v{args.snapshot_version}/yoy_{args.yoy_start}..yoy_{args.yoy_end}")
+        return 0
 
     setup_logging()
 
