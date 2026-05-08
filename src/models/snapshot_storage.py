@@ -184,3 +184,58 @@ class SnapshotStorage:
     def next_candidate_version(self, model_type: str, candidate: str) -> int:
         existing = self.list_candidate_versions(model_type, candidate)
         return (existing[-1] if existing else 0) + 1
+
+    # --- Candidate-level artifacts ---
+
+    def _ensure(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def save_candidate_config(
+        self, model_type: str, candidate: str, version: int, config: Dict[str, Any]
+    ) -> Path:
+        path = self._ensure(self.experiment_dir(model_type, candidate, version) / "config.json")
+        path.write_text(json.dumps(config, indent=2, default=str))
+        return path
+
+    def load_candidate_config(
+        self, model_type: str, candidate: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        path = self.experiment_dir(model_type, candidate, version) / "config.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def save_candidate_registration(
+        self, model_type: str, candidate: str, version: int, registration: Dict[str, Any]
+    ) -> Path:
+        path = self._ensure(
+            self.experiment_dir(model_type, candidate, version) / "registration.json"
+        )
+        path.write_text(json.dumps(registration, indent=2, default=str))
+        return path
+
+    def load_candidate_registration(
+        self, model_type: str, candidate: str, version: int
+    ) -> Optional[Dict[str, Any]]:
+        path = self.experiment_dir(model_type, candidate, version) / "registration.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def save_finalized_pipeline(
+        self, model_type: str, candidate: str, version: int, pipeline: Any
+    ) -> Path:
+        path = self._ensure(
+            self.experiment_dir(model_type, candidate, version) / "finalized.pkl"
+        )
+        path.write_bytes(pickle.dumps(pipeline))
+        return path
+
+    def load_finalized_pipeline(
+        self, model_type: str, candidate: str, version: int
+    ) -> Optional[Any]:
+        path = self.experiment_dir(model_type, candidate, version) / "finalized.pkl"
+        if not path.exists():
+            return None
+        return pickle.loads(path.read_bytes())

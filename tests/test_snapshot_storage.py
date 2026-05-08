@@ -121,3 +121,28 @@ def test_next_candidate_version(tmp_path: Path) -> None:
     storage.experiment_dir("hurdle", "logistic-hurdle", 1).mkdir(parents=True)
     storage.experiment_dir("hurdle", "logistic-hurdle", 2).mkdir(parents=True)
     assert storage.next_candidate_version("hurdle", "logistic-hurdle") == 3
+
+
+def test_save_and_load_candidate_config_and_registration(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    config = {"name": "logistic-hurdle", "algorithm": "logistic", "use_embeddings": True}
+    registration = {"snapshot_version": 1, "candidate": "logistic-hurdle",
+                    "version": 1, "upstream_experiments": {}}
+
+    storage.save_candidate_config("hurdle", "logistic-hurdle", 1, config)
+    storage.save_candidate_registration("hurdle", "logistic-hurdle", 1, registration)
+
+    loaded_cfg = storage.load_candidate_config("hurdle", "logistic-hurdle", 1)
+    loaded_reg = storage.load_candidate_registration("hurdle", "logistic-hurdle", 1)
+    assert loaded_cfg == config
+    assert loaded_reg == registration
+
+
+def test_save_and_load_candidate_finalized(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    obj = {"my": "pipeline"}  # any picklable object
+    storage.save_finalized_pipeline("hurdle", "logistic-hurdle", 1, obj)
+    loaded = storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1)
+    assert loaded == obj
