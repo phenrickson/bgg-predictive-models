@@ -2777,6 +2777,145 @@ git add src/pipeline/train.py tests/test_pipeline_train_snapshot.py
 git commit -m "feat: write summary.json rolling up cross-split metrics"
 ```
 
+### Task 17.5: Justfile recipes for the snapshot pipeline
+
+**Files:**
+- Modify: `justfile`
+
+The existing justfile drives the collection-models workflow (`just split`, `just train`, etc.) — those names are reserved. This task adds new recipes for the snapshot pipeline, all prefixed `snap-` to avoid collision. The headline recipe is `snap-cascade`, which runs build_snapshot → build_split → train+score for all five models in dependency order from a single command.
+
+Recipes to add:
+
+- `snap-build` — `uv run python -m src.models.build_snapshot --use-embeddings`
+- `snap-split snapshot=1 split=standard` — single split
+- `snap-yoy snapshot=1 start=2018 end=2024` — YoY family
+- `snap-train snapshot=1 model candidate splits=standard upstream=""` — single candidate
+- `snap-score snapshot=1 model candidate splits=standard upstream=""` — single candidate
+- `snap-cascade snapshot=1 splits=standard` — full chain (hurdle → complexity → score → rating + users_rated → score → geek_rating)
+
+The cascade resolves candidate names from `config.yaml`'s `models.{type}.candidates[0].name` so the recipe doesn't hardcode them.
+
+- [ ] **Step 1: Append the recipes to `justfile`**
+
+Open `justfile` and append:
+
+```just
+# --- Snapshot pipeline (bgg-rating-models redesign) ---
+#
+# These recipes drive the snapshot+split training framework. Distinct
+# from the collection-models recipes above; prefixed `snap-` to avoid
+# name collisions.
+
+# Build a versioned data snapshot from BigQuery.
+snap-build:
+    uv run python -m src.models.build_snapshot --use-embeddings
+
+# Build a single named split from a snapshot.
+snap-split snapshot="1" split="standard":
+    uv run python -m src.models.build_split \
+        --snapshot-version {{snapshot}} --split-name {{split}}
+
+# Build the YoY family of splits.
+snap-yoy snapshot="1" start="2018" end="2024":
+    uv run python -m src.models.build_split \
+        --snapshot-version {{snapshot}} --yoy --yoy-start {{start}} --yoy-end {{end}}
+
+# Train one candidate.
+snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.train \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# Score one candidate (writes score.parquet under each split).
+snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.score \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# Run the full cascade for one snapshot+split. Each model trains and (where
+# downstream models depend on it) scores before the next layer trains.
+#
+#   just snap-cascade
+#   just snap-cascade snapshot=2 splits=standard,yoy_2024
+snap-cascade snapshot="1" splits="standard":
+    #!/usr/bin/env bash
+    set -e
+
+    cand_for() {
+        uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$1')[0])"
+    }
+
+    HURDLE=$(cand_for hurdle)
+    COMPLEXITY=$(cand_for complexity)
+    RATING=$(cand_for rating)
+    USERS_RATED=$(cand_for users_rated)
+    GEEK_RATING=$(cand_for geek_rating)
+
+    echo "===== hurdle ====="
+    uv run python -m src.pipeline.train --model hurdle --candidate "$HURDLE" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+
+    echo "===== complexity (train + score) ====="
+    uv run python -m src.pipeline.train --model complexity --candidate "$COMPLEXITY" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+    uv run python -m src.pipeline.score --model complexity --candidate "$COMPLEXITY" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+
+    echo "===== rating + users_rated (train, then score) ====="
+    uv run python -m src.pipeline.train --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.train --model users_rated --candidate "$USERS_RATED" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.score --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.score --model users_rated --candidate "$USERS_RATED" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+
+    echo "===== geek_rating ====="
+    uv run python -m src.pipeline.train --model geek_rating --candidate "$GEEK_RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY,rating=$RATING,users_rated=$USERS_RATED
+
+    echo "===== done ====="
+```
+
+- [ ] **Step 2: Verify just lists the new recipes**
+
+Run: `just --list | grep snap-`
+
+Expected: at least 6 lines (`snap-build`, `snap-split`, `snap-yoy`, `snap-train`, `snap-score`, `snap-cascade`).
+
+- [ ] **Step 3: Test `cand_for` lookup works**
+
+Run: `uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("hurdle"))'`
+
+Expected: prints `['logistic-hurdle']` (or whatever the first candidate in `config.yaml` is).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add justfile
+git commit -m "feat: justfile recipes for snapshot pipeline (snap-cascade etc)"
+```
+
 ### Task 18: Manual end-to-end chain
 
 **Files:**
@@ -2787,7 +2926,7 @@ This step is not a code change — it confirms the new flow works end-to-end aga
 - [ ] **Step 1: Build a real snapshot from BigQuery**
 
 ```bash
-uv run python -m src.models.build_snapshot --use-embeddings
+just snap-build
 ```
 
 Expected: prints `snapshot_version: 1` (or higher if you've previously experimented). Creates `models/experiments/_snapshots/v{N}/universe.parquet`.
@@ -2795,38 +2934,17 @@ Expected: prints `snapshot_version: 1` (or higher if you've previously experimen
 - [ ] **Step 2: Build splits**
 
 ```bash
-uv run python -m src.models.build_split --snapshot-version 1 --split-name standard
-uv run python -m src.models.build_split --snapshot-version 1 --yoy --yoy-start 2018 --yoy-end 2024
+just snap-split snapshot=1 split=standard
+just snap-yoy snapshot=1 start=2018 end=2024
 ```
 
-- [ ] **Step 3: Train the chain on the standard split first**
+- [ ] **Step 3: Run the cascade on the standard split**
 
 ```bash
-uv run python -m src.pipeline.train --model hurdle --candidate logistic-hurdle \
-  --snapshot-version 1 --splits standard
-
-uv run python -m src.pipeline.train --model complexity --candidate ard-complexity \
-  --snapshot-version 1 --splits standard
-
-uv run python -m src.pipeline.score --model complexity --candidate ard-complexity \
-  --snapshot-version 1 --splits standard
-
-uv run python -m src.pipeline.train --model rating --candidate ard-ridge-rating \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
-
-uv run python -m src.pipeline.train --model users_rated --candidate ard-ridge-users_rated \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
-
-uv run python -m src.pipeline.score --model rating --candidate ard-ridge-rating \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
-
-uv run python -m src.pipeline.score --model users_rated --candidate ard-ridge-users_rated \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
-
-uv run python -m src.pipeline.train --model geek_rating --candidate ard-geek_rating \
-  --snapshot-version 1 --splits standard \
-  --upstream complexity=ard-complexity,rating=ard-ridge-rating,users_rated=ard-ridge-users_rated
+just snap-cascade snapshot=1 splits=standard
 ```
+
+This runs all five models in dependency order: hurdle, complexity (train + score), rating + users_rated (train, then score), geek_rating. Single command; ~9 underlying CLI invocations resolved by the recipe.
 
 - [ ] **Step 4: Sanity-check metrics**
 
@@ -2839,12 +2957,10 @@ done
 
 Expected: each model's test metrics should be in the same ballpark as the legacy `models/experiments/{model_type}/...` results. Big regressions = a real bug; investigate before continuing.
 
-- [ ] **Step 5: Repeat across YoY splits (optional but recommended)**
+- [ ] **Step 5: Run the cascade across YoY splits (optional but recommended)**
 
 ```bash
-uv run python -m src.pipeline.train --model hurdle --candidate logistic-hurdle \
-  --snapshot-version 1 --splits yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
-# ... and similarly for the rest of the chain
+just snap-cascade snapshot=1 splits=yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
 ```
 
 `summary.json` should now contain per-split metrics for the headline + all YoY splits.
