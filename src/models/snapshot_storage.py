@@ -52,3 +52,25 @@ class SnapshotStorage:
         self.base_dir = Path(base_dir)
         self.snapshot_dir: Path = self.base_dir / f"v{self.snapshot_version}"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def latest_version(cls, base_dir: Union[str, Path] = DEFAULT_BASE_DIR) -> Optional[int]:
+        """Highest existing snapshot version number, or None if none exist."""
+        base = Path(base_dir)
+        if not base.exists():
+            return None
+        versions: List[int] = []
+        for child in base.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                versions.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        return max(versions) if versions else None
+
+    @classmethod
+    def next_version(cls, base_dir: Union[str, Path] = DEFAULT_BASE_DIR) -> int:
+        """Next available snapshot version number (latest + 1, or 1 if none)."""
+        latest = cls.latest_version(base_dir=base_dir)
+        return (latest or 0) + 1
