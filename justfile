@@ -334,3 +334,99 @@ pull-artifacts-all prune="":
         echo "FAILED: ${failed[@]}" >&2
         exit 1
     fi
+
+# --- Snapshot pipeline (bgg-rating-models redesign) ---
+#
+# These recipes drive the snapshot+split training framework. Distinct
+# from the collection-models recipes above; prefixed `snap-` to avoid
+# name collisions.
+
+# Build a versioned data snapshot from BigQuery.
+snap-build:
+    uv run python -m src.models.build_snapshot --use-embeddings
+
+# Build a single named split from a snapshot.
+snap-split snapshot="1" split="standard":
+    uv run python -m src.models.build_split \
+        --snapshot-version {{snapshot}} --split-name {{split}}
+
+# Build the YoY family of splits.
+snap-yoy snapshot="1" start="2018" end="2024":
+    uv run python -m src.models.build_split \
+        --snapshot-version {{snapshot}} --yoy --yoy-start {{start}} --yoy-end {{end}}
+
+# Train one candidate.
+snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.train \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# Score one candidate (writes score.parquet under each split).
+snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.score \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# Run the full cascade for one snapshot+split. Each model trains and (where
+# downstream models depend on it) scores before the next layer trains.
+#
+#   just snap-cascade
+#   just snap-cascade snapshot=2 splits=standard,yoy_2024
+snap-cascade snapshot="1" splits="standard":
+    #!/usr/bin/env bash
+    set -e
+
+    cand_for() {
+        uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$1')[0])"
+    }
+
+    HURDLE=$(cand_for hurdle)
+    COMPLEXITY=$(cand_for complexity)
+    RATING=$(cand_for rating)
+    USERS_RATED=$(cand_for users_rated)
+    GEEK_RATING=$(cand_for geek_rating)
+
+    echo "===== hurdle ====="
+    uv run python -m src.pipeline.train --model hurdle --candidate "$HURDLE" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+
+    echo "===== complexity (train + score) ====="
+    uv run python -m src.pipeline.train --model complexity --candidate "$COMPLEXITY" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+    uv run python -m src.pipeline.score --model complexity --candidate "$COMPLEXITY" \
+        --snapshot-version {{snapshot}} --splits {{splits}}
+
+    echo "===== rating + users_rated (train, then score) ====="
+    uv run python -m src.pipeline.train --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.train --model users_rated --candidate "$USERS_RATED" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.score --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+    uv run python -m src.pipeline.score --model users_rated --candidate "$USERS_RATED" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY
+
+    echo "===== geek_rating ====="
+    uv run python -m src.pipeline.train --model geek_rating --candidate "$GEEK_RATING" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --upstream complexity=$COMPLEXITY,rating=$RATING,users_rated=$USERS_RATED
+
+    echo "===== done ====="
