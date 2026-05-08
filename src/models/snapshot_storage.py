@@ -239,3 +239,61 @@ class SnapshotStorage:
         if not path.exists():
             return None
         return pickle.loads(path.read_bytes())
+
+    # --- Per-result artifacts ---
+
+    def save_result(
+        self,
+        model_type: str,
+        candidate: str,
+        version: int,
+        split_name: str,
+        pipeline: Any,
+        metrics: Dict[str, Any],
+        parameters: Dict[str, Any],
+        tune_predictions: Optional[pl.DataFrame] = None,
+        test_predictions: Optional[pl.DataFrame] = None,
+        score_predictions: Optional[pl.DataFrame] = None,
+        feature_importance: Optional[pl.DataFrame] = None,
+    ) -> Path:
+        rdir = self.result_dir(model_type, candidate, version, split_name)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "pipeline.pkl").write_bytes(pickle.dumps(pipeline))
+        (rdir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
+        (rdir / "parameters.json").write_text(json.dumps(parameters, indent=2, default=str))
+
+        preds_dir = rdir / "predictions"
+        preds_dir.mkdir(parents=True, exist_ok=True)
+        if tune_predictions is not None:
+            tune_predictions.write_parquet(preds_dir / "tune.parquet")
+        if test_predictions is not None:
+            test_predictions.write_parquet(preds_dir / "test.parquet")
+        if score_predictions is not None:
+            score_predictions.write_parquet(preds_dir / "score.parquet")
+        if feature_importance is not None:
+            feature_importance.write_csv(rdir / "feature_importance.csv")
+        return rdir
+
+    def load_result(
+        self, model_type: str, candidate: str, version: int, split_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        rdir = self.result_dir(model_type, candidate, version, split_name)
+        if not rdir.exists():
+            return None
+        out: Dict[str, Any] = {}
+        out["pipeline"] = pickle.loads((rdir / "pipeline.pkl").read_bytes())
+        out["metrics"] = json.loads((rdir / "metrics.json").read_text())
+        out["parameters"] = json.loads((rdir / "parameters.json").read_text())
+        for fold in ["tune", "test", "score"]:
+            p = rdir / "predictions" / f"{fold}.parquet"
+            if p.exists():
+                out[f"{fold}_predictions"] = pl.read_parquet(p)
+        return out
+
+    def load_score_predictions(
+        self, model_type: str, candidate: str, version: int, split_name: str,
+    ) -> Optional[pl.DataFrame]:
+        p = self.result_dir(model_type, candidate, version, split_name) / "predictions" / "score.parquet"
+        if not p.exists():
+            return None
+        return pl.read_parquet(p)

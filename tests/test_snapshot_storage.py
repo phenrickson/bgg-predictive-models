@@ -146,3 +146,47 @@ def test_save_and_load_candidate_finalized(tmp_path: Path) -> None:
     storage.save_finalized_pipeline("hurdle", "logistic-hurdle", 1, obj)
     loaded = storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1)
     assert loaded == obj
+
+
+def test_save_and_load_result_artifacts(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    pipeline_obj = {"pipeline": "obj"}
+    metrics = {"train": {"rmse": 0.5}, "tune": {"rmse": 0.6}, "test": {"rmse": 0.7}}
+    params = {"alpha": 1.0}
+    tune_preds = pl.DataFrame({"game_id": [1, 2], "prediction": [0.5, 0.6], "actual": [0.4, 0.7]})
+    test_preds = pl.DataFrame({"game_id": [3], "prediction": [0.8], "actual": [0.7]})
+    score_preds = pl.DataFrame({"game_id": [1, 2, 3, 4], "predicted_complexity": [2.0, 2.5, 3.0, 3.5]})
+
+    storage.save_result(
+        model_type="complexity",
+        candidate="ard-complexity",
+        version=1,
+        split_name="standard",
+        pipeline=pipeline_obj,
+        metrics=metrics,
+        parameters=params,
+        tune_predictions=tune_preds,
+        test_predictions=test_preds,
+        score_predictions=score_preds,
+    )
+
+    loaded = storage.load_result("complexity", "ard-complexity", 1, "standard")
+    assert loaded["pipeline"] == pipeline_obj
+    assert loaded["metrics"] == metrics
+    assert loaded["parameters"] == params
+    assert loaded["tune_predictions"].equals(tune_preds)
+    assert loaded["test_predictions"].equals(test_preds)
+    assert loaded["score_predictions"].equals(score_preds)
+
+
+def test_load_score_predictions_helper(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+    score = pl.DataFrame({"game_id": [1, 2], "predicted_complexity": [2.0, 2.5]})
+    storage.save_result(
+        model_type="complexity", candidate="ard-complexity", version=1,
+        split_name="standard", pipeline={}, metrics={}, parameters={},
+        score_predictions=score,
+    )
+    loaded = storage.load_score_predictions("complexity", "ard-complexity", 1, "standard")
+    assert loaded.equals(score)
