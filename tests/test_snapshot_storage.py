@@ -65,3 +65,35 @@ def test_save_and_load_metadata_roundtrip(tmp_path: Path) -> None:
 def test_load_universe_when_missing(tmp_path: Path) -> None:
     storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
     assert storage.load_universe() is None
+
+
+def test_save_and_load_split_roundtrip(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+    train = pl.DataFrame({"game_id": [1, 2], "year_published": [2018, 2019]})
+    tune = pl.DataFrame({"game_id": [3], "year_published": [2020]})
+    test = pl.DataFrame({"game_id": [4], "year_published": [2021]})
+    meta = {"train_through": 2019, "tune_start": 2020, "tune_through": 2020,
+            "test_start": 2021, "test_through": 2021, "time_col": "year_published"}
+
+    storage.save_split("standard", train, tune, test, meta)
+    loaded = storage.load_split("standard")
+    assert loaded is not None
+    assert loaded["train"].equals(train)
+    assert loaded["tune"].equals(tune)
+    assert loaded["test"].equals(test)
+    assert loaded["metadata"] == meta
+
+
+def test_load_split_when_missing(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+    assert storage.load_split("standard") is None
+
+
+def test_list_splits(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+    df = pl.DataFrame({"game_id": [1], "year_published": [2018]})
+    meta = {"x": 1}
+    storage.save_split("standard", df, df, df, meta)
+    storage.save_split("yoy_2018", df, df, df, meta)
+    storage.save_split("yoy_2019", df, df, df, meta)
+    assert sorted(storage.list_splits()) == ["standard", "yoy_2018", "yoy_2019"]

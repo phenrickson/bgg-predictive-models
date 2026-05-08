@@ -104,3 +104,53 @@ class SnapshotStorage:
         if not path.exists():
             return None
         return json.loads(path.read_text())
+
+    # --- Splits ---
+
+    def _split_dir(self, split_name: str) -> Path:
+        return self.snapshot_dir / "splits" / split_name
+
+    def save_split(
+        self,
+        split_name: str,
+        train_df: pl.DataFrame,
+        tune_df: pl.DataFrame,
+        test_df: pl.DataFrame,
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Write the three folds plus split metadata."""
+        split_dir = self._split_dir(split_name)
+        split_dir.mkdir(parents=True, exist_ok=True)
+
+        paths: Dict[str, Any] = {"split_name": split_name}
+        for name, df in [("train", train_df), ("tune", tune_df), ("test", test_df)]:
+            target = split_dir / f"{name}.parquet"
+            df.write_parquet(target)
+            paths[name] = str(target)
+            logger.info(f"Saved split {split_name}/{name} ({df.height} rows)")
+
+        meta_path = split_dir / "metadata.json"
+        meta_path.write_text(json.dumps(metadata, indent=2, default=str))
+        paths["metadata"] = str(meta_path)
+        return paths
+
+    def load_split(self, split_name: str) -> Optional[Dict[str, Any]]:
+        split_dir = self._split_dir(split_name)
+        if not split_dir.exists():
+            return None
+        result: Dict[str, Any] = {"split_name": split_name}
+        for name in ["train", "tune", "test"]:
+            path = split_dir / f"{name}.parquet"
+            if not path.exists():
+                logger.warning(f"Split {split_name} is missing fold {name!r}")
+                return None
+            result[name] = pl.read_parquet(path)
+        meta_path = split_dir / "metadata.json"
+        result["metadata"] = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        return result
+
+    def list_splits(self) -> List[str]:
+        splits_root = self.snapshot_dir / "splits"
+        if not splits_root.exists():
+            return []
+        return sorted(p.name for p in splits_root.iterdir() if p.is_dir())
