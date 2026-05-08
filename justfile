@@ -21,6 +21,14 @@ local_root := "models/collections"
 default:
     @just --list
 
+# Show only BGG game-model recipes (snapshot pipeline).
+bgg:
+    @just --list | grep -E '^    bgg' || true
+
+# Show only collection-model recipes.
+collection:
+    @just --list | grep -E '^    collection' || true
+
 # Fetch a user's collection from BGG and upsert into BigQuery.
 # Run this before `collection-sweep` for a user whose collection has not been
 # loaded yet.
