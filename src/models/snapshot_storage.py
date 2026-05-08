@@ -154,3 +154,33 @@ class SnapshotStorage:
         if not splits_root.exists():
             return []
         return sorted(p.name for p in splits_root.iterdir() if p.is_dir())
+
+    # --- Experiment paths ---
+
+    def experiment_dir(self, model_type: str, candidate: str, version: int) -> Path:
+        return (
+            self.snapshot_dir / "experiments" / model_type / candidate / f"v{version}"
+        )
+
+    def result_dir(
+        self, model_type: str, candidate: str, version: int, split_name: str,
+    ) -> Path:
+        return self.experiment_dir(model_type, candidate, version) / "results" / split_name
+
+    def list_candidate_versions(self, model_type: str, candidate: str) -> List[int]:
+        cand_dir = self.snapshot_dir / "experiments" / model_type / candidate
+        if not cand_dir.exists():
+            return []
+        out: List[int] = []
+        for child in cand_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                out.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        return sorted(out)
+
+    def next_candidate_version(self, model_type: str, candidate: str) -> int:
+        existing = self.list_candidate_versions(model_type, candidate)
+        return (existing[-1] if existing else 0) + 1

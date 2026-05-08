@@ -97,3 +97,27 @@ def test_list_splits(tmp_path: Path) -> None:
     storage.save_split("yoy_2018", df, df, df, meta)
     storage.save_split("yoy_2019", df, df, df, meta)
     assert sorted(storage.list_splits()) == ["standard", "yoy_2018", "yoy_2019"]
+
+
+def test_experiment_paths(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    exp_dir = storage.experiment_dir("hurdle", "logistic-hurdle", 1)
+    assert str(exp_dir).endswith(
+        "v1/experiments/hurdle/logistic-hurdle/v1"
+    )
+
+    result_dir = storage.result_dir("hurdle", "logistic-hurdle", 1, "standard")
+    assert str(result_dir).endswith(
+        "v1/experiments/hurdle/logistic-hurdle/v1/results/standard"
+    )
+
+
+def test_next_candidate_version(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    assert storage.next_candidate_version("hurdle", "logistic-hurdle") == 1
+    # Manually create v1 and v2 dirs
+    storage.experiment_dir("hurdle", "logistic-hurdle", 1).mkdir(parents=True)
+    storage.experiment_dir("hurdle", "logistic-hurdle", 2).mkdir(parents=True)
+    assert storage.next_candidate_version("hurdle", "logistic-hurdle") == 3
