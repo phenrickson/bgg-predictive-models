@@ -74,3 +74,33 @@ class SnapshotStorage:
         """Next available snapshot version number (latest + 1, or 1 if none)."""
         latest = cls.latest_version(base_dir=base_dir)
         return (latest or 0) + 1
+
+    # --- Universe ---
+
+    def save_universe(self, df: pl.DataFrame) -> Path:
+        """Write the snapshot's full feature+outcome frame."""
+        path = self.snapshot_dir / "universe.parquet"
+        df.write_parquet(path)
+        logger.info(f"Saved universe ({df.height} rows) to {path}")
+        return path
+
+    def load_universe(self) -> Optional[pl.DataFrame]:
+        """Load the snapshot's universe, or None if not yet built."""
+        path = self.snapshot_dir / "universe.parquet"
+        if not path.exists():
+            return None
+        return pl.read_parquet(path)
+
+    # --- Metadata ---
+
+    def save_metadata(self, metadata: Dict[str, Any]) -> Path:
+        """Write the snapshot's metadata.json."""
+        path = self.snapshot_dir / "metadata.json"
+        path.write_text(json.dumps(metadata, indent=2, default=str))
+        return path
+
+    def load_metadata(self) -> Optional[Dict[str, Any]]:
+        path = self.snapshot_dir / "metadata.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
