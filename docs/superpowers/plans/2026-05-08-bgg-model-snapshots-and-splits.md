@@ -2782,16 +2782,16 @@ git commit -m "feat: write summary.json rolling up cross-split metrics"
 **Files:**
 - Modify: `justfile`
 
-The existing justfile drives the collection-models workflow (`just split`, `just train`, etc.) — those names are reserved. This task adds new recipes for the snapshot pipeline, all prefixed `snap-` to avoid collision. The headline recipe is `snap-cascade`, which runs build_snapshot → build_split → train+score for all five models in dependency order from a single command.
+The existing justfile drives the collection-models workflow (`just collection-split`, `just collection-train`, etc.) — prefixed `collection-`. This task adds new recipes for the snapshot pipeline, all prefixed `bgg-`. The headline recipe is `bgg-train-all`, which runs build_snapshot → build_split → train+score for all five models in dependency order from a single command.
 
 Recipes to add:
 
-- `snap-build` — `uv run python -m src.models.build_snapshot --use-embeddings`
-- `snap-split snapshot=1 split=standard` — single split
-- `snap-yoy snapshot=1 start=2018 end=2024` — YoY family
-- `snap-train snapshot=1 model candidate splits=standard upstream=""` — single candidate
-- `snap-score snapshot=1 model candidate splits=standard upstream=""` — single candidate
-- `snap-cascade snapshot=1 splits=standard` — full chain (hurdle → complexity → score → rating + users_rated → score → geek_rating)
+- `bgg-build` — `uv run python -m src.models.build_snapshot --use-embeddings`
+- `bgg-split snapshot=1 split=standard` — single split
+- `bgg-yoy snapshot=1 start=2018 end=2024` — YoY family
+- `bgg-train snapshot=1 model candidate splits=standard upstream=""` — single candidate
+- `bgg-score snapshot=1 model candidate splits=standard upstream=""` — single candidate
+- `bgg-train-all snapshot=1 splits=standard` — full chain (hurdle → complexity → score → rating + users_rated → score → geek_rating)
 
 The cascade resolves candidate names from `config.yaml`'s `models.{type}.candidates[0].name` so the recipe doesn't hardcode them.
 
@@ -2800,28 +2800,28 @@ The cascade resolves candidate names from `config.yaml`'s `models.{type}.candida
 Open `justfile` and append:
 
 ```just
-# --- Snapshot pipeline (bgg-rating-models redesign) ---
+# --- BGG game models (snapshot pipeline) ---
 #
-# These recipes drive the snapshot+split training framework. Distinct
-# from the collection-models recipes above; prefixed `snap-` to avoid
-# name collisions.
+# These recipes drive the snapshot+split training framework for the
+# universe-wide game models (hurdle, complexity, rating, users_rated,
+# geek_rating). Collection-models recipes are prefixed `collection-`.
 
 # Build a versioned data snapshot from BigQuery.
-snap-build:
+bgg-build:
     uv run python -m src.models.build_snapshot --use-embeddings
 
 # Build a single named split from a snapshot.
-snap-split snapshot="1" split="standard":
+bgg-split snapshot="1" split="standard":
     uv run python -m src.models.build_split \
         --snapshot-version {{snapshot}} --split-name {{split}}
 
 # Build the YoY family of splits.
-snap-yoy snapshot="1" start="2018" end="2024":
+bgg-yoy snapshot="1" start="2018" end="2024":
     uv run python -m src.models.build_split \
         --snapshot-version {{snapshot}} --yoy --yoy-start {{start}} --yoy-end {{end}}
 
 # Train one candidate.
-snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
+bgg-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
     #!/usr/bin/env bash
     set -e
     cand="{{candidate}}"
@@ -2834,7 +2834,7 @@ snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="
         $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
 
 # Score one candidate (writes score.parquet under each split).
-snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
+bgg-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
     #!/usr/bin/env bash
     set -e
     cand="{{candidate}}"
@@ -2846,12 +2846,12 @@ snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstre
         --snapshot-version {{snapshot}} --splits {{splits}} \
         $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
 
-# Run the full cascade for one snapshot+split. Each model trains and (where
-# downstream models depend on it) scores before the next layer trains.
+# Run the full training cascade for one snapshot+split. Each model trains and
+# (where downstream models depend on it) scores before the next layer trains.
 #
-#   just snap-cascade
-#   just snap-cascade snapshot=2 splits=standard,yoy_2024
-snap-cascade snapshot="1" splits="standard":
+#   just bgg-train-all
+#   just bgg-train-all snapshot=2 splits=standard,yoy_2024
+bgg-train-all snapshot="1" splits="standard":
     #!/usr/bin/env bash
     set -e
 
@@ -2899,9 +2899,9 @@ snap-cascade snapshot="1" splits="standard":
 
 - [ ] **Step 2: Verify just lists the new recipes**
 
-Run: `just --list | grep snap-`
+Run: `just --list | grep bgg-`
 
-Expected: at least 6 lines (`snap-build`, `snap-split`, `snap-yoy`, `snap-train`, `snap-score`, `snap-cascade`).
+Expected: at least 6 lines (`bgg-build`, `bgg-split`, `bgg-yoy`, `bgg-train`, `bgg-score`, `bgg-train-all`).
 
 - [ ] **Step 3: Test `cand_for` lookup works**
 
@@ -2913,7 +2913,7 @@ Expected: prints `['logistic-hurdle']` (or whatever the first candidate in `conf
 
 ```bash
 git add justfile
-git commit -m "feat: justfile recipes for snapshot pipeline (snap-cascade etc)"
+git commit -m "feat: justfile recipes for snapshot pipeline (bgg-train-all etc)"
 ```
 
 ### Task 18: Manual end-to-end chain
@@ -2926,7 +2926,7 @@ This step is not a code change — it confirms the new flow works end-to-end aga
 - [ ] **Step 1: Build a real snapshot from BigQuery**
 
 ```bash
-just snap-build
+just bgg-build
 ```
 
 Expected: prints `snapshot_version: 1` (or higher if you've previously experimented). Creates `models/experiments/_snapshots/v{N}/universe.parquet`.
@@ -2934,14 +2934,14 @@ Expected: prints `snapshot_version: 1` (or higher if you've previously experimen
 - [ ] **Step 2: Build splits**
 
 ```bash
-just snap-split snapshot=1 split=standard
-just snap-yoy snapshot=1 start=2018 end=2024
+just bgg-split snapshot=1 split=standard
+just bgg-yoy snapshot=1 start=2018 end=2024
 ```
 
 - [ ] **Step 3: Run the cascade on the standard split**
 
 ```bash
-just snap-cascade snapshot=1 splits=standard
+just bgg-train-all snapshot=1 splits=standard
 ```
 
 This runs all five models in dependency order: hurdle, complexity (train + score), rating + users_rated (train, then score), geek_rating. Single command; ~9 underlying CLI invocations resolved by the recipe.
@@ -2960,7 +2960,7 @@ Expected: each model's test metrics should be in the same ballpark as the legacy
 - [ ] **Step 5: Run the cascade across YoY splits (optional but recommended)**
 
 ```bash
-just snap-cascade snapshot=1 splits=yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
+just bgg-train-all snapshot=1 splits=yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
 ```
 
 `summary.json` should now contain per-split metrics for the headline + all YoY splits.
