@@ -4,7 +4,12 @@
 
 **Goal:** Reorient bgg-rating-models training around a versioned data snapshot with named/versioned splits underneath, so experiments are honestly comparable on disk-location alone. Cascading dependencies (rating reads predicted_complexity) resolve within a fixed (snapshot, split) surface. K-fold OOF scoring for upstream models eliminates training-time leakage in downstream features.
 
-**Architecture:** A single `SnapshotStorage` class owns paths and I/O for the new tree at `models/experiments/_snapshots/v{N}/`. Three new CLIs (`build_snapshot`, `build_split`, plus a snapshot-aware refactor of `outcomes/train.py`) drive the workflow. The existing `Experiment` artifact-logging code is reused; only path resolution changes. OOF is layered on after the basic flow works.
+**Architecture:** Two clean layers.
+
+- **Pure model layer (`src/models/outcomes/`)**: takes data frames in, returns fitted pipelines + metrics + predictions out. No CLI, no IO, no knowledge of snapshots/splits/upstream cascades. The existing helpers (`tune_model`, `evaluate_model`, model classes' `configure_model`, `find_optimal_threshold`, etc.) already live here and are kept; what gets factored out of `outcomes/train.py` is a function `train_one(model, candidate_config, train_df, tune_df, test_df, ...)` that returns `{pipeline, metrics, parameters, tune_predictions, test_predictions}`.
+- **Orchestration layer (`src/pipeline/`)**: knows about snapshots, splits, candidates, upstream cascades, and IO. `pipeline.train` becomes the snapshot-aware orchestrator — parses `--snapshot-version --candidate --splits --upstream`, loads from `SnapshotStorage`, joins upstream `score.parquet`, calls `train_one` per split, writes results back. Same name `pipeline.train` as today; the Makefile keeps working.
+
+`SnapshotStorage` (Stage 1) owns paths and I/O for the new tree at `models/experiments/_snapshots/v{N}/`. OOF is layered on after the basic flow works.
 
 **Tech Stack:** Python 3.12, Polars, scikit-learn, pytest, pandas (interop), uv. Existing project conventions: `tmp_path` for hermetic tests, `uv run python -m` for module execution.
 
@@ -24,19 +29,21 @@
 
 **Modified files:**
 
-- `src/models/outcomes/data.py` — replace `create_data_splits` inline-year-loading with `load_split_from_storage(snapshot_version, split_name)`. `load_training_data` for new code paths reads from snapshot, not BQ.
-- `src/models/outcomes/train.py` — replace year CLI flags with `--snapshot-version`, `--candidate`, `--splits`, `--upstream`. Iterate over splits, train per split, write to snapshot tree. Per-candidate finalize at end.
-- `src/models/outcomes/finalize.py` — adapt to refit on full snapshot universe and write `finalized.pkl` at the candidate level.
-- `src/models/experiments.py` — `ExperimentTracker` gains a `snapshot_storage` mode where `base_dir` is resolved per-split as `_snapshots/v{N}/experiments/{model_type}/{candidate}/v{M}/results/{split_name}/`. Existing `Experiment.log_*` methods unchanged.
-- `config.yaml` — add `candidates` list per model type, mirroring `collections.candidates`.
+- `src/models/outcomes/train.py` — strip CLI/IO/argparse/ExperimentTracker concerns. Keep model wiring (preprocessor, configure_model, tune_model, refit on train+tune, threshold optimization, additional_metrics). Expose `train_one(model, candidate_config, train_df, tune_df, test_df, ...)` returning a dict of artifacts.
+- `src/pipeline/train.py` — rewrite from a one-line shim into the snapshot-aware orchestrator. Parses snapshot/split/candidate/upstream args, loads from `SnapshotStorage`, joins upstream score columns, calls `train_one` per split, writes results via `SnapshotStorage`.
+- `src/pipeline/score.py` — rewrite to score the snapshot universe and write `score.parquet` per (candidate, split) into `SnapshotStorage`.
+- `src/pipeline/finalize.py` — rewrite to refit a candidate on the full snapshot universe and write `finalized.pkl` at the candidate level (not per split).
+- `config.yaml` — add `candidates` list per model type (Task 11, already done).
 
 **Test files (new):**
 
-- `tests/test_snapshot_storage.py` — hermetic, tmp_path-based, mirrors `test_collection_artifact_storage_local.py`.
-- `tests/test_build_snapshot.py` — uses local parquet input, asserts on file output.
+- `tests/test_snapshot_storage.py` — hermetic, tmp_path-based.
+- `tests/test_build_snapshot.py` — local parquet input, asserts on file output.
 - `tests/test_build_split.py` — round-trip a synthetic snapshot, verify split contents.
-- `tests/test_outcomes_train_snapshot.py` — end-to-end training of a tiny synthetic candidate, asserts result paths and `score.parquet` shape.
-- `tests/test_oof_scoring.py` — added in Stage 2, validates K-fold OOF behavior.
+- `tests/test_candidate_config.py` — YAML-based candidate lookup.
+- `tests/test_train_one.py` — pure model layer: takes synthetic frames, returns artifacts.
+- `tests/test_pipeline_train_snapshot.py` — orchestration: build snapshot, build split, run pipeline.train, verify SnapshotStorage tree contents.
+- `tests/test_oof_scoring.py` — added in Stage 4, validates K-fold OOF behavior.
 
 **Out of scope for this plan (per spec):**
 
@@ -1552,23 +1559,58 @@ git add src/models/candidate_config.py tests/test_candidate_config.py
 git commit -m "feat: candidate config resolution"
 ```
 
-### Task 13: New training entry point — single split, no upstream
+---
+
+## Stage 3: Pure-function refactor + snapshot-aware orchestration
+
+Stage 1 (storage) and Stage 2 (candidate config) are complete. Stage 3 extracts a pure `train_one(...)` function from `outcomes/train.py`, then rewrites `src/pipeline/train.py`, `src/pipeline/score.py`, and (in Stage 5) `src/pipeline/finalize.py` as snapshot-aware orchestrators.
+
+After this stage, `train_one` takes data frames in and returns artifacts out — no CLI, no IO, no `ExperimentTracker`. The orchestration layer (`pipeline.train`, `pipeline.score`) owns argv, snapshot/split loading, upstream cascade resolution, and writes to `SnapshotStorage`.
+
+This refactor preserves all existing training behavior: preprocessor construction, `configure_model`, `tune_model`, refit-on-train+tune, threshold optimization for hurdle, sample-weight handling, additional metrics, etc. It just stops writing to disk and stops parsing argv.
+
+The legacy `main()` and `parse_arguments()` in `outcomes/train.py` are deleted on this branch — production stays on `main` until merge.
+
+### Task 13: Extract train_one as a pure function
 
 **Files:**
-- Create: `src/models/train_snapshot.py`
-- Test: `tests/test_train_snapshot.py`
+- Modify: `src/models/outcomes/train.py`
+- Test: `tests/test_train_one.py`
 
-This task introduces a new orchestration function that uses snapshot storage and trains one candidate on one split. It reuses the existing `train_model` machinery in `src/models/outcomes/train.py` for the actual training, but bypasses the year-based CLI.
+The existing `outcomes/train.py:train_model` does too many things. Refactor it: keep the model-wiring logic, drop everything that touches argv, config files, or `ExperimentTracker`. Expose a `train_one` function that takes frames and a candidate dict, returns artifacts.
 
-- [ ] **Step 1: Write a smoke test (kept narrow)**
+- [ ] **Step 1: Read the current train.py to understand its shape**
 
-Create `tests/test_train_snapshot.py`:
+Open [src/models/outcomes/train.py](src/models/outcomes/train.py) and read `train_model` carefully (around lines 340–620). Identify the boundary between data loading + arg parsing (which goes away) and the model-wiring core (which stays).
+
+The core includes:
+- Instantiate model class via `model_class(**model_kwargs)`
+- Determine algorithm
+- Call `model.prepare_features(...)` for each fold (filters rows for some models)
+- `model.configure_model(algorithm, algorithm_params)` → `(estimator, param_grid)`
+- Build `preprocessor_kwargs` (preserve_columns logic, embeddings flag, count features)
+- `create_preprocessing_pipeline(model_type=..., model_name=algorithm, **kwargs)`
+- `model.create_pipeline(estimator, preprocessor, algorithm, args)`
+- Sample weights via `calculate_sample_weights(...)`
+- `tune_model(...)` → fitted pipeline + best params
+- `evaluate_model(train_pipeline, train_X, train_y, "training")` for train metrics
+- For classification: `model.find_optimal_threshold(...)` if available
+- `evaluate_model(train_pipeline, tune_X, tune_y, "tuning")` for tune metrics
+- Refit final pipeline on train + tune (with sample weights if applicable)
+- `evaluate_model(final_pipeline, test_X, test_y, "test")` for test metrics
+- `model.compute_additional_metrics(test_y.values, test_pred, "test")` → merge into test metrics
+- Predictions on tune and test sets
+
+That entire pipeline body is what `train_one` keeps. Everything else — argparse, BQ data loading, year-range splits, `ExperimentTracker`, `log_experiment` — gets deleted.
+
+- [ ] **Step 2: Write the failing test**
+
+Create `tests/test_train_one.py`:
 
 ```python
-"""Smoke test for the snapshot-aware single-split training flow.
+"""Tests for train_one — the pure model-training function.
 
-Uses the hurdle model class because it has no upstream dependencies.
-Synthetic data; tests structural correctness, not model quality.
+Hermetic: builds frames in-memory, calls train_one, asserts on returned artifacts.
 """
 
 from pathlib import Path
@@ -1576,23 +1618,438 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from src.models.outcomes.train import train_one
+from src.models.outcomes.hurdle import HurdleModel
+
+
+def _synthetic_hurdle_frames():
+    """Build minimal frames the hurdle pipeline can train on.
+
+    Hurdle target: derived from `users_rated >= min_ratings_for_hurdle`.
+    Need a few feature columns the preprocessor expects. Bare minimum is
+    year_published + a numeric column or two, depending on what the
+    BGG preprocessor pipeline tolerates with no additional features.
+    """
+    n_train, n_tune, n_test = 60, 20, 20
+    train = pl.DataFrame({
+        "game_id": list(range(1, n_train + 1)),
+        "year_published": [2018] * n_train,
+        "users_rated": [50] * (n_train // 2) + [10] * (n_train - n_train // 2),
+        "num_weights": [5] * n_train,
+        "complexity": [2.5] * n_train,
+        "rating": [7.0] * n_train,
+        "min_players": [2] * n_train,
+        "max_players": [4] * n_train,
+        "playing_time": [60] * n_train,
+        "name": [f"game_{i}" for i in range(n_train)],
+    })
+    tune = train.head(n_tune).with_columns(pl.lit(2019).alias("year_published"))
+    test = train.head(n_test).with_columns(pl.lit(2020).alias("year_published"))
+    return train, tune, test
+
+
+def test_train_one_returns_expected_artifacts(monkeypatch):
+    train_df, tune_df, test_df = _synthetic_hurdle_frames()
+
+    candidate_config = {
+        "name": "logistic-hurdle",
+        "algorithm": "logistic",
+        "use_embeddings": False,
+        "use_sample_weights": False,
+    }
+
+    out = train_one(
+        model_type="hurdle",
+        candidate_config=candidate_config,
+        train_df=train_df,
+        tune_df=tune_df,
+        test_df=test_df,
+    )
+
+    assert "pipeline" in out
+    assert "metrics" in out
+    assert "parameters" in out
+    assert "tune_predictions" in out
+    assert "test_predictions" in out
+    assert set(out["metrics"].keys()) >= {"train", "tune", "test"}
+```
+
+Note: this test depends on the actual hurdle pipeline being able to train on a tiny synthetic frame. If the existing preprocessor rejects something, observe the failure in step 4 and add the necessary columns (e.g. designer/category features may be needed). DO NOT modify the production preprocessor to accommodate the test — adapt the fixture instead.
+
+- [ ] **Step 3: Run test to verify failure**
+
+Run: `uv run pytest tests/test_train_one.py -v`
+Expected: ImportError on `train_one` (it doesn't exist yet).
+
+- [ ] **Step 4: Refactor train.py**
+
+Open [src/models/outcomes/train.py](src/models/outcomes/train.py) and:
+
+1. **Delete `parse_arguments` entirely.**
+2. **Delete `main()` entirely.**
+3. **Delete `main_finalize()`** if it exists at the bottom of the file (Stage 5 will introduce a snapshot-aware replacement).
+4. **Replace `train_model(model_class, args)` with `train_one(model_type, candidate_config, train_df, tune_df, test_df, ...)`.**
+5. **Remove all imports that become unused after deletion** (`argparse`, `setup_logging`, `load_config`, `ExperimentTracker`, `log_experiment`, the data-loader imports for BQ).
+6. Keep imports for: model registry (`get_model_class`, `MODEL_REGISTRY`, `register_model`, `_populate_registry`), `clone`, `pd`, `np`, the model classes' helpers, `create_preprocessing_pipeline`, `tune_model`, `evaluate_model`, `calculate_sample_weights`, `select_X_y`.
+
+Write `train_one` like this. Make it the *only* training entry point in this file:
+
+```python
+"""Pure model training functions for outcome models.
+
+This module exposes ``train_one``, a function that takes data frames and
+a candidate-config dict, and returns the training artifacts. It does not
+parse argv, load data, or write to disk — those are orchestration
+concerns owned by ``src/pipeline/train.py``.
+
+The module also hosts the model registry (``get_model_class``,
+``MODEL_REGISTRY``, ``register_model``).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional, Type
+
+import numpy as np
+import pandas as pd
+import polars as pl
+from sklearn.base import clone
+
+from src.models.outcomes.base import TrainableModel
+from src.models.outcomes.data import select_X_y
+from src.models.training import (
+    create_preprocessing_pipeline,
+    tune_model,
+    evaluate_model,
+    calculate_sample_weights,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+# Registry of available model classes
+MODEL_REGISTRY: Dict[str, Type[TrainableModel]] = {}
+
+
+def register_model(model_class: Type[TrainableModel]) -> Type[TrainableModel]:
+    MODEL_REGISTRY[model_class.model_type] = model_class
+    return model_class
+
+
+def get_model_class(model_type: str) -> Type[TrainableModel]:
+    if not MODEL_REGISTRY:
+        _populate_registry()
+    if model_type not in MODEL_REGISTRY:
+        raise ValueError(
+            f"Unknown model type '{model_type}'. "
+            f"Available: {list(MODEL_REGISTRY.keys())}"
+        )
+    return MODEL_REGISTRY[model_type]
+
+
+def _populate_registry() -> None:
+    from src.models.outcomes.hurdle import HurdleModel
+    from src.models.outcomes.complexity import ComplexityModel
+    from src.models.outcomes.rating import RatingModel
+    from src.models.outcomes.users_rated import UsersRatedModel
+    from src.models.outcomes.geek_rating import GeekRatingModel
+
+    register_model(HurdleModel)
+    register_model(ComplexityModel)
+    register_model(RatingModel)
+    register_model(UsersRatedModel)
+    register_model(GeekRatingModel)
+
+
+def train_one(
+    model_type: str,
+    candidate_config: Dict[str, Any],
+    train_df: pl.DataFrame,
+    tune_df: pl.DataFrame,
+    test_df: pl.DataFrame,
+    metric: Optional[str] = None,
+    patience: int = 15,
+    preprocessor_type: str = "auto",
+) -> Dict[str, Any]:
+    """Train one candidate on one (train, tune, test) triple.
+
+    Inputs are frames (already loaded from snapshot+split, already joined
+    with any upstream score columns). Output is a dict of artifacts:
+    pipeline, metrics, parameters, tune_predictions, test_predictions,
+    and (for classification) optimal_threshold.
+
+    Args:
+        model_type: Registered model type (e.g. "hurdle", "complexity").
+        candidate_config: Candidate recipe dict (from ``config.yaml``'s
+            ``models.{type}.candidates`` list, possibly with overrides).
+            Recognized keys:
+
+            - ``algorithm``: estimator name passed to ``model.configure_model``
+            - ``use_embeddings``: include description embeddings in the preprocessor
+            - ``use_sample_weights``: weight train rows during tuning + final fit
+            - ``sample_weight_column``: column to weight by (default depends on model)
+            - ``min_ratings``, ``mode``, ``include_predictions``: model-specific
+            - ``preprocessor_kwargs``: extra kwargs forwarded to ``create_preprocessing_pipeline``
+            - ``algorithm_params``: extra kwargs forwarded to ``model.configure_model``
+            - ``include_count_features``: forwarded to preprocessor
+
+        train_df/tune_df/test_df: Polars frames already containing target column.
+        metric: Tuning metric override; defaults to log_loss (classification)
+            or rmse (regression).
+        patience: Early-stopping patience for ``tune_model``.
+        preprocessor_type: "auto", "linear", or "tree".
+
+    Returns:
+        Dict with keys: pipeline, metrics (dict of train/tune/test sub-dicts),
+        parameters, tune_predictions (pl.DataFrame), test_predictions (pl.DataFrame).
+        For classification: also "optimal_threshold".
+    """
+    model_class = get_model_class(model_type)
+
+    # Build model_kwargs from candidate config (model-specific knobs)
+    model_kwargs: Dict[str, Any] = {}
+    if "min_ratings" in candidate_config:
+        model_kwargs["min_ratings"] = candidate_config["min_ratings"]
+    if "mode" in candidate_config:
+        model_kwargs["mode"] = candidate_config["mode"]
+    if "include_predictions" in candidate_config:
+        model_kwargs["include_predictions"] = candidate_config["include_predictions"]
+    model = model_class(**model_kwargs)
+
+    algorithm = candidate_config.get("algorithm")
+    if algorithm is None:
+        algorithm = "ridge" if model.model_task == "regression" else "lightgbm"
+
+    logger.info(f"train_one: {model.model_type} / {algorithm}")
+
+    # X / y
+    train_X, train_y = select_X_y(train_df, model.target_column)
+    tune_X, tune_y = select_X_y(tune_df, model.target_column)
+    test_X, test_y = select_X_y(test_df, model.target_column)
+    tune_X_original = tune_X.copy()
+
+    # Allow models to prepare features (e.g. geek_rating's stacking)
+    # The model's prepare_features signature historically took an `args`
+    # namespace. Build a small SimpleNamespace-equivalent so we don't have
+    # to change the model classes.
+    from types import SimpleNamespace
+    prep_args = SimpleNamespace(
+        use_embeddings=bool(candidate_config.get("use_embeddings", False)),
+        sub_model_experiments=candidate_config.get("sub_model_experiments", {}),
+        mode=candidate_config.get("mode"),
+        include_predictions=candidate_config.get("include_predictions", True),
+    )
+    train_X, train_y = model.prepare_features(train_X, train_y, "train", prep_args)
+    tune_X, tune_y = model.prepare_features(tune_X, tune_y, "tune", prep_args)
+    test_X, test_y = model.prepare_features(test_X, test_y, "test", prep_args)
+
+    # Filter polars frames to match if prepare_features dropped rows
+    if len(train_X) < len(train_df):
+        train_df = train_df[train_X.index.tolist()]
+    if len(tune_X) < len(tune_df):
+        tune_df = tune_df[tune_X.index.tolist()]
+    if len(test_X) < len(test_df):
+        test_df = test_df[test_X.index.tolist()]
+
+    # Configure model + estimator
+    algorithm_params = candidate_config.get("algorithm_params", {}) or {}
+    estimator, param_grid = model.configure_model(algorithm, algorithm_params)
+
+    # Build preprocessor
+    preserve_columns = ["year_published"]
+    if model.data_config.requires_complexity_predictions:
+        preserve_columns.append("predicted_complexity")
+    if model_type == "geek_rating" and prep_args.mode == "direct":
+        preserve_columns.append("predicted_complexity")
+        if prep_args.include_predictions:
+            preserve_columns.extend(["predicted_rating", "predicted_users_rated_log"])
+
+    preprocessor_kwargs = dict(candidate_config.get("preprocessor_kwargs", {}) or {})
+    preprocessor_kwargs.update(
+        preserve_columns=preserve_columns,
+        include_description_embeddings=prep_args.use_embeddings,
+        include_count_features=bool(candidate_config.get("include_count_features", False)),
+    )
+
+    preprocessor = create_preprocessing_pipeline(
+        model_type=preprocessor_type,
+        model_name=algorithm,
+        **preprocessor_kwargs,
+    )
+    pipeline = model.create_pipeline(estimator, preprocessor, algorithm, prep_args)
+
+    # Sample weights
+    sample_weights = None
+    use_sample_weights = bool(candidate_config.get("use_sample_weights", False))
+    weight_column = candidate_config.get("sample_weight_column")
+    if use_sample_weights:
+        if weight_column is None:
+            weight_column = "num_weights" if model.model_type == "complexity" else "users_rated"
+        sample_weights = calculate_sample_weights(train_df, weight_column=weight_column)
+
+    # Tuning metric
+    if metric is None:
+        metric = "log_loss" if model.model_task == "classification" else "rmse"
+
+    tuned_pipeline, best_params, _ = tune_model(
+        pipeline=pipeline,
+        train_X=train_X,
+        train_y=train_y,
+        tune_X=tune_X,
+        tune_y=tune_y,
+        param_grid=param_grid,
+        metric=metric,
+        patience=patience,
+        sample_weights=sample_weights,
+    )
+
+    # Train-set metrics from a clone fit on train only
+    train_pipeline = clone(tuned_pipeline).fit(train_X, train_y)
+    train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
+
+    # Optional threshold optimization (classification only)
+    optimal_threshold: Optional[float] = None
+    if hasattr(model, "find_optimal_threshold") and model.model_task == "classification":
+        tune_pred_proba = train_pipeline.predict_proba(tune_X)[:, 1]
+        threshold_results = model.find_optimal_threshold(tune_y, tune_pred_proba)
+        optimal_threshold = float(threshold_results["threshold"])
+
+    tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning")
+
+    # Refit on train + tune (matches existing behavior)
+    if hasattr(model, "filter_for_refit"):
+        tune_X_refit, tune_y_refit = model.filter_for_refit(tune_X, tune_y, tune_X_original)
+    else:
+        tune_X_refit, tune_y_refit = tune_X, tune_y
+
+    X_combined = pd.concat([train_X, tune_X_refit])
+    y_combined = pd.concat([train_y, tune_y_refit])
+
+    if use_sample_weights:
+        combined_weights = calculate_sample_weights(
+            pl.concat([train_df, tune_df]),
+            weight_column=weight_column,
+        )
+        final_pipeline = clone(tuned_pipeline).fit(
+            X_combined, y_combined,
+            model__sample_weight=np.asarray(combined_weights),
+        )
+    else:
+        final_pipeline = clone(tuned_pipeline).fit(X_combined, y_combined)
+
+    test_metrics = evaluate_model(final_pipeline, test_X, test_y, "test")
+    test_pred = final_pipeline.predict(test_X)
+    additional = model.compute_additional_metrics(test_y.values, test_pred, "test")
+    test_metrics.update(additional)
+
+    # Predictions frames (polars, suitable for SnapshotStorage.save_result)
+    tune_preds = _build_predictions_frame(
+        train_pipeline, tune_X, tune_y, tune_df, model.model_task,
+    )
+    test_preds = _build_predictions_frame(
+        final_pipeline, test_X, test_y, test_df, model.model_task,
+    )
+
+    out: Dict[str, Any] = {
+        "pipeline": final_pipeline,
+        "metrics": {"train": train_metrics, "tune": tune_metrics, "test": test_metrics},
+        "parameters": best_params,
+        "tune_predictions": tune_preds,
+        "test_predictions": test_preds,
+    }
+    if optimal_threshold is not None:
+        out["optimal_threshold"] = optimal_threshold
+    return out
+
+
+def _build_predictions_frame(
+    pipeline,
+    X: pd.DataFrame,
+    y: pd.Series,
+    df: pl.DataFrame,
+    model_task: str,
+) -> pl.DataFrame:
+    """Produce a polars frame matching df's rows + ``prediction``/``actual`` columns."""
+    preds = pipeline.predict(X)
+    out = df.clone().with_columns([
+        pl.Series("prediction", preds),
+        pl.Series("actual", y.values),
+    ])
+    if model_task == "classification" and hasattr(pipeline, "predict_proba"):
+        try:
+            proba = pipeline.predict_proba(X)
+            if proba.ndim == 2 and proba.shape[1] >= 2:
+                out = out.with_columns(pl.Series("predicted_proba", proba[:, 1]))
+        except Exception:
+            pass
+    return out
+```
+
+- [ ] **Step 5: Run the new test**
+
+Run: `uv run pytest tests/test_train_one.py -v`
+
+Expected: PASS — but if the synthetic fixture is too thin for the preprocessor (e.g. it needs designer/category list-columns), the test will fail with a feature-shape error. Adapt the fixture: add list-typed columns matching what the preprocessor expects, or use a larger fixture sourced from the snapshot tests' helper. Do NOT modify the production preprocessor.
+
+If the test passes, run the full suite to confirm nothing else broke:
+
+Run: `uv run pytest tests/ -v`
+
+Expected: all snapshot/storage/build tests still pass; no production-side test exists for the old `outcomes/train.py:main` (which is deleted).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/models/outcomes/train.py tests/test_train_one.py
+git commit -m "refactor: extract train_one as pure data-frame function in outcomes/train.py"
+```
+
+### Task 14: Rewrite src/pipeline/train.py as snapshot-aware orchestrator
+
+**Files:**
+- Modify: `src/pipeline/train.py` (currently a 12-line shim)
+- Test: `tests/test_pipeline_train_snapshot.py`
+
+The orchestrator owns: argv, snapshot/split loading, upstream cascade resolution, looping over splits, writing to `SnapshotStorage`. It calls `train_one` per (snapshot, split, candidate).
+
+This task does single-split, no upstream. Multi-split and upstream join come in Task 15. Per-candidate finalize comes in Task 21.
+
+- [ ] **Step 1: Write failing test**
+
+Create `tests/test_pipeline_train_snapshot.py`:
+
+```python
+"""Smoke test for the snapshot-aware pipeline.train orchestrator.
+
+Hurdle has no upstream dependencies — start there.
+"""
+
+from pathlib import Path
+
+import polars as pl
+
 from src.models.build_snapshot import build_snapshot
 from src.models.build_split import build_split
 from src.models.snapshot_storage import SnapshotStorage
-from src.models.train_snapshot import train_candidate
+from src.pipeline.train import train as run_pipeline_train
 
 
-@pytest.fixture
-def synthetic_snapshot(tmp_path: Path) -> tuple[Path, int]:
+def _synthetic_universe(tmp_path: Path) -> tuple[Path, int]:
     base = tmp_path / "snaps"
+    n = 200
     df = pl.DataFrame({
-        "game_id": list(range(1, 101)),
-        "year_published": [2018]*25 + [2019]*25 + [2020]*25 + [2021]*25,
-        "users_rated": [50] * 100,
-        "num_weights": [5] * 100,
-        "complexity": [2.5] * 100,
-        "rating": [7.0] * 100,
-        # Hurdle target is derived; here we just need columns the loader sees.
+        "game_id": list(range(1, n + 1)),
+        "year_published": [2018]*50 + [2019]*50 + [2020]*50 + [2021]*50,
+        "users_rated": [50] * (n // 2) + [10] * (n - n // 2),
+        "num_weights": [5] * n,
+        "complexity": [2.5] * n,
+        "rating": [7.0] * n,
+        "min_players": [2] * n,
+        "max_players": [4] * n,
+        "playing_time": [60] * n,
+        "name": [f"game_{i}" for i in range(n)],
     })
     src = tmp_path / "src.parquet"
     df.write_parquet(src)
@@ -1606,24 +2063,24 @@ def synthetic_snapshot(tmp_path: Path) -> tuple[Path, int]:
     return base, v
 
 
-def test_train_candidate_writes_result_artifacts(synthetic_snapshot, tmp_path):
-    base, v = synthetic_snapshot
+def test_pipeline_train_writes_result_artifacts(tmp_path: Path) -> None:
+    base, v = _synthetic_universe(tmp_path)
 
-    # Use a test-only candidate config that doesn't need real BGG features
     candidate_config = {
         "name": "logistic-hurdle",
         "algorithm": "logistic",
         "use_embeddings": False,
+        "use_sample_weights": False,
     }
 
-    train_candidate(
+    run_pipeline_train(
         snapshot_version=v,
         model_type="hurdle",
         candidate="logistic-hurdle",
         candidate_config=candidate_config,
         splits=["standard"],
-        base_dir=base,
         upstream={},
+        base_dir=base,
     )
 
     storage = SnapshotStorage(snapshot_version=v, base_dir=base)
@@ -1633,37 +2090,41 @@ def test_train_candidate_writes_result_artifacts(synthetic_snapshot, tmp_path):
     assert "metrics" in result
     assert "tune_predictions" in result
     assert "test_predictions" in result
-    # Score predictions = predictions on the full universe
-    assert "score_predictions" in result
-    assert result["score_predictions"].height == 100  # full universe
-```
 
-Note: This test depends on the actual `HurdleModel` and preprocessing pipeline being able to handle a small synthetic dataset. If the existing pipeline rejects rows with too few features, this fixture will need extra columns. Adjust by inspecting the failure in step 2.
+    # Candidate-level config + registration written
+    cfg = storage.load_candidate_config("hurdle", "logistic-hurdle", 1)
+    assert cfg == candidate_config
+
+    reg = storage.load_candidate_registration("hurdle", "logistic-hurdle", 1)
+    assert reg["snapshot_version"] == v
+    assert reg["candidate"] == "logistic-hurdle"
+    assert reg["splits"] == ["standard"]
+    assert reg["upstream_experiments"] == {}
+```
 
 - [ ] **Step 2: Run test, expect failure**
 
-Run: `uv run pytest tests/test_train_snapshot.py -v`
-Expected: ImportError on `train_candidate`.
+Run: `uv run pytest tests/test_pipeline_train_snapshot.py -v`
+Expected: ImportError on `from src.pipeline.train import train`.
 
-- [ ] **Step 3: Implement train_snapshot.py with the train_candidate function**
+- [ ] **Step 3: Rewrite src/pipeline/train.py**
 
-Create `src/models/train_snapshot.py`:
+Replace the entire file content of [src/pipeline/train.py](src/pipeline/train.py) with:
 
 ```python
-"""Snapshot-aware training entry point.
+"""Snapshot-aware orchestration for outcome-model training.
 
-Trains one candidate on one or more splits within a snapshot. Uses the
-existing model classes from ``src/models/outcomes/`` and the existing
-preprocessing/tuning pipeline from ``src/models/training.py``. The
-difference is path resolution: artifacts go under
-``_snapshots/v{N}/experiments/{model_type}/{candidate}/v{M}/``.
+Loads frames from ``SnapshotStorage``, joins upstream score columns,
+calls ``train_one`` per split, writes results back. The Makefile's
+``make hurdle``/``make complexity``/etc still invoke
+``uv run -m src.pipeline.train`` — only the CLI args change.
 
-Usage::
+CLI::
 
-    uv run python -m src.models.train_snapshot \\
+    uv run python -m src.pipeline.train \\
         --model rating --candidate ard-ridge-rating \\
         --snapshot-version 1 --splits standard,yoy_2018 \\
-        --upstream complexity=ard-complexity
+        [--upstream complexity=ard-complexity]
 """
 
 from __future__ import annotations
@@ -1675,199 +2136,118 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import pandas as pd
 import polars as pl
 
 from src.models.candidate_config import find_candidate
-from src.models.outcomes.data import select_X_y
-from src.models.outcomes.train import get_model_class
+from src.models.outcomes.train import train_one
 from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
-from src.models.training import (
-    create_preprocessing_pipeline,
-    tune_model,
-    evaluate_model,
-)
 from src.utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
-def train_candidate(
+def train(
     snapshot_version: int,
     model_type: str,
     candidate: str,
     candidate_config: Dict[str, Any],
     splits: List[str],
-    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
     upstream: Optional[Dict[str, str]] = None,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
 ) -> int:
-    """Train one candidate on one or more splits. Returns the assigned candidate version."""
+    """Run training for one candidate over one or more splits.
+
+    Returns the candidate version number assigned to this run.
+    """
     upstream = upstream or {}
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
-    universe = storage.load_universe()
-    if universe is None:
+    if storage.load_universe() is None:
         raise FileNotFoundError(f"No snapshot v{snapshot_version}")
 
     candidate_version = storage.next_candidate_version(model_type, candidate)
 
-    # Persist candidate-level artifacts (config + registration)
     storage.save_candidate_config(model_type, candidate, candidate_version, candidate_config)
-    registration = {
-        "snapshot_version": snapshot_version,
-        "model_type": model_type,
-        "candidate": candidate,
-        "version": candidate_version,
-        "created_at": datetime.now().isoformat(),
-        "upstream_experiments": upstream,
-        "splits": splits,
-    }
-    storage.save_candidate_registration(model_type, candidate, candidate_version, registration)
-
-    # Look up the model class
-    model_class = get_model_class(model_type)
-    target_column = model_class().target_column
+    storage.save_candidate_registration(
+        model_type, candidate, candidate_version,
+        {
+            "snapshot_version": snapshot_version,
+            "model_type": model_type,
+            "candidate": candidate,
+            "version": candidate_version,
+            "created_at": datetime.now().isoformat(),
+            "upstream_experiments": upstream,
+            "splits": splits,
+        },
+    )
 
     for split_name in splits:
-        logger.info(f"Training {model_type}/{candidate}/v{candidate_version} on split {split_name}")
+        logger.info(f"Training {model_type}/{candidate}/v{candidate_version} on {split_name}")
         split = storage.load_split(split_name)
         if split is None:
             raise FileNotFoundError(f"Split {split_name!r} not found in v{snapshot_version}")
 
-        train_df = split["train"]
-        tune_df = split["tune"]
-        test_df = split["test"]
-
-        # Apply upstream score columns by joining (no-op if upstream is empty)
-        train_df, tune_df, test_df, universe_with_upstream = _join_upstream(
-            storage, snapshot_version, split_name, upstream,
-            train_df, tune_df, test_df, universe,
+        train_df, tune_df, test_df = split["train"], split["tune"], split["test"]
+        train_df, tune_df, test_df = _join_upstream(
+            storage, upstream, split_name, train_df, tune_df, test_df,
         )
 
-        # X/y extraction
-        train_X, train_y = select_X_y(train_df, target_column)
-        tune_X, tune_y = select_X_y(tune_df, target_column)
-        test_X, test_y = select_X_y(test_df, target_column)
-
-        # Build preprocessor + model (existing code path)
-        algorithm = candidate_config.get("algorithm")
-        preprocessor = create_preprocessing_pipeline(
-            X=train_X, model_type=model_type, algorithm=algorithm,
-        )
-        # Tune (returns fitted pipeline + best params + per-set metrics)
-        tuned = tune_model(
-            preprocessor=preprocessor,
+        artifacts = train_one(
             model_type=model_type,
-            algorithm=algorithm,
-            train_X=train_X, train_y=train_y,
-            tune_X=tune_X, tune_y=tune_y,
+            candidate_config=candidate_config,
+            train_df=train_df,
+            tune_df=tune_df,
+            test_df=test_df,
         )
-        pipeline = tuned["pipeline"]
-        best_params = tuned["best_params"]
-        train_metrics = tuned.get("train_metrics", {})
-        tune_metrics = tuned.get("tune_metrics", {})
-        test_metrics = evaluate_model(pipeline, test_X, test_y, model_type=model_type)
-
-        metrics = {"train": train_metrics, "tune": tune_metrics, "test": test_metrics}
-
-        # Predictions
-        tune_preds = _predict_to_df(pipeline, tune_X, tune_y, tune_df, model_type)
-        test_preds = _predict_to_df(pipeline, test_X, test_y, test_df, model_type)
-
-        # Score predictions: in-sample for now (Stage 3 replaces with OOF for upstream models)
-        universe_X = universe_with_upstream.drop(target_column).to_pandas() \
-            if target_column in universe_with_upstream.columns else universe_with_upstream.to_pandas()
-        score_preds = _score_universe(pipeline, universe_with_upstream, model_type)
 
         storage.save_result(
             model_type=model_type,
             candidate=candidate,
             version=candidate_version,
             split_name=split_name,
-            pipeline=pipeline,
-            metrics=metrics,
-            parameters=best_params,
-            tune_predictions=tune_preds,
-            test_predictions=test_preds,
-            score_predictions=score_preds,
+            pipeline=artifacts["pipeline"],
+            metrics=artifacts["metrics"],
+            parameters=artifacts["parameters"],
+            tune_predictions=artifacts.get("tune_predictions"),
+            test_predictions=artifacts.get("test_predictions"),
         )
-        logger.info(f"Wrote result for {model_type}/{candidate}/v{candidate_version}/{split_name}")
+        logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
     return candidate_version
 
 
 def _join_upstream(
     storage: SnapshotStorage,
-    snapshot_version: int,
-    split_name: str,
     upstream: Dict[str, str],
+    split_name: str,
     train_df: pl.DataFrame,
     tune_df: pl.DataFrame,
     test_df: pl.DataFrame,
-    universe: pl.DataFrame,
-) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    """Join upstream score predictions onto each frame.
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Join upstream score.parquet onto each frame.
 
-    For each upstream {model_type: candidate}, look up that candidate's latest
-    version's score.parquet for the same split, and left-join on game_id.
+    For each upstream {model_type: candidate}, look up the latest version
+    that has a score.parquet for ``split_name`` and left-join on game_id.
     """
     for upstream_type, upstream_candidate in upstream.items():
         versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
         if not versions:
             raise FileNotFoundError(
-                f"Upstream {upstream_type}/{upstream_candidate} has no runs in v{snapshot_version}"
+                f"Upstream {upstream_type}/{upstream_candidate} has no versions in this snapshot"
             )
-        upstream_v = versions[-1]
-        score = storage.load_score_predictions(
-            upstream_type, upstream_candidate, upstream_v, split_name,
-        )
+        v = versions[-1]
+        score = storage.load_score_predictions(upstream_type, upstream_candidate, v, split_name)
         if score is None:
             raise FileNotFoundError(
-                f"Upstream {upstream_type}/{upstream_candidate}/v{upstream_v} "
-                f"has no score.parquet for split {split_name!r}"
+                f"Upstream {upstream_type}/{upstream_candidate}/v{v} has no "
+                f"score.parquet for split {split_name!r}"
             )
-        # Strip duplicate columns other than game_id
+        # Drop columns already present (other than game_id) to avoid join collisions
         join_cols = [c for c in score.columns if c == "game_id" or c not in train_df.columns]
         score = score.select(join_cols)
         train_df = train_df.join(score, on="game_id", how="left")
         tune_df = tune_df.join(score, on="game_id", how="left")
         test_df = test_df.join(score, on="game_id", how="left")
-        universe = universe.join(score, on="game_id", how="left")
-    return train_df, tune_df, test_df, universe
-
-
-def _predict_to_df(
-    pipeline, X: pd.DataFrame, y: pd.Series, df: pl.DataFrame, model_type: str,
-) -> pl.DataFrame:
-    preds = pipeline.predict(X)
-    out = df.clone().with_columns([
-        pl.Series("prediction", preds),
-        pl.Series("actual", y.values),
-    ])
-    if hasattr(pipeline, "predict_proba"):
-        try:
-            proba = pipeline.predict_proba(X)
-            if proba.ndim == 2 and proba.shape[1] >= 2:
-                out = out.with_columns(pl.Series("predicted_proba", proba[:, 1]))
-        except Exception:
-            pass
-    return out
-
-
-def _score_universe(pipeline, universe: pl.DataFrame, model_type: str) -> pl.DataFrame:
-    """In-sample score on every row of the universe. Stage 3 will replace this
-    with K-fold OOF for upstream models."""
-    universe_X = universe.to_pandas()
-    preds = pipeline.predict(universe_X)
-    out = universe.select(["game_id"]).clone()
-    pred_col = {
-        "complexity": "predicted_complexity",
-        "rating": "predicted_rating",
-        "users_rated": "predicted_users_rated",
-        "geek_rating": "predicted_geek_rating",
-        "hurdle": "predicted_hurdle",
-    }.get(model_type, "prediction")
-    out = out.with_columns(pl.Series(pred_col, preds))
-    return out
+    return train_df, tune_df, test_df
 
 
 def main() -> int:
@@ -1884,23 +2264,22 @@ def main() -> int:
 
     setup_logging()
 
-    candidate_cfg = find_candidate(model_type=args.model, candidate=args.candidate)
-
-    upstream = dict(candidate_cfg.get("upstream") or {})
+    candidate_config = find_candidate(model_type=args.model, candidate=args.candidate)
+    upstream = dict(candidate_config.get("upstream") or {})
     if args.upstream:
         for pair in args.upstream.split(","):
             k, v = pair.split("=", 1)
             upstream[k.strip()] = v.strip()
 
     splits = [s.strip() for s in args.splits.split(",") if s.strip()]
-    version = train_candidate(
+    version = train(
         snapshot_version=args.snapshot_version,
         model_type=args.model,
         candidate=args.candidate,
-        candidate_config=candidate_cfg,
+        candidate_config=candidate_config,
         splits=splits,
-        base_dir=args.base_dir,
         upstream=upstream,
+        base_dir=args.base_dir,
     )
     print(f"experiment: {args.model}/{args.candidate}/v{version}")
     return 0
@@ -1910,126 +2289,37 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run test, expect pass (or revise fixture)**
+- [ ] **Step 4: Run test**
 
-Run: `uv run pytest tests/test_train_snapshot.py -v`
-Expected: PASS — but the test depends on the existing `HurdleModel` + preprocessing being able to handle the small synthetic dataset. If it fails because of feature requirements (e.g. preprocessor needs more columns), inspect the error and add the required columns to the fixture; do NOT modify the production code to accommodate the test.
+Run: `uv run pytest tests/test_pipeline_train_snapshot.py -v`
+Expected: PASS. If the synthetic data is rejected by the hurdle preprocessor, adapt the fixture (don't modify the preprocessor).
+
+Then run the full suite: `uv run pytest tests/ -v`
+Expected: everything still passing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/models/train_snapshot.py tests/test_train_snapshot.py
-git commit -m "feat: snapshot-aware single-candidate training (no upstream)"
+git add src/pipeline/train.py tests/test_pipeline_train_snapshot.py
+git commit -m "feat: rewrite pipeline.train as snapshot-aware orchestrator"
 ```
 
-### Task 14: End-to-end smoke test against real BQ snapshot (manual)
+### Task 15: Multi-split + upstream cascade in pipeline.train
 
 **Files:**
-- None (manual verification step)
+- Test: `tests/test_pipeline_train_snapshot.py` (append)
 
-- [ ] **Step 1: Build a real snapshot from BQ**
+`pipeline.train` already supports multi-split iteration (Task 14's loop) and upstream join (`_join_upstream`). This task adds tests that exercise both — together with a complexity-then-rating cascade.
 
-Run: `uv run python -m src.models.build_snapshot --use-embeddings`
-Expected: prints `snapshot_version: 1` (assuming this is the first snapshot on the branch). Creates `models/experiments/_snapshots/v1/universe.parquet`.
+- [ ] **Step 1: Append tests**
 
-- [ ] **Step 2: Build the standard split**
-
-Run: `uv run python -m src.models.build_split --snapshot-version 1 --split-name standard`
-Expected: prints `split: v1/standard`. Creates `models/experiments/_snapshots/v1/splits/standard/{train,tune,test}.parquet`.
-
-- [ ] **Step 3: Train hurdle on the standard split**
-
-Run: `uv run python -m src.models.train_snapshot --model hurdle --candidate logistic-hurdle --snapshot-version 1 --splits standard`
-Expected: prints `experiment: hurdle/logistic-hurdle/v1`. Creates the result artifacts; metrics in `metrics.json` should be in the same ballpark as today's `make hurdle` output.
-
-- [ ] **Step 4: Sanity-check the result**
-
-Run: `cat models/experiments/_snapshots/v1/experiments/hurdle/logistic-hurdle/v1/results/standard/metrics.json | head -40`
-Expected: JSON with `train`, `tune`, `test` keys, each containing classification metrics (auc, log_loss, accuracy).
-
-- [ ] **Step 5: Commit a note about the run**
-
-```bash
-# No code change; this step is for the user to confirm the manual run worked.
-# If anything failed, fix the bug in the relevant Stage 1/2 task and re-run.
-```
-
----
-
-## Stage 3: Cascading Dependencies and Multi-Split Training
-
-End state: train the full chain (complexity → rating + users_rated → geek_rating) across multiple splits, with downstream models reading upstream `score.parquet` from sibling experiments.
-
-### Task 15: Verify upstream join in multi-split training
-
-**Files:**
-- Test: `tests/test_train_snapshot.py`
-
-- [ ] **Step 1: Write failing test for upstream join**
-
-Append to `tests/test_train_snapshot.py`:
+In `tests/test_pipeline_train_snapshot.py` add:
 
 ```python
-def test_upstream_join_pulls_score_predictions(synthetic_snapshot, tmp_path):
-    """Training rating after complexity should join predicted_complexity
-    onto the train/tune/test frames before training."""
-    base, v = synthetic_snapshot
-    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
-
-    # First, train complexity (creates score.parquet)
-    complexity_cfg = {"name": "ard-complexity", "algorithm": "ard", "use_embeddings": False}
-    train_candidate(
-        snapshot_version=v, model_type="complexity", candidate="ard-complexity",
-        candidate_config=complexity_cfg, splits=["standard"], base_dir=base, upstream={},
-    )
-
-    # Verify complexity wrote score.parquet
-    score = storage.load_score_predictions("complexity", "ard-complexity", 1, "standard")
-    assert score is not None
-    assert "predicted_complexity" in score.columns
-    assert score.height == 100
-
-    # Now train rating with upstream complexity
-    rating_cfg = {"name": "ard-ridge-rating", "algorithm": "ard",
-                  "use_embeddings": False, "min_ratings": 0}
-    train_candidate(
-        snapshot_version=v, model_type="rating", candidate="ard-ridge-rating",
-        candidate_config=rating_cfg, splits=["standard"], base_dir=base,
-        upstream={"complexity": "ard-complexity"},
-    )
-
-    # Rating's registration should record the upstream choice
-    reg = storage.load_candidate_registration("rating", "ard-ridge-rating", 1)
-    assert reg["upstream_experiments"] == {"complexity": "ard-complexity"}
-```
-
-- [ ] **Step 2: Run test, expect pass (it should already work from Task 13)**
-
-Run: `uv run pytest tests/test_train_snapshot.py::test_upstream_join_pulls_score_predictions -v`
-Expected: PASS — the upstream join logic was implemented in Task 13. If it fails because the synthetic data is missing required columns for `RatingModel` (which has `min_ratings` filter), tweak the fixture's column set to include what RatingModel checks. Avoid changing production code.
-
-- [ ] **Step 3: Commit (test only)**
-
-```bash
-git add tests/test_train_snapshot.py
-git commit -m "test: upstream join in cascaded training"
-```
-
-### Task 16: Multi-split training in one invocation
-
-**Files:**
-- Test: `tests/test_train_snapshot.py`
-
-- [ ] **Step 1: Write failing test**
-
-Append to `tests/test_train_snapshot.py`:
-
-```python
-def test_train_candidate_handles_multiple_splits(synthetic_snapshot, tmp_path):
-    """Training one candidate over multiple splits writes per-split results."""
-    base, v = synthetic_snapshot
+def test_train_multi_split_with_upstream(tmp_path: Path) -> None:
+    """Train complexity, then rating with complexity as upstream, on two splits."""
+    base, v = _synthetic_universe(tmp_path)
     # Add a yoy_2020 split (train≤2018, tune=2019, test=2020)
-    from src.models.build_split import build_split
     build_split(
         snapshot_version=v, split_name="yoy_2020",
         train_through=2018, tune_start=2019, tune_through=2019,
@@ -2037,57 +2327,383 @@ def test_train_candidate_handles_multiple_splits(synthetic_snapshot, tmp_path):
         base_dir=base,
     )
 
-    cfg = {"name": "logistic-hurdle", "algorithm": "logistic", "use_embeddings": False}
-    train_candidate(
-        snapshot_version=v, model_type="hurdle", candidate="logistic-hurdle",
-        candidate_config=cfg, splits=["standard", "yoy_2020"], base_dir=base, upstream={},
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+
+    # Train complexity on both splits — produces score.parquet for each
+    complexity_cfg = {
+        "name": "ard-complexity",
+        "algorithm": "ridge",  # ARD can be slow; ridge is fine for tests
+        "use_embeddings": False,
+        "use_sample_weights": False,
+    }
+    # Hand-write score.parquet for each split since pipeline.score doesn't exist yet (Task 16).
+    # This task validates the upstream-JOIN code path; Task 16 wires the actual scorer.
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=complexity_cfg,
+        splits=["standard", "yoy_2020"], upstream={}, base_dir=base,
+    )
+    # Synthesize score.parquet for both splits manually so rating training has a column to join
+    universe = storage.load_universe()
+    for split_name in ["standard", "yoy_2020"]:
+        score_df = universe.select(["game_id"]).with_columns(
+            pl.lit(2.5).alias("predicted_complexity")
+        )
+        result_dir = storage.result_dir("complexity", "ard-complexity", 1, split_name)
+        result_dir.mkdir(parents=True, exist_ok=True)
+        preds_dir = result_dir / "predictions"
+        preds_dir.mkdir(parents=True, exist_ok=True)
+        score_df.write_parquet(preds_dir / "score.parquet")
+
+    # Train rating with complexity upstream
+    rating_cfg = {
+        "name": "ard-ridge-rating",
+        "algorithm": "ridge",
+        "use_embeddings": False,
+        "use_sample_weights": False,
+        "min_ratings": 0,  # synthetic data is too small for the default of 5
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="rating",
+        candidate="ard-ridge-rating", candidate_config=rating_cfg,
+        splits=["standard", "yoy_2020"],
+        upstream={"complexity": "ard-complexity"},
+        base_dir=base,
     )
 
-    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
-    standard_result = storage.load_result("hurdle", "logistic-hurdle", 1, "standard")
-    yoy_result = storage.load_result("hurdle", "logistic-hurdle", 1, "yoy_2020")
-    assert standard_result is not None
-    assert yoy_result is not None
+    # Both splits got results
+    standard_result = storage.load_result("rating", "ard-ridge-rating", 1, "standard")
+    yoy_result = storage.load_result("rating", "ard-ridge-rating", 1, "yoy_2020")
+    assert standard_result is not None and yoy_result is not None
+
+    reg = storage.load_candidate_registration("rating", "ard-ridge-rating", 1)
+    assert reg["upstream_experiments"] == {"complexity": "ard-complexity"}
 ```
 
-- [ ] **Step 2: Run test, expect pass**
+- [ ] **Step 2: Run tests**
 
-Run: `uv run pytest tests/test_train_snapshot.py::test_train_candidate_handles_multiple_splits -v`
-Expected: PASS (Task 13 already iterates over `splits`).
+Run: `uv run pytest tests/test_pipeline_train_snapshot.py -v`
+
+Expected: 2 passed (the original Task 14 test plus this new one). If the rating model rejects the synthetic data because of feature requirements specific to its preprocessor, adapt the fixture.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/test_train_snapshot.py
-git commit -m "test: multi-split training in one invocation"
+git add tests/test_pipeline_train_snapshot.py
+git commit -m "test: multi-split + upstream cascade in pipeline.train"
+```
+
+### Task 16: Rewrite src/pipeline/score.py for snapshot-tree scoring
+
+**Files:**
+- Modify: `src/pipeline/score.py` (currently calls into legacy code)
+- Test: `tests/test_pipeline_score_snapshot.py`
+
+Scoring writes `score.parquet` for a (candidate, split) — predictions on every row of the snapshot universe. Today's flow: complexity must be scored before rating training, because rating's training-time feature `predicted_complexity` lives in `score.parquet`.
+
+For Stage 2/3, the simple approach: use the train-fold pipeline (the pipeline already saved to `results/{split_name}/pipeline.pkl`) to score every row of the universe. Stage 4 will replace this with K-fold OOF on train rows.
+
+- [ ] **Step 1: Write failing test**
+
+Create `tests/test_pipeline_score_snapshot.py`:
+
+```python
+"""Tests for pipeline.score writing score.parquet to the snapshot tree."""
+
+from pathlib import Path
+
+import polars as pl
+
+from src.models.build_snapshot import build_snapshot
+from src.models.build_split import build_split
+from src.models.snapshot_storage import SnapshotStorage
+from src.pipeline.train import train as run_pipeline_train
+from src.pipeline.score import score as run_pipeline_score
+
+
+def _synthetic_universe(tmp_path: Path) -> tuple[Path, int]:
+    base = tmp_path / "snaps"
+    n = 200
+    df = pl.DataFrame({
+        "game_id": list(range(1, n + 1)),
+        "year_published": [2018]*50 + [2019]*50 + [2020]*50 + [2021]*50,
+        "users_rated": [50] * (n // 2) + [10] * (n - n // 2),
+        "num_weights": [5] * n,
+        "complexity": [2.5] * n,
+        "rating": [7.0] * n,
+        "min_players": [2] * n,
+        "max_players": [4] * n,
+        "playing_time": [60] * n,
+        "name": [f"game_{i}" for i in range(n)],
+    })
+    src = tmp_path / "src.parquet"
+    df.write_parquet(src)
+    v = build_snapshot(local_data=src, base_dir=base, use_embeddings=False)
+    build_split(
+        snapshot_version=v, split_name="standard",
+        train_through=2019, tune_start=2020, tune_through=2020,
+        test_start=2021, test_through=2021,
+        base_dir=base,
+    )
+    return base, v
+
+
+def test_pipeline_score_writes_score_parquet(tmp_path: Path) -> None:
+    base, v = _synthetic_universe(tmp_path)
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+
+    # Train complexity first
+    complexity_cfg = {
+        "name": "ard-complexity", "algorithm": "ridge",
+        "use_embeddings": False, "use_sample_weights": False,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=complexity_cfg,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+
+    # Score
+    run_pipeline_score(
+        snapshot_version=v,
+        model_type="complexity",
+        candidate="ard-complexity",
+        candidate_version=1,
+        splits=["standard"],
+        upstream={},
+        base_dir=base,
+    )
+
+    score = storage.load_score_predictions("complexity", "ard-complexity", 1, "standard")
+    assert score is not None
+    assert score.height == 200  # full universe
+    assert "game_id" in score.columns
+    assert "predicted_complexity" in score.columns
+```
+
+- [ ] **Step 2: Run, expect failure**
+
+Run: `uv run pytest tests/test_pipeline_score_snapshot.py -v`
+Expected: ImportError on `from src.pipeline.score import score`.
+
+- [ ] **Step 3: Replace src/pipeline/score.py**
+
+Read what's currently in [src/pipeline/score.py](src/pipeline/score.py) — likely a thin shim like train.py was. Replace its entire contents with:
+
+```python
+"""Snapshot-aware scoring orchestrator.
+
+Scores the snapshot universe with a candidate's per-split pipeline and
+writes ``score.parquet`` under each (candidate, split). Downstream
+candidates read these files to construct their training features.
+
+CLI::
+
+    uv run python -m src.pipeline.score \\
+        --model complexity --candidate ard-complexity \\
+        --snapshot-version 1 --splits standard,yoy_2018 \\
+        [--candidate-version N]
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import polars as pl
+
+from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
+from src.utils.logging import setup_logging
+
+logger = logging.getLogger(__name__)
+
+
+_PRED_COL = {
+    "complexity": "predicted_complexity",
+    "rating": "predicted_rating",
+    "users_rated": "predicted_users_rated",
+    "geek_rating": "predicted_geek_rating",
+    "hurdle": "predicted_hurdle",
+}
+
+
+def score(
+    snapshot_version: int,
+    model_type: str,
+    candidate: str,
+    candidate_version: Optional[int] = None,
+    splits: Optional[List[str]] = None,
+    upstream: Optional[Dict[str, str]] = None,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+) -> int:
+    """Score the snapshot universe for one candidate, on each split's
+    trained pipeline. Writes ``score.parquet`` per result dir.
+
+    Returns the candidate version actually scored.
+    """
+    upstream = upstream or {}
+    storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
+    universe = storage.load_universe()
+    if universe is None:
+        raise FileNotFoundError(f"No snapshot v{snapshot_version}")
+
+    if candidate_version is None:
+        versions = storage.list_candidate_versions(model_type, candidate)
+        if not versions:
+            raise FileNotFoundError(
+                f"No versions for {model_type}/{candidate} in v{snapshot_version}"
+            )
+        candidate_version = versions[-1]
+
+    if splits is None:
+        # Score every split that has a result for this candidate version
+        splits = []
+        cand_dir = storage.experiment_dir(model_type, candidate, candidate_version) / "results"
+        if cand_dir.exists():
+            splits = sorted(p.name for p in cand_dir.iterdir() if p.is_dir())
+
+    pred_col = _PRED_COL.get(model_type, "prediction")
+
+    for split_name in splits:
+        logger.info(f"Scoring {model_type}/{candidate}/v{candidate_version} on {split_name}")
+        result = storage.load_result(model_type, candidate, candidate_version, split_name)
+        if result is None:
+            raise FileNotFoundError(
+                f"No result for {model_type}/{candidate}/v{candidate_version}/{split_name}"
+            )
+        pipeline = result["pipeline"]
+
+        # Join upstream score columns onto the universe (so the pipeline
+        # can compute features that depend on, e.g. predicted_complexity)
+        scoring_universe = universe
+        for upstream_type, upstream_candidate in upstream.items():
+            versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
+            if not versions:
+                raise FileNotFoundError(
+                    f"Upstream {upstream_type}/{upstream_candidate} not found"
+                )
+            uv = versions[-1]
+            us = storage.load_score_predictions(upstream_type, upstream_candidate, uv, split_name)
+            if us is None:
+                raise FileNotFoundError(
+                    f"Upstream {upstream_type}/{upstream_candidate}/v{uv} has no "
+                    f"score.parquet for split {split_name!r}"
+                )
+            join_cols = [c for c in us.columns if c == "game_id" or c not in scoring_universe.columns]
+            scoring_universe = scoring_universe.join(us.select(join_cols), on="game_id", how="left")
+
+        X = scoring_universe.to_pandas()
+        preds = pipeline.predict(X)
+        score_df = scoring_universe.select(["game_id"]).clone().with_columns(
+            pl.Series(pred_col, preds)
+        )
+
+        # Save by re-saving the full result with the new score predictions
+        # (preserving existing tune/test predictions and metadata).
+        storage.save_result(
+            model_type=model_type,
+            candidate=candidate,
+            version=candidate_version,
+            split_name=split_name,
+            pipeline=result["pipeline"],
+            metrics=result["metrics"],
+            parameters=result["parameters"],
+            tune_predictions=result.get("tune_predictions"),
+            test_predictions=result.get("test_predictions"),
+            score_predictions=score_df,
+        )
+        logger.info(f"Wrote score.parquet for {model_type}/{candidate}/v{candidate_version}/{split_name}")
+
+    return candidate_version
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--candidate", type=str, required=True)
+    parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--candidate-version", type=int, default=None)
+    parser.add_argument("--splits", type=str, default=None,
+                        help="Comma-separated split names (default: every split with a result)")
+    parser.add_argument("--upstream", type=str, default=None)
+    parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
+    args = parser.parse_args()
+
+    setup_logging()
+
+    upstream: Dict[str, str] = {}
+    if args.upstream:
+        for pair in args.upstream.split(","):
+            k, v = pair.split("=", 1)
+            upstream[k.strip()] = v.strip()
+
+    splits = (
+        [s.strip() for s in args.splits.split(",") if s.strip()] if args.splits else None
+    )
+
+    version = score(
+        snapshot_version=args.snapshot_version,
+        model_type=args.model,
+        candidate=args.candidate,
+        candidate_version=args.candidate_version,
+        splits=splits,
+        upstream=upstream,
+        base_dir=args.base_dir,
+    )
+    print(f"scored: {args.model}/{args.candidate}/v{version}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Run test**
+
+Run: `uv run pytest tests/test_pipeline_score_snapshot.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/pipeline/score.py tests/test_pipeline_score_snapshot.py
+git commit -m "feat: rewrite pipeline.score for snapshot tree"
 ```
 
 ### Task 17: Cross-split summary writer
 
 **Files:**
-- Modify: `src/models/train_snapshot.py`
-- Test: `tests/test_train_snapshot.py`
+- Modify: `src/pipeline/train.py`
+- Test: `tests/test_pipeline_train_snapshot.py` (append)
 
-After all splits succeed, roll up `metrics.json` across splits into the candidate's `summary.json`.
+After `pipeline.train` finishes all splits for a candidate, write a candidate-level `summary.json` rolling up per-split metrics. Useful for cross-split comparison without having to walk the result tree.
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Append failing test**
 
-Append to `tests/test_train_snapshot.py`:
+In `tests/test_pipeline_train_snapshot.py` add:
 
 ```python
-def test_summary_json_written_after_multi_split_training(synthetic_snapshot, tmp_path):
-    base, v = synthetic_snapshot
-    from src.models.build_split import build_split
+def test_summary_json_written_after_multi_split_training(tmp_path: Path) -> None:
     import json
+    base, v = _synthetic_universe(tmp_path)
     build_split(
         snapshot_version=v, split_name="yoy_2020",
         train_through=2018, tune_start=2019, tune_through=2019,
-        test_start=2020, test_through=2020, base_dir=base,
+        test_start=2020, test_through=2020,
+        base_dir=base,
     )
-    cfg = {"name": "logistic-hurdle", "algorithm": "logistic", "use_embeddings": False}
-    train_candidate(
-        snapshot_version=v, model_type="hurdle", candidate="logistic-hurdle",
-        candidate_config=cfg, splits=["standard", "yoy_2020"], base_dir=base, upstream={},
+
+    cfg = {
+        "name": "logistic-hurdle", "algorithm": "logistic",
+        "use_embeddings": False, "use_sample_weights": False,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="hurdle",
+        candidate="logistic-hurdle", candidate_config=cfg,
+        splits=["standard", "yoy_2020"], upstream={}, base_dir=base,
     )
 
     storage = SnapshotStorage(snapshot_version=v, base_dir=base)
@@ -2095,21 +2711,19 @@ def test_summary_json_written_after_multi_split_training(synthetic_snapshot, tmp
     assert summary_path.exists()
     summary = json.loads(summary_path.read_text())
     assert sorted(summary["per_split"].keys()) == ["standard", "yoy_2020"]
-    assert "tune" in summary["per_split"]["standard"]
-    assert "test" in summary["per_split"]["standard"]
 ```
 
-- [ ] **Step 2: Run test, expect failure (no summary written yet)**
+- [ ] **Step 2: Run, expect failure**
 
-Run: `uv run pytest tests/test_train_snapshot.py::test_summary_json_written_after_multi_split_training -v`
+Run: `uv run pytest tests/test_pipeline_train_snapshot.py::test_summary_json_written_after_multi_split_training -v`
 Expected: FAIL — `summary.json` does not exist.
 
-- [ ] **Step 3: Implement summary writer**
+- [ ] **Step 3: Add summary writer to pipeline.train**
 
-In `src/models/train_snapshot.py`, find this block at the end of `train_candidate`:
+In [src/pipeline/train.py](src/pipeline/train.py), modify the `train()` function. Find the end of the per-split loop:
 
 ```python
-        logger.info(f"Wrote result for {model_type}/{candidate}/v{candidate_version}/{split_name}")
+        logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
     return candidate_version
 ```
@@ -2117,7 +2731,7 @@ In `src/models/train_snapshot.py`, find this block at the end of `train_candidat
 Replace with:
 
 ```python
-        logger.info(f"Wrote result for {model_type}/{candidate}/v{candidate_version}/{split_name}")
+        logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
     _write_summary(storage, model_type, candidate, candidate_version, splits)
     return candidate_version
@@ -2130,7 +2744,6 @@ def _write_summary(
     version: int,
     splits: List[str],
 ) -> Path:
-    """Roll up per-split metrics into summary.json at the candidate level."""
     import json as _json
     per_split: Dict[str, Any] = {}
     for split_name in splits:
@@ -2152,63 +2765,95 @@ def _write_summary(
     return path
 ```
 
-- [ ] **Step 4: Run test, expect pass**
+- [ ] **Step 4: Run, expect pass**
 
-Run: `uv run pytest tests/test_train_snapshot.py -v`
-Expected: all passing.
+Run: `uv run pytest tests/test_pipeline_train_snapshot.py -v`
+Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/models/train_snapshot.py tests/test_train_snapshot.py
+git add src/pipeline/train.py tests/test_pipeline_train_snapshot.py
 git commit -m "feat: write summary.json rolling up cross-split metrics"
 ```
 
-### Task 18: End-to-end manual chain test
+### Task 18: Manual end-to-end chain
 
 **Files:**
-- None (manual verification)
+- None (manual verification on real data)
 
-- [ ] **Step 1: Build YoY splits on top of v1**
+This step is not a code change — it confirms the new flow works end-to-end against the real BQ data and produces metrics in the same ballpark as today's legacy training.
 
-Run: `uv run python -m src.models.build_split --snapshot-version 1 --yoy --yoy-start 2018 --yoy-end 2024`
-Expected: prints `yoy splits: v1/yoy_2018..yoy_2024`.
-
-- [ ] **Step 2: Train the chain**
+- [ ] **Step 1: Build a real snapshot from BigQuery**
 
 ```bash
-uv run python -m src.models.train_snapshot --model hurdle --candidate logistic-hurdle \
-  --snapshot-version 1 --splits standard,yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
-
-uv run python -m src.models.train_snapshot --model complexity --candidate ard-complexity \
-  --snapshot-version 1 --splits standard,yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
-
-uv run python -m src.models.train_snapshot --model rating --candidate ard-ridge-rating \
-  --snapshot-version 1 --splits standard,yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
-
-uv run python -m src.models.train_snapshot --model users_rated --candidate ard-ridge-users_rated \
-  --snapshot-version 1 --splits standard,yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
-
-uv run python -m src.models.train_snapshot --model geek_rating --candidate ard-geek_rating \
-  --snapshot-version 1 --splits standard,yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
+uv run python -m src.models.build_snapshot --use-embeddings
 ```
 
-- [ ] **Step 3: Verify summary.json for each candidate**
+Expected: prints `snapshot_version: 1` (or higher if you've previously experimented). Creates `models/experiments/_snapshots/v{N}/universe.parquet`.
+
+- [ ] **Step 2: Build splits**
+
+```bash
+uv run python -m src.models.build_split --snapshot-version 1 --split-name standard
+uv run python -m src.models.build_split --snapshot-version 1 --yoy --yoy-start 2018 --yoy-end 2024
+```
+
+- [ ] **Step 3: Train the chain on the standard split first**
+
+```bash
+uv run python -m src.pipeline.train --model hurdle --candidate logistic-hurdle \
+  --snapshot-version 1 --splits standard
+
+uv run python -m src.pipeline.train --model complexity --candidate ard-complexity \
+  --snapshot-version 1 --splits standard
+
+uv run python -m src.pipeline.score --model complexity --candidate ard-complexity \
+  --snapshot-version 1 --splits standard
+
+uv run python -m src.pipeline.train --model rating --candidate ard-ridge-rating \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+
+uv run python -m src.pipeline.train --model users_rated --candidate ard-ridge-users_rated \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+
+uv run python -m src.pipeline.score --model rating --candidate ard-ridge-rating \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+
+uv run python -m src.pipeline.score --model users_rated --candidate ard-ridge-users_rated \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+
+uv run python -m src.pipeline.train --model geek_rating --candidate ard-geek_rating \
+  --snapshot-version 1 --splits standard \
+  --upstream complexity=ard-complexity,rating=ard-ridge-rating,users_rated=ard-ridge-users_rated
+```
+
+- [ ] **Step 4: Sanity-check metrics**
 
 ```bash
 for m in hurdle complexity rating users_rated geek_rating; do
   echo "=== $m ==="
-  cat models/experiments/_snapshots/v1/experiments/$m/*/v1/summary.json | head -20
+  cat models/experiments/_snapshots/v1/experiments/$m/*/v1/results/standard/metrics.json | head -30
 done
 ```
 
-Expected: each `summary.json` contains 8 split entries (`standard` + 7 YoY) with sensible metrics.
+Expected: each model's test metrics should be in the same ballpark as the legacy `models/experiments/{model_type}/...` results. Big regressions = a real bug; investigate before continuing.
+
+- [ ] **Step 5: Repeat across YoY splits (optional but recommended)**
+
+```bash
+uv run python -m src.pipeline.train --model hurdle --candidate logistic-hurdle \
+  --snapshot-version 1 --splits yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022,yoy_2023,yoy_2024
+# ... and similarly for the rest of the chain
+```
+
+`summary.json` should now contain per-split metrics for the headline + all YoY splits.
 
 ---
 
 ## Stage 4: K-fold OOF Scoring for Upstream Models
 
-End state: `score.parquet` for `complexity`, `rating`, and `users_rated` uses K-fold OOF predictions for the train rows. Downstream models train on honest features.
+End state: `score.parquet` for upstream models (complexity, rating, users_rated) uses K-fold OOF predictions for the train rows. Downstream models train on honest features.
 
 ### Task 19: K-fold OOF predictor utility
 
@@ -2216,7 +2861,7 @@ End state: `score.parquet` for `complexity`, `rating`, and `users_rated` uses K-
 - Create: `src/models/oof.py`
 - Test: `tests/test_oof_scoring.py`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write failing tests**
 
 Create `tests/test_oof_scoring.py`:
 
@@ -2225,7 +2870,6 @@ Create `tests/test_oof_scoring.py`:
 
 import numpy as np
 import pandas as pd
-import pytest
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -2276,7 +2920,7 @@ def test_oof_with_proba_returns_class_one_proba():
     assert preds.min() >= 0 and preds.max() <= 1
 ```
 
-- [ ] **Step 2: Run tests, expect failure**
+- [ ] **Step 2: Run, expect failure**
 
 Run: `uv run pytest tests/test_oof_scoring.py -v`
 Expected: ImportError.
@@ -2288,10 +2932,10 @@ Create `src/models/oof.py`:
 ```python
 """K-fold out-of-fold prediction utility.
 
-Given a fitted-yet-unfitted pipeline and a (X, y) training frame, produce
-predictions for every row of X using only models that did not see that row.
-Used to generate honest training-time features for downstream cascaded
-models (complexity → rating, etc).
+Given an unfitted pipeline and a (X, y) frame, produce predictions for
+every row of X using only models that did not see that row. Used to
+generate honest training-time features for downstream cascaded models
+(complexity → rating, etc).
 """
 
 from __future__ import annotations
@@ -2312,7 +2956,7 @@ def kfold_oof_predict(
     seed: int = 42,
     predict_proba: bool = False,
 ) -> np.ndarray:
-    """Produce out-of-fold predictions for every row of X.
+    """Return out-of-fold predictions for every row of X.
 
     Args:
         pipeline: Unfitted sklearn pipeline. Cloned per fold.
@@ -2321,7 +2965,7 @@ def kfold_oof_predict(
         k: Number of folds.
         seed: Random seed for fold assignment.
         predict_proba: If True, return probability of the positive class
-            (binary classification). Default False (regression / argmax).
+            (binary classification). Default False.
     """
     n = len(X)
     out = np.zeros(n, dtype=float)
@@ -2340,7 +2984,7 @@ def kfold_oof_predict(
     return out
 ```
 
-- [ ] **Step 4: Run tests, expect pass**
+- [ ] **Step 4: Run, expect pass**
 
 Run: `uv run pytest tests/test_oof_scoring.py -v`
 Expected: 4 passed.
@@ -2352,216 +2996,189 @@ git add src/models/oof.py tests/test_oof_scoring.py
 git commit -m "feat: K-fold OOF prediction utility"
 ```
 
-### Task 20: Wire OOF into score.parquet for upstream models
+### Task 20: Wire OOF into pipeline.score for upstream models
 
 **Files:**
-- Modify: `src/models/train_snapshot.py`
-- Test: `tests/test_train_snapshot.py`
+- Modify: `src/pipeline/score.py`
+- Test: `tests/test_pipeline_score_snapshot.py`
 
-The score.parquet for upstream models (complexity, rating, users_rated) should use OOF predictions for train rows. Tune/test rows continue to be predicted by the model trained on the full train fold (this is already correct because tune/test were never in train). Rows outside train+tune+test get the finalized model — but finalize hasn't happened yet at this point in the flow, so for now use the train-fold model for those rows too. Stage 5 wires in finalize.
+For upstream model types (complexity, rating, users_rated), `score.parquet` for train rows should be OOF rather than in-sample. Tune/test rows are already OOF in the sense that the train-fold pipeline never saw them. Rows outside train+tune+test continue to be predicted by the train-fold pipeline (Stage 5 swaps in the finalized model for those).
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Append failing test**
 
-Append to `tests/test_train_snapshot.py`:
+In `tests/test_pipeline_score_snapshot.py` add:
 
 ```python
-def test_score_parquet_train_rows_are_oof_for_upstream_models(synthetic_snapshot, tmp_path):
-    """For upstream models (complexity in this case), train rows in
-    score.parquet should be OOF, not in-sample. We verify by checking
-    that score.parquet's predicted_complexity for train rows differs
-    from what an in-sample model would produce (loose check)."""
-    base, v = synthetic_snapshot
-    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+def test_score_uses_oof_for_upstream_train_rows(tmp_path: Path, monkeypatch) -> None:
+    """When scoring an upstream model, kfold_oof_predict is invoked for the train rows."""
+    base, v = _synthetic_universe(tmp_path)
 
-    cfg = {"name": "ard-complexity", "algorithm": "ard", "use_embeddings": False, "oof_folds": 3}
-    train_candidate(
-        snapshot_version=v, model_type="complexity", candidate="ard-complexity",
-        candidate_config=cfg, splits=["standard"], base_dir=base, upstream={},
+    # Train complexity with a small k so the test is fast
+    cfg = {
+        "name": "ard-complexity", "algorithm": "ridge",
+        "use_embeddings": False, "use_sample_weights": False,
+        "oof_folds": 3,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=cfg,
+        splits=["standard"], upstream={}, base_dir=base,
     )
 
-    score = storage.load_score_predictions("complexity", "ard-complexity", 1, "standard")
-    split = storage.load_split("standard")
-    train_ids = set(split["train"]["game_id"].to_list())
-    score_pd = score.to_pandas()
-
-    # Sanity: every game in the universe appears in score
-    assert set(score_pd["game_id"]).issuperset(train_ids)
-    # The score for train rows should not all be NaN; the OOF code path filled them in
-    train_scores = score_pd[score_pd["game_id"].isin(train_ids)]
-    assert not train_scores["predicted_complexity"].isna().all()
-```
-
-- [ ] **Step 2: Run test, expect failure**
-
-Run: `uv run pytest tests/test_train_snapshot.py::test_score_parquet_train_rows_are_oof_for_upstream_models -v`
-Expected: FAIL — current `_score_universe` is in-sample only; the test will likely pass anyway (the assertions are very loose). If it passes, write a stricter assertion that compares OOF vs in-sample on synthetic data with high signal. For this plan, the loose check is sufficient — the substantive verification happens in Step 3 by inspection.
-
-If the loose test passes, replace it with a stricter test that verifies the OOF path is being taken:
-
-```python
-def test_score_parquet_uses_oof_for_upstream(synthetic_snapshot, monkeypatch):
-    """When OOF is configured for an upstream model, kfold_oof_predict is called."""
-    base, v = synthetic_snapshot
-
     calls = []
-
     from src.models import oof as _oof
-    real_predict = _oof.kfold_oof_predict
+    real = _oof.kfold_oof_predict
 
     def spy(*args, **kwargs):
         calls.append(kwargs.get("k"))
-        return real_predict(*args, **kwargs)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(_oof, "kfold_oof_predict", spy)
 
-    cfg = {"name": "ard-complexity", "algorithm": "ard", "use_embeddings": False, "oof_folds": 3}
-    train_candidate(
-        snapshot_version=v, model_type="complexity", candidate="ard-complexity",
-        candidate_config=cfg, splits=["standard"], base_dir=base, upstream={},
+    run_pipeline_score(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_version=1,
+        splits=["standard"], upstream={}, base_dir=base,
     )
-    assert len(calls) >= 1, "kfold_oof_predict was not called for upstream model"
-    assert calls[0] == 3, "OOF was not called with the configured k=3"
+
+    assert calls, "kfold_oof_predict was not called"
+    assert calls[0] == 3
 ```
 
-- [ ] **Step 3: Implement OOF in score generation**
+- [ ] **Step 2: Run, expect failure**
 
-In `src/models/train_snapshot.py`, replace the existing `_score_universe` and adjust `train_candidate` to pass through OOF info. Find the call site:
+Run: `uv run pytest tests/test_pipeline_score_snapshot.py::test_score_uses_oof_for_upstream_train_rows -v`
+Expected: FAIL — assertion fails because kfold_oof_predict was not called.
+
+- [ ] **Step 3: Implement OOF in score**
+
+In [src/pipeline/score.py](src/pipeline/score.py), modify the per-split loop in `score()`. Find this block:
 
 ```python
-        # Score predictions: in-sample for now (Stage 3 replaces with OOF for upstream models)
-        universe_X = universe_with_upstream.drop(target_column).to_pandas() \
-            if target_column in universe_with_upstream.columns else universe_with_upstream.to_pandas()
-        score_preds = _score_universe(pipeline, universe_with_upstream, model_type)
+        X = scoring_universe.to_pandas()
+        preds = pipeline.predict(X)
+        score_df = scoring_universe.select(["game_id"]).clone().with_columns(
+            pl.Series(pred_col, preds)
+        )
 ```
 
 Replace with:
 
 ```python
-        # Score the universe. For upstream models (complexity, rating,
-        # users_rated), produce OOF predictions for the train rows so
-        # downstream models train on honest features.
-        score_preds = _score_universe(
-            pipeline=pipeline,
-            train_X=train_X,
-            train_y=train_y,
-            train_df=train_df,
-            universe=universe_with_upstream,
-            model_type=model_type,
-            candidate_config=candidate_config,
-            algorithm=algorithm,
-            preprocessor=preprocessor,
+        X = scoring_universe.to_pandas()
+        preds = pipeline.predict(X)
+        score_df = scoring_universe.select(["game_id"]).clone().with_columns(
+            pl.Series(pred_col, preds)
         )
+
+        # For upstream models (complexity/rating/users_rated), replace the
+        # in-sample predictions on train rows with K-fold OOF predictions
+        # so downstream training reads honest features.
+        if model_type in {"complexity", "rating", "users_rated"}:
+            split = storage.load_split(split_name)
+            if split is None:
+                raise FileNotFoundError(f"Split {split_name!r} no longer present")
+            score_df = _replace_train_rows_with_oof(
+                score_df=score_df,
+                pred_col=pred_col,
+                split_name=split_name,
+                pipeline=pipeline,
+                train_df=split["train"],
+                model_type=model_type,
+                candidate=candidate,
+                candidate_version=candidate_version,
+                storage=storage,
+                upstream=upstream,
+            )
 ```
 
-And replace the existing `_score_universe` function with this:
+Then add this helper function at the bottom of `src/pipeline/score.py` (before `main`):
 
 ```python
-def _score_universe(
+def _replace_train_rows_with_oof(
+    *,
+    score_df: pl.DataFrame,
+    pred_col: str,
+    split_name: str,
     pipeline,
-    train_X: pd.DataFrame,
-    train_y: pd.Series,
     train_df: pl.DataFrame,
-    universe: pl.DataFrame,
     model_type: str,
-    candidate_config: Dict[str, Any],
-    algorithm: Optional[str],
-    preprocessor: Any,
+    candidate: str,
+    candidate_version: int,
+    storage: SnapshotStorage,
+    upstream: Dict[str, str],
 ) -> pl.DataFrame:
-    """Score every row of the universe.
-
-    For upstream models (complexity, rating, users_rated), use K-fold OOF
-    on the train rows so downstream models train on honest features. The
-    full pipeline (trained on all of train) is used for tune/test rows
-    and any rows outside train+tune+test.
-
-    For non-upstream models (hurdle, geek_rating), score in-sample —
-    nothing downstream consumes their score.parquet train rows during
-    training.
-    """
+    """Run K-fold OOF on the train fold and substitute into score_df."""
     from src.models.oof import kfold_oof_predict
+    from src.models.outcomes.train import get_model_class
+    from src.models.outcomes.data import select_X_y
 
-    pred_col = {
-        "complexity": "predicted_complexity",
-        "rating": "predicted_rating",
-        "users_rated": "predicted_users_rated",
-        "geek_rating": "predicted_geek_rating",
-        "hurdle": "predicted_hurdle",
-    }.get(model_type, "prediction")
+    cfg = storage.load_candidate_config(model_type, candidate, candidate_version) or {}
+    oof_folds = int(cfg.get("oof_folds", 5))
 
-    is_upstream = model_type in {"complexity", "rating", "users_rated"}
-    oof_folds = int(candidate_config.get("oof_folds", 5))
+    # Re-construct an unfitted pipeline equivalent to the trained one.
+    # The simplest route: clone the trained pipeline (clears fitted state).
+    from sklearn.base import clone
+    fresh_pipeline = clone(pipeline)
 
-    universe_X = universe.to_pandas()
-    full_preds = pipeline.predict(universe_X)
-    out_pl = universe.select(["game_id"]).clone().with_columns(
-        pl.Series(pred_col, full_preds)
-    )
+    # Join upstream onto the train frame so X has the same columns as it
+    # did at train time
+    enriched_train = train_df
+    for upstream_type, upstream_candidate in upstream.items():
+        versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
+        if not versions:
+            continue
+        uv = versions[-1]
+        us = storage.load_score_predictions(upstream_type, upstream_candidate, uv, split_name)
+        if us is None:
+            continue
+        join_cols = [c for c in us.columns if c == "game_id" or c not in enriched_train.columns]
+        enriched_train = enriched_train.join(us.select(join_cols), on="game_id", how="left")
 
-    if not is_upstream:
-        return out_pl
+    target_column = get_model_class(model_type)().target_column
+    X, y = select_X_y(enriched_train, target_column)
 
-    # OOF for train rows
-    fresh_pipeline = _fresh_pipeline_like(preprocessor, algorithm, model_type)
-    oof_train_preds = kfold_oof_predict(
+    oof_preds = kfold_oof_predict(
         pipeline=fresh_pipeline,
-        X=train_X,
-        y=train_y,
+        X=X,
+        y=y,
         k=oof_folds,
         seed=42,
     )
-    train_ids = set(train_df["game_id"].to_list())
-    train_id_to_oof = dict(zip(train_df["game_id"].to_list(), oof_train_preds))
 
-    out_pd = out_pl.to_pandas()
+    train_id_to_oof = dict(zip(enriched_train["game_id"].to_list(), oof_preds))
+    out_pd = score_df.to_pandas()
+    train_ids = set(enriched_train["game_id"].to_list())
     mask = out_pd["game_id"].isin(train_ids)
     out_pd.loc[mask, pred_col] = out_pd.loc[mask, "game_id"].map(train_id_to_oof)
     return pl.from_pandas(out_pd)
-
-
-def _fresh_pipeline_like(preprocessor, algorithm: Optional[str], model_type: str):
-    """Construct a fresh, unfitted pipeline equivalent to the one used for
-    training. Used by OOF to avoid mutating the trained pipeline in place.
-    """
-    from sklearn.base import clone
-    from src.models.training import build_estimator
-    from sklearn.pipeline import Pipeline as SKPipeline
-
-    estimator = build_estimator(model_type=model_type, algorithm=algorithm)
-    return SKPipeline(steps=[("preprocessor", clone(preprocessor)), ("model", estimator)])
 ```
 
-(If `src.models.training.build_estimator` does not exist with this exact signature, replace the call in `_fresh_pipeline_like` with whatever the existing `tune_model` uses to construct its inner estimator. Adapt to the actual API; the key is producing an unfitted pipeline whose preprocessing matches what the trained pipeline used.)
+- [ ] **Step 4: Run tests**
 
-- [ ] **Step 4: Run test, expect pass**
-
-Run: `uv run pytest tests/test_train_snapshot.py -v`
-Expected: all passing.
+Run: `uv run pytest tests/test_pipeline_score_snapshot.py -v`
+Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/models/train_snapshot.py tests/test_train_snapshot.py
-git commit -m "feat: OOF scoring for upstream models in score.parquet"
+git add src/pipeline/score.py tests/test_pipeline_score_snapshot.py
+git commit -m "feat: K-fold OOF on train rows in pipeline.score for upstream models"
 ```
 
-### Task 21: Manual end-to-end OOF verification
+### Task 21: Manual OOF verification
 
 **Files:**
-- None (manual)
+- None
 
-- [ ] **Step 1: Re-run the chain on v1 with OOF enabled**
-
-Bump candidate versions by deleting/regenerating, or run with a fresh snapshot. The simplest:
+- [ ] **Step 1: Re-run complexity scoring on the real snapshot**
 
 ```bash
-# delete prior runs (optional; these were Stage 3's work)
-rm -rf models/experiments/_snapshots/v1/experiments
-
-# rerun chain
-uv run python -m src.models.train_snapshot --model complexity --candidate ard-complexity \
+# Bump candidate version by re-training (or delete and rebuild — but training is cheap enough)
+uv run python -m src.pipeline.train --model complexity --candidate ard-complexity \
   --snapshot-version 1 --splits standard
-uv run python -m src.models.train_snapshot --model rating --candidate ard-ridge-rating \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+uv run python -m src.pipeline.score --model complexity --candidate ard-complexity \
+  --snapshot-version 1 --splits standard
 ```
 
 - [ ] **Step 2: Inspect score.parquet train rows**
@@ -2569,46 +3186,107 @@ uv run python -m src.models.train_snapshot --model rating --candidate ard-ridge-
 ```bash
 uv run python -c "
 import polars as pl
-score = pl.read_parquet('models/experiments/_snapshots/v1/experiments/complexity/ard-complexity/v1/results/standard/predictions/score.parquet')
-split = pl.read_parquet('models/experiments/_snapshots/v1/splits/standard/train.parquet')
-joined = score.join(split.select(['game_id', 'complexity']), on='game_id', how='inner')
+from src.models.snapshot_storage import SnapshotStorage
+
+s = SnapshotStorage(1)
+score = s.load_score_predictions('complexity', 'ard-complexity', s.list_candidate_versions('complexity', 'ard-complexity')[-1], 'standard')
+split = s.load_split('standard')
+joined = score.join(split['train'].select(['game_id', 'complexity']), on='game_id', how='inner')
 print('train rows in score.parquet:', joined.height)
 print(joined.head(10))
+print('predicted_complexity range:', joined.select('predicted_complexity').min(), joined.select('predicted_complexity').max())
 "
 ```
 
-Expected: prints the count and a sample with both `predicted_complexity` (from OOF) and `complexity` (actual). Eyeball that the OOF values look reasonable (in 1-5 range, varying).
+Expected: predicted_complexity for train rows should look reasonable (in [1, 5] range, varying), and should differ from a hypothetical in-sample prediction. The variation across rows is the visible sign that OOF is producing real held-out predictions.
 
-- [ ] **Step 3: Compare metrics on the rating model's tune/test against the previous chain**
+- [ ] **Step 3: Re-run rating with the new OOF complexity**
 
-If the rating model's tune RMSE noticeably *increased* compared to the in-sample-feature run from Stage 3, that's expected and a good sign — the model is no longer learning from a leaked feature. If it dropped or stayed identical, the OOF code path likely isn't being taken; debug.
+```bash
+uv run python -m src.pipeline.train --model rating --candidate ard-ridge-rating \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+```
+
+The rating model's tune RMSE may rise compared to the in-sample-feature run — that's expected and correct. The model is no longer learning from a leaked feature.
 
 ---
 
-## Stage 5: Finalize and Cleanup
+## Stage 5: Finalize
 
-End state: a candidate's `finalized.pkl` lives at the candidate level, refit on the full snapshot universe (or through `final_end_year`), ready for operational scoring.
+End state: `pipeline.finalize` produces a candidate-level `finalized.pkl`, refit on the full snapshot universe through some `final_end_year`. This is the deployable artifact for operational scoring.
 
-### Task 22: Per-candidate finalize step
+### Task 22: Rewrite src/pipeline/finalize.py for snapshot tree
 
 **Files:**
-- Modify: `src/models/train_snapshot.py`
-- Test: `tests/test_train_snapshot.py`
+- Modify: `src/pipeline/finalize.py`
+- Test: `tests/test_pipeline_finalize_snapshot.py`
 
 - [ ] **Step 1: Write failing test**
 
-Append to `tests/test_train_snapshot.py`:
+Create `tests/test_pipeline_finalize_snapshot.py`:
 
 ```python
-def test_finalize_writes_candidate_level_pipeline(synthetic_snapshot, tmp_path):
-    base, v = synthetic_snapshot
-    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
-    cfg = {"name": "ard-complexity", "algorithm": "ard", "use_embeddings": False}
+"""Tests for pipeline.finalize writing finalized.pkl at the candidate level."""
 
-    train_candidate(
-        snapshot_version=v, model_type="complexity", candidate="ard-complexity",
-        candidate_config=cfg, splits=["standard"], base_dir=base, upstream={},
-        finalize=True, finalize_through=2021,
+from pathlib import Path
+
+import polars as pl
+
+from src.models.build_snapshot import build_snapshot
+from src.models.build_split import build_split
+from src.models.snapshot_storage import SnapshotStorage
+from src.pipeline.train import train as run_pipeline_train
+from src.pipeline.finalize import finalize as run_pipeline_finalize
+
+
+def _synthetic_universe(tmp_path: Path) -> tuple[Path, int]:
+    base = tmp_path / "snaps"
+    n = 200
+    df = pl.DataFrame({
+        "game_id": list(range(1, n + 1)),
+        "year_published": [2018]*50 + [2019]*50 + [2020]*50 + [2021]*50,
+        "users_rated": [50] * (n // 2) + [10] * (n - n // 2),
+        "num_weights": [5] * n,
+        "complexity": [2.5] * n,
+        "rating": [7.0] * n,
+        "min_players": [2] * n,
+        "max_players": [4] * n,
+        "playing_time": [60] * n,
+        "name": [f"game_{i}" for i in range(n)],
+    })
+    src = tmp_path / "src.parquet"
+    df.write_parquet(src)
+    v = build_snapshot(local_data=src, base_dir=base, use_embeddings=False)
+    build_split(
+        snapshot_version=v, split_name="standard",
+        train_through=2019, tune_start=2020, tune_through=2020,
+        test_start=2021, test_through=2021,
+        base_dir=base,
+    )
+    return base, v
+
+
+def test_finalize_writes_candidate_level_pipeline(tmp_path: Path) -> None:
+    base, v = _synthetic_universe(tmp_path)
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+    cfg = {
+        "name": "ard-complexity", "algorithm": "ridge",
+        "use_embeddings": False, "use_sample_weights": False,
+    }
+
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=cfg,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+
+    run_pipeline_finalize(
+        snapshot_version=v,
+        model_type="complexity",
+        candidate="ard-complexity",
+        candidate_version=1,
+        finalize_through=2021,
+        base_dir=base,
     )
 
     finalized = storage.load_finalized_pipeline("complexity", "ard-complexity", 1)
@@ -2616,86 +3294,148 @@ def test_finalize_writes_candidate_level_pipeline(synthetic_snapshot, tmp_path):
 
     reg = storage.load_candidate_registration("complexity", "ard-complexity", 1)
     assert reg["finalize_through"] == 2021
+    assert "finalized_at" in reg
 ```
 
-- [ ] **Step 2: Run test, expect failure**
+- [ ] **Step 2: Run, expect failure**
 
-Run: `uv run pytest tests/test_train_snapshot.py::test_finalize_writes_candidate_level_pipeline -v`
-Expected: FAIL — `train_candidate` does not yet accept `finalize`.
+Run: `uv run pytest tests/test_pipeline_finalize_snapshot.py -v`
+Expected: ImportError.
 
-- [ ] **Step 3: Implement finalize**
+- [ ] **Step 3: Rewrite src/pipeline/finalize.py**
 
-In `train_candidate`, add `finalize: bool = False, finalize_through: Optional[int] = None` to the signature, and after the per-split loop and summary write:
+Replace the entire content of [src/pipeline/finalize.py](src/pipeline/finalize.py) with:
 
 ```python
-    if finalize:
-        _finalize_candidate(
-            storage=storage,
-            universe=universe,
-            model_type=model_type,
-            candidate=candidate,
-            version=candidate_version,
-            candidate_config=candidate_config,
-            target_column=target_column,
-            finalize_through=finalize_through,
-        )
+"""Snapshot-aware finalize orchestrator.
 
-    return candidate_version
+Refits a candidate's pipeline on the full snapshot universe (filtered
+through ``finalize_through`` if provided) and writes ``finalized.pkl``
+at the candidate level. Operational scoring downstream uses this
+artifact.
+
+CLI::
+
+    uv run python -m src.pipeline.finalize \\
+        --model complexity --candidate ard-complexity \\
+        --snapshot-version 1 [--candidate-version N] [--finalize-through 2024]
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Union
+
+import polars as pl
+from sklearn.base import clone
+
+from src.models.outcomes.data import select_X_y
+from src.models.outcomes.train import get_model_class
+from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
+from src.utils.logging import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
-def _finalize_candidate(
-    storage: SnapshotStorage,
-    universe: pl.DataFrame,
+def finalize(
+    snapshot_version: int,
     model_type: str,
     candidate: str,
-    version: int,
-    candidate_config: Dict[str, Any],
-    target_column: str,
-    finalize_through: Optional[int],
-) -> None:
-    """Refit the candidate on the full snapshot universe (filtered through
-    finalize_through if provided). Save as ``finalized.pkl`` at the
-    candidate level."""
-    from src.models.training import create_preprocessing_pipeline, fit_model
+    candidate_version: Optional[int] = None,
+    finalize_through: Optional[int] = None,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+) -> Path:
+    """Refit candidate on snapshot universe (≤ finalize_through) and save finalized.pkl."""
+    storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
+    universe = storage.load_universe()
+    if universe is None:
+        raise FileNotFoundError(f"No snapshot v{snapshot_version}")
+
+    if candidate_version is None:
+        versions = storage.list_candidate_versions(model_type, candidate)
+        if not versions:
+            raise FileNotFoundError(
+                f"No versions for {model_type}/{candidate}"
+            )
+        candidate_version = versions[-1]
+
+    # Use any existing per-split pipeline to produce a clone for refitting
+    cand_dir = storage.experiment_dir(model_type, candidate, candidate_version) / "results"
+    if not cand_dir.exists() or not any(cand_dir.iterdir()):
+        raise FileNotFoundError(
+            f"No results for {model_type}/{candidate}/v{candidate_version}; train first"
+        )
+    any_split = next(cand_dir.iterdir()).name
+    base_result = storage.load_result(model_type, candidate, candidate_version, any_split)
+    if base_result is None:
+        raise FileNotFoundError(f"Failed to load any result for {model_type}/{candidate}")
+    template_pipeline = base_result["pipeline"]
 
     df = universe
     if finalize_through is not None:
         df = df.filter(pl.col("year_published") <= int(finalize_through))
 
+    target_column = get_model_class(model_type)().target_column
     X, y = select_X_y(df, target_column)
-    algorithm = candidate_config.get("algorithm")
-    preprocessor = create_preprocessing_pipeline(X=X, model_type=model_type, algorithm=algorithm)
-    pipeline = fit_model(preprocessor=preprocessor, model_type=model_type,
-                         algorithm=algorithm, X=X, y=y)
-    storage.save_finalized_pipeline(model_type, candidate, version, pipeline)
 
-    reg = storage.load_candidate_registration(model_type, candidate, version) or {}
+    finalized_pipeline = clone(template_pipeline)
+    finalized_pipeline.fit(X, y)
+
+    storage.save_finalized_pipeline(model_type, candidate, candidate_version, finalized_pipeline)
+
+    reg = storage.load_candidate_registration(model_type, candidate, candidate_version) or {}
     reg["finalize_through"] = int(finalize_through) if finalize_through is not None else None
     reg["finalized_at"] = datetime.now().isoformat()
-    storage.save_candidate_registration(model_type, candidate, version, reg)
-```
+    storage.save_candidate_registration(model_type, candidate, candidate_version, reg)
 
-(If `fit_model` doesn't exist as named in `src/models/training.py`, replace the call with the actual training-fit primitive. The point is "fit a fresh preprocessor+model on (X, y) and return the fitted pipeline.")
+    finalized_path = (
+        storage.experiment_dir(model_type, candidate, candidate_version) / "finalized.pkl"
+    )
+    logger.info(f"Finalized {model_type}/{candidate}/v{candidate_version} → {finalized_path}")
+    return finalized_path
 
-Also extend the CLI's `main()` in `train_snapshot.py`:
 
-```python
-    parser.add_argument("--finalize", action="store_true", default=False)
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--candidate", type=str, required=True)
+    parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--candidate-version", type=int, default=None)
     parser.add_argument("--finalize-through", type=int, default=None)
+    parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
+    args = parser.parse_args()
+
+    setup_logging()
+    finalize(
+        snapshot_version=args.snapshot_version,
+        model_type=args.model,
+        candidate=args.candidate,
+        candidate_version=args.candidate_version,
+        finalize_through=args.finalize_through,
+        base_dir=args.base_dir,
+    )
+    print(f"finalized: {args.model}/{args.candidate}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 ```
 
-And wire those args through to `train_candidate(...)`.
+- [ ] **Step 4: Run, expect pass**
 
-- [ ] **Step 4: Run tests, expect pass**
-
-Run: `uv run pytest tests/test_train_snapshot.py -v`
-Expected: all passing.
+Run: `uv run pytest tests/test_pipeline_finalize_snapshot.py -v`
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/models/train_snapshot.py tests/test_train_snapshot.py
-git commit -m "feat: per-candidate finalize step writing finalized.pkl"
+git add src/pipeline/finalize.py tests/test_pipeline_finalize_snapshot.py
+git commit -m "feat: rewrite pipeline.finalize for snapshot tree (candidate-level finalized.pkl)"
 ```
 
 ### Task 23: Self-review checklist (manual)
@@ -2705,8 +3445,8 @@ git commit -m "feat: per-candidate finalize step writing finalized.pkl"
 
 - [ ] **Step 1: Run the full test suite**
 
-Run: `uv run pytest tests/test_snapshot_storage.py tests/test_build_snapshot.py tests/test_build_split.py tests/test_train_snapshot.py tests/test_oof_scoring.py tests/test_candidate_config.py -v`
-Expected: all passing. Note the count of tests.
+Run: `uv run pytest tests/ -v`
+Expected: all passing.
 
 - [ ] **Step 2: Run lint**
 
@@ -2716,31 +3456,40 @@ Expected: no errors.
 - [ ] **Step 3: End-to-end manual chain on real data**
 
 ```bash
-uv run python -m src.models.build_snapshot --use-embeddings   # if you don't already have v1
-# Skip this if v1 already exists.
+# If a v1 snapshot doesn't already exist, build one:
+uv run python -m src.models.build_snapshot --use-embeddings
 
-# If you need a fresh snapshot for testing the full flow, use --snapshot-version 2
-# and rebuild splits + train against v2.
-
-# Otherwise, on whatever the current snapshot version is:
 uv run python -m src.models.build_split --snapshot-version 1 --split-name standard
 uv run python -m src.models.build_split --snapshot-version 1 --yoy --yoy-start 2018 --yoy-end 2024
 
-# Train chain WITH finalize
-uv run python -m src.models.train_snapshot --model hurdle --candidate logistic-hurdle \
-  --snapshot-version 1 --splits standard --finalize --finalize-through 2024
-uv run python -m src.models.train_snapshot --model complexity --candidate ard-complexity \
-  --snapshot-version 1 --splits standard --finalize --finalize-through 2024
-uv run python -m src.models.train_snapshot --model rating --candidate ard-ridge-rating \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity \
-  --finalize --finalize-through 2024
-uv run python -m src.models.train_snapshot --model users_rated --candidate ard-ridge-users_rated \
-  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity \
-  --finalize --finalize-through 2024
-uv run python -m src.models.train_snapshot --model geek_rating --candidate ard-geek_rating \
+# Train + score the cascade. Each upstream model needs to be scored
+# before the next layer trains.
+uv run python -m src.pipeline.train --model hurdle --candidate logistic-hurdle \
+  --snapshot-version 1 --splits standard
+uv run python -m src.pipeline.train --model complexity --candidate ard-complexity \
+  --snapshot-version 1 --splits standard
+uv run python -m src.pipeline.score --model complexity --candidate ard-complexity \
+  --snapshot-version 1 --splits standard
+
+uv run python -m src.pipeline.train --model rating --candidate ard-ridge-rating \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+uv run python -m src.pipeline.train --model users_rated --candidate ard-ridge-users_rated \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+uv run python -m src.pipeline.score --model rating --candidate ard-ridge-rating \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+uv run python -m src.pipeline.score --model users_rated --candidate ard-ridge-users_rated \
+  --snapshot-version 1 --splits standard --upstream complexity=ard-complexity
+
+uv run python -m src.pipeline.train --model geek_rating --candidate ard-geek_rating \
   --snapshot-version 1 --splits standard \
-  --upstream complexity=ard-complexity,rating=ard-ridge-rating,users_rated=ard-ridge-users_rated \
-  --finalize --finalize-through 2024
+  --upstream complexity=ard-complexity,rating=ard-ridge-rating,users_rated=ard-ridge-users_rated
+
+# Finalize each candidate
+for m in hurdle complexity rating users_rated geek_rating; do
+  cand=$(uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$m')[0])")
+  uv run python -m src.pipeline.finalize --model $m --candidate $cand \
+    --snapshot-version 1 --finalize-through 2024
+done
 ```
 
 - [ ] **Step 4: Inspect the tree**
@@ -2769,5 +3518,5 @@ Compare metrics from the new layout's `summary.json` files against the existing 
 
 - Spec covers: snapshot storage, split storage, in-snapshot training, cascading dependencies, K-fold OOF, finalize-at-candidate-level, candidates-in-config — all have tasks.
 - Out of scope per spec (streamlit/Quarto adaptation, GCS sync, legacy migration, snapshot diffing) — correctly omitted from plan.
-- Tasks 13 and 20 lean on existing functions (`tune_model`, `evaluate_model`, `create_preprocessing_pipeline`, `build_estimator`, `fit_model`) whose signatures are not pinned down in this plan. The implementer must inspect `src/models/training.py` and adapt the calls — these are noted inline. This is unavoidable without auditing every existing helper, and is acceptable because the engineer is working on a redesign branch where minor adjustments to existing helpers are fine.
-- Type/method consistency: `train_candidate(...)` signature is consistent across Tasks 13, 15, 16, 17, 22. `SnapshotStorage`'s method names match across tasks.
+- Architectural shape: `outcomes/train.py` becomes the pure model layer (`train_one(model, candidate_config, frames) -> artifacts`); `src/pipeline/{train,score,finalize}.py` becomes the snapshot-aware orchestration layer. The Makefile targets (`make hurdle`, `make complexity`, etc.) keep pointing at `src.pipeline.*` and continue to work; only their CLI args change.
+- The legacy `outcomes/train.py:main`, `parse_arguments`, `main_finalize` are deleted on this branch. Production behavior continues on `main` until merge.
