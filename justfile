@@ -3,14 +3,14 @@ set dotenv-load
 # Defaults — every single-user recipe takes `user` as its first
 # positional argument. Pass it like a CLI:
 #
-#   just train rahdo own lgbm_default
-#   just finalize rahdo own lgbm_row_norm
-#   just promote rahdo
+#   just collection-train rahdo own lgbm_default
+#   just collection-finalize rahdo own lgbm_row_norm
+#   just collection-promote rahdo
 #
-# Bare invocations (`just train`) fall back to the `username` variable
+# Bare invocations (`just collection-train`) fall back to the `username` variable
 # below. Override per-invocation only if you really need to:
 #
-#   just username=alice train
+#   just username=alice collection-train
 username := "phenrickson"
 # Pull `environment` from the .env file (loaded via `set dotenv-load`
 # above). Falls back to "dev" if .env doesn't define ENVIRONMENT.
@@ -22,21 +22,21 @@ default:
     @just --list
 
 # Fetch a user's collection from BGG and upsert into BigQuery.
-# Run this before `sweep` for a user whose collection has not been
+# Run this before `collection-sweep` for a user whose collection has not been
 # loaded yet.
-load user=username:
+collection-load user=username:
     uv run python -m src.collection.load \
         --username {{user}} --environment {{environment}}
 
 # Persist canonical train/val/test splits for an outcome.
-split user=username outcome="own":
+collection-split user=username outcome="own":
     uv run python -m src.collection.split \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}}
 
 # Train one candidate (named in config.collections.candidates) against
 # the latest canonical splits.
-train user=username outcome="own" candidate="lgbm_default" splits_version="":
+collection-train user=username outcome="own" candidate="lgbm_default" splits_version="":
     uv run python -m src.collection.train \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
@@ -45,7 +45,7 @@ train user=username outcome="own" candidate="lgbm_default" splits_version="":
 
 # Train every candidate listed in config.collections.candidates for an outcome.
 # Continue-on-error: runs every candidate, exits non-zero at the end if any failed.
-train-all user=username outcome="own":
+collection-train-all user=username outcome="own":
     #!/usr/bin/env bash
     failed=()
     candidates=$(uv run python -c 'from src.collection.candidates import load_candidates; from src.utils.config import load_config; print("\n".join(load_candidates(load_config().raw_config)))')
@@ -67,7 +67,7 @@ train-all user=username outcome="own":
     fi
 
 # Print or write a comparison table for an outcome.
-compare user=username outcome="own" out="" candidates="":
+collection-compare user=username outcome="own" out="" candidates="":
     uv run python -m src.collection.compare \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}} \
@@ -77,7 +77,7 @@ compare user=username outcome="own" out="" candidates="":
 # Refit a trained candidate on train+val+test through finalize_through.
 # Defaults to collections.finalize_through from config.yaml; override with
 # finalize_through=2025 if you need a different cutoff.
-finalize user=username outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
+collection-finalize user=username outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
     uv run python -m src.collection.finalize \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
@@ -87,7 +87,7 @@ finalize user=username outcome="own" candidate="lgbm_default" version="latest" f
 
 # Finalize every candidate listed in config.collections.candidates for an outcome.
 # Continue-on-error: runs every candidate, exits non-zero at the end if any failed.
-finalize-all user=username outcome="own" finalize_through="":
+collection-finalize-all user=username outcome="own" finalize_through="":
     #!/usr/bin/env bash
     failed=()
     candidates=$(uv run python -c 'from src.collection.candidates import load_candidates; from src.utils.config import load_config; print("\n".join(load_candidates(load_config().raw_config)))')
@@ -111,8 +111,8 @@ finalize-all user=username outcome="own" finalize_through="":
 
 # Register a finalized collection model to GCS for the standalone scoring
 # service AND insert a row in the BQ registry. Strict-finalized: requires
-# finalized.pkl (run `finalize` first).
-promote user=username outcome="own" candidate="lgbm_default" version="latest" description="":
+# finalized.pkl (run `collection-finalize` first).
+collection-promote user=username outcome="own" candidate="lgbm_default" version="latest" description="":
     uv run python -m services.collections.register_model \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} --version {{version}} \
@@ -120,8 +120,8 @@ promote user=username outcome="own" candidate="lgbm_default" version="latest" de
         --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{user}}/{{outcome}}")"
 
 # Register one candidate across multiple outcomes in one shot.
-#   just promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
-promote-many user=username outcomes="own" candidate="lgbm_default" version="latest" description="":
+#   just collection-promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
+collection-promote-many user=username outcomes="own" candidate="lgbm_default" version="latest" description="":
     uv run python -m services.collections.register_all \
         --username {{user}} --environment {{environment}} \
         --outcomes "{{outcomes}}" \
@@ -134,9 +134,9 @@ promote-many user=username outcomes="own" candidate="lgbm_default" version="late
 # artifact for that candidate. Continue-on-error; exits non-zero if any user
 # genuinely failed.
 #
-#   just promote-all
-#   just promote-all own
-promote-all outcome="own":
+#   just collection-promote-all
+#   just collection-promote-all own
+collection-promote-all outcome="own":
     @users=$(uv run python -c "import yaml; \
         c = yaml.safe_load(open('config.yaml')); \
         print('\n'.join(c['collections']['users']))"); \
@@ -152,55 +152,55 @@ promote-all outcome="own":
             skipped=$((skipped + 1)); \
             continue; \
         fi; \
-        echo "=== promote $u {{outcome}} $cand ==="; \
-        if just promote $u {{outcome}} $cand; then \
+        echo "=== collection-promote $u {{outcome}} $cand ==="; \
+        if just collection-promote $u {{outcome}} $cand; then \
             deployed=$((deployed + 1)); \
         else \
             echo "FAIL: $u"; \
             failed=$((failed + 1)); \
         fi; \
     done <<< "$users"; \
-    echo "promote-all: deployed=$deployed skipped=$skipped failed=$failed"; \
+    echo "collection-promote-all: deployed=$deployed skipped=$skipped failed=$failed"; \
     [ $failed -eq 0 ]
 
 # List registered collection models for a user from GCS.
-#   just verify
-#   just verify rahdo
-#   just verify rahdo own
-verify user=username outcome="":
+#   just collection-verify
+#   just collection-verify rahdo
+#   just collection-verify rahdo own
+collection-verify user=username outcome="":
     uv run python -m services.collections.verify_models \
         --username {{user}} \
         $([ -n "{{outcome}}" ] && echo "--outcome {{outcome}}")
 
-# End-to-end experiment cycle: split → train all → compare.
-# Always runs `compare` if `split` succeeded, even when some candidates fail.
+# End-to-end experiment cycle: collection-split → collection-train-all → collection-compare.
+# Always runs `collection-compare` if `collection-split` succeeded, even when some candidates fail.
 # Exits non-zero if any candidate failed, so cron/CI still notices.
-sweep user=username outcome="own":
+collection-sweep user=username outcome="own":
     #!/usr/bin/env bash
     set -e
-    just split {{user}} {{outcome}}
+    just collection-split {{user}} {{outcome}}
     set +e
-    just train-all {{user}} {{outcome}}
+    just collection-train-all {{user}} {{outcome}}
     train_status=$?
-    just compare {{user}} {{outcome}}
+    just collection-compare {{user}} {{outcome}}
     exit $train_status
 
 # Train all candidates and compare against the most recent existing split.
-# Same as `sweep` but skips the split step — use when iterating on candidates
-# against a fixed split.
-train-compare user=username outcome="own":
+# Same as `collection-sweep` but skips the split step — use when iterating on
+# candidates against a fixed split.
+collection-train-compare user=username outcome="own":
     #!/usr/bin/env bash
     set +e
-    just train-all {{user}} {{outcome}}
+    just collection-train-all {{user}} {{outcome}}
     train_status=$?
-    just compare {{user}} {{outcome}}
+    just collection-compare {{user}} {{outcome}}
     exit $train_status
 
 # Sweep across a list of users. Skips users who already have at least
 # one trained candidate for the outcome. Continue-on-error.
-#   just users-sweep "alice bob carol"
-#   just users-sweep "alice bob" ever_owned
-users-sweep users outcome="own":
+#   just collection-users-sweep "alice bob carol"
+#   just collection-users-sweep "alice bob" ever_owned
+collection-users-sweep users outcome="own":
     #!/usr/bin/env bash
     shopt -s nullglob
     failed=()
@@ -211,7 +211,7 @@ users-sweep users outcome="own":
             continue
         fi
         echo "===== $u ====="
-        if ! just sweep $u {{outcome}}; then
+        if ! just collection-sweep $u {{outcome}}; then
             failed+=("$u")
         fi
     done
@@ -224,29 +224,29 @@ users-sweep users outcome="own":
 # models/collections/ locally and pulls collection/games/upcoming
 # predictions from BigQuery (set BGG_REPORTS_OFFLINE=1 in .env to
 # stub the BQ-backed sections).
-#   just render                          # default user
-#   just render GOBBluth89               # other user
-#   just render GOBBluth89 ever_owned    # other user + outcome
-render user=username outcome="own" candidate="":
+#   just collection-render                          # default user
+#   just collection-render GOBBluth89               # other user
+#   just collection-render GOBBluth89 ever_owned    # other user + outcome
+collection-render user=username outcome="own" candidate="":
     uv run python -m reports.render \
         --username {{user}} --outcome {{outcome}} \
         $([ -n "{{candidate}}" ] && echo "--candidate {{candidate}}")
 
 # Render the collection report for every user under models/collections/.
-render-all outcome="own":
+collection-render-all outcome="own":
     uv run python -m reports.render --all-users --outcome {{outcome}}
 
 # Render the index page (reports/index.qmd) which lists all users with
 # finalized models and links to their per-user reports. Builds from the
 # local artifact tree by default; pass `source=gs://...` to build from
 # cloud storage instead (used by the CI workflow).
-render-index source="local":
+collection-render-index source="local":
     uv run python -m reports.build_index --source {{source}}
 
 # Render the report against synthetic fixture data — no BQ, no artifacts.
 # Use this for fast iteration on styling/layout: edits to the qmd, css,
 # or viz code can be checked in seconds rather than waiting on real loads.
-render-sandbox:
+collection-render-sandbox:
     uv run python -m reports.render --fixture
 
 # --- Artifact sync to GCS ---
@@ -259,9 +259,9 @@ render-sandbox:
 gcs_artifacts_root := "gs://bgg-predictive-models/" + environment + "/collections"
 
 # Sync one user's collection artifacts to GCS.
-#   just sync-artifacts rahdo
-#   just sync-artifacts rahdo --prune    # remove cloud files not in local
-sync-artifacts user=username prune="":
+#   just collection-sync-artifacts rahdo
+#   just collection-sync-artifacts rahdo --prune    # remove cloud files not in local
+collection-sync-artifacts user=username prune="":
     #!/usr/bin/env bash
     set -e
     src="{{local_root}}/{{user}}"
@@ -279,13 +279,13 @@ sync-artifacts user=username prune="":
 
 # Sync every local user's collection artifacts to GCS. Skips users with
 # no local directory; continue-on-error.
-sync-artifacts-all prune="":
+collection-sync-artifacts-all prune="":
     #!/usr/bin/env bash
     failed=()
     for user_dir in {{local_root}}/*/; do
         u=$(basename "$user_dir")
         echo "===== $u ====="
-        if ! just sync-artifacts "$u" {{prune}}; then
+        if ! just collection-sync-artifacts "$u" {{prune}}; then
             failed+=("$u")
         fi
     done
@@ -298,9 +298,9 @@ sync-artifacts-all prune="":
 # Use this on a fresh machine to seed models/collections/ from the
 # canonical cloud copy. No prune by default — pass `--prune` to also
 # remove local files missing from the cloud.
-#   just pull-artifacts rahdo
-#   just pull-artifacts rahdo --prune
-pull-artifacts user=username prune="":
+#   just collection-pull-artifacts rahdo
+#   just collection-pull-artifacts rahdo --prune
+collection-pull-artifacts user=username prune="":
     #!/usr/bin/env bash
     set -e
     src="{{gcs_artifacts_root}}/{{user}}"
@@ -315,7 +315,7 @@ pull-artifacts user=username prune="":
 
 # Pull every user under gs://.../collections/ into the local tree.
 # Continue-on-error.
-pull-artifacts-all prune="":
+collection-pull-artifacts-all prune="":
     #!/usr/bin/env bash
     failed=()
     users=$(gsutil ls "{{gcs_artifacts_root}}/" 2>/dev/null \
@@ -326,7 +326,7 @@ pull-artifacts-all prune="":
     fi
     for u in $users; do
         echo "===== $u ====="
-        if ! just pull-artifacts "$u" {{prune}}; then
+        if ! just collection-pull-artifacts "$u" {{prune}}; then
             failed+=("$u")
         fi
     done
@@ -335,28 +335,28 @@ pull-artifacts-all prune="":
         exit 1
     fi
 
-# --- Snapshot pipeline (bgg-rating-models redesign) ---
+# --- BGG game models (snapshot pipeline) ---
 #
-# These recipes drive the snapshot+split training framework. Distinct
-# from the collection-models recipes above; prefixed `snap-` to avoid
-# name collisions.
+# These recipes drive the snapshot+split training framework for the
+# universe-wide game models (hurdle, complexity, rating, users_rated,
+# geek_rating). Collection-models recipes are prefixed `collection-`.
 
 # Build a versioned data snapshot from BigQuery.
-snap-build:
+bgg-build:
     uv run python -m src.models.build_snapshot --use-embeddings
 
 # Build a single named split from a snapshot.
-snap-split snapshot="1" split="standard":
+bgg-split snapshot="1" split="standard":
     uv run python -m src.models.build_split \
         --snapshot-version {{snapshot}} --split-name {{split}}
 
 # Build the YoY family of splits.
-snap-yoy snapshot="1" start="2018" end="2024":
+bgg-yoy snapshot="1" start="2018" end="2024":
     uv run python -m src.models.build_split \
         --snapshot-version {{snapshot}} --yoy --yoy-start {{start}} --yoy-end {{end}}
 
 # Train one candidate.
-snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
+bgg-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="":
     #!/usr/bin/env bash
     set -e
     cand="{{candidate}}"
@@ -369,7 +369,7 @@ snap-train snapshot="1" model="hurdle" candidate="" splits="standard" upstream="
         $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
 
 # Score one candidate (writes score.parquet under each split).
-snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
+bgg-score snapshot="1" model="complexity" candidate="" splits="standard" upstream="":
     #!/usr/bin/env bash
     set -e
     cand="{{candidate}}"
@@ -381,12 +381,12 @@ snap-score snapshot="1" model="complexity" candidate="" splits="standard" upstre
         --snapshot-version {{snapshot}} --splits {{splits}} \
         $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
 
-# Run the full cascade for one snapshot+split. Each model trains and (where
-# downstream models depend on it) scores before the next layer trains.
+# Run the full training cascade for one snapshot+split. Each model trains and
+# (where downstream models depend on it) scores before the next layer trains.
 #
-#   just snap-cascade
-#   just snap-cascade snapshot=2 splits=standard,yoy_2024
-snap-cascade snapshot="1" splits="standard":
+#   just bgg-train-all
+#   just bgg-train-all snapshot=2 splits=standard,yoy_2024
+bgg-train-all snapshot="1" splits="standard":
     #!/usr/bin/env bash
     set -e
 
