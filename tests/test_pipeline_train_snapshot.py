@@ -181,3 +181,30 @@ def test_train_multi_split_with_upstream(tmp_path: Path) -> None:
 
     reg = storage.load_candidate_registration("rating", "ard-ridge-rating", 1)
     assert reg["upstream_experiments"] == {"complexity": "ard-complexity"}
+
+
+def test_summary_json_written_after_multi_split_training(tmp_path: Path) -> None:
+    import json
+    base, v = _synthetic_universe(tmp_path)
+    build_split(
+        snapshot_version=v, split_name="yoy_2020",
+        train_through=2018, tune_start=2019, tune_through=2019,
+        test_start=2020, test_through=2020,
+        base_dir=base,
+    )
+
+    cfg = {
+        "name": "logistic-hurdle", "algorithm": "logistic",
+        "use_embeddings": False, "use_sample_weights": False,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="hurdle",
+        candidate="logistic-hurdle", candidate_config=cfg,
+        splits=["standard", "yoy_2020"], upstream={}, base_dir=base,
+    )
+
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+    summary_path = storage.experiment_dir("hurdle", "logistic-hurdle", 1) / "summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text())
+    assert sorted(summary["per_split"].keys()) == ["standard", "yoy_2020"]

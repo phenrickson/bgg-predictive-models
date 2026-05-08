@@ -98,7 +98,37 @@ def train(
         )
         logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
+    _write_summary(storage, model_type, candidate, candidate_version, splits)
     return candidate_version
+
+
+def _write_summary(
+    storage: SnapshotStorage,
+    model_type: str,
+    candidate: str,
+    version: int,
+    splits: List[str],
+) -> Path:
+    """Roll up per-split metrics into summary.json at the candidate level."""
+    import json as _json
+    per_split: Dict[str, Any] = {}
+    for split_name in splits:
+        result = storage.load_result(model_type, candidate, version, split_name)
+        if result is None:
+            continue
+        per_split[split_name] = result["metrics"]
+    summary = {
+        "model_type": model_type,
+        "candidate": candidate,
+        "version": version,
+        "snapshot_version": storage.snapshot_version,
+        "splits": splits,
+        "per_split": per_split,
+        "created_at": datetime.now().isoformat(),
+    }
+    path = storage.experiment_dir(model_type, candidate, version) / "summary.json"
+    path.write_text(_json.dumps(summary, indent=2, default=str))
+    return path
 
 
 def _join_upstream(
