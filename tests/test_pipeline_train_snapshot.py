@@ -106,3 +106,78 @@ def test_pipeline_train_writes_result_artifacts(tmp_path: Path) -> None:
     assert reg["candidate"] == "logistic-hurdle"
     assert reg["splits"] == ["standard"]
     assert reg["upstream_experiments"] == {}
+
+
+def test_train_multi_split_with_upstream(tmp_path: Path) -> None:
+    """Train complexity, then rating with complexity as upstream, on two splits."""
+    base, v = _synthetic_universe(tmp_path)
+    # Add a yoy_2020 split (train≤2018, tune=2019, test=2020)
+    build_split(
+        snapshot_version=v, split_name="yoy_2020",
+        train_through=2018, tune_start=2019, tune_through=2019,
+        test_start=2020, test_through=2020,
+        base_dir=base,
+    )
+
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+
+    # Train complexity on both splits
+    complexity_cfg = {
+        "name": "ard-complexity",
+        "algorithm": "ridge",  # ridge is fine for tests; faster than ARD
+        "use_embeddings": False,
+        "use_sample_weights": False,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=complexity_cfg,
+        splits=["standard", "yoy_2020"], upstream={}, base_dir=base,
+    )
+
+    # pipeline.score doesn't exist yet (Task 16 wires it). Synthesize
+    # score.parquet for both splits manually so rating training has a
+    # column to join.
+    universe = storage.load_universe()
+    for split_name in ["standard", "yoy_2020"]:
+        score_df = universe.select(["game_id"]).with_columns(
+            pl.lit(2.5).alias("predicted_complexity")
+        )
+        result = storage.load_result("complexity", "ard-complexity", 1, split_name)
+        assert result is not None, f"Expected complexity result for {split_name}"
+        # Re-save the result with score_predictions added
+        storage.save_result(
+            model_type="complexity",
+            candidate="ard-complexity",
+            version=1,
+            split_name=split_name,
+            pipeline=result["pipeline"],
+            metrics=result["metrics"],
+            parameters=result["parameters"],
+            tune_predictions=result.get("tune_predictions"),
+            test_predictions=result.get("test_predictions"),
+            score_predictions=score_df,
+        )
+
+    # Train rating with complexity upstream
+    rating_cfg = {
+        "name": "ard-ridge-rating",
+        "algorithm": "ridge",
+        "use_embeddings": False,
+        "use_sample_weights": False,
+        "min_ratings": 0,  # synthetic data is too small for the default of 5
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="rating",
+        candidate="ard-ridge-rating", candidate_config=rating_cfg,
+        splits=["standard", "yoy_2020"],
+        upstream={"complexity": "ard-complexity"},
+        base_dir=base,
+    )
+
+    # Both splits got results
+    standard_result = storage.load_result("rating", "ard-ridge-rating", 1, "standard")
+    yoy_result = storage.load_result("rating", "ard-ridge-rating", 1, "yoy_2020")
+    assert standard_result is not None and yoy_result is not None
+
+    reg = storage.load_candidate_registration("rating", "ard-ridge-rating", 1)
+    assert reg["upstream_experiments"] == {"complexity": "ard-complexity"}
