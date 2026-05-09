@@ -108,6 +108,26 @@ def score(
             pl.Series(pred_col, preds)
         )
 
+        # For upstream models (complexity/rating/users_rated), replace the
+        # in-sample predictions on train rows with K-fold OOF predictions
+        # so downstream training reads honest features.
+        if model_type in {"complexity", "rating", "users_rated"}:
+            split = storage.load_split(split_name)
+            if split is None:
+                raise FileNotFoundError(f"Split {split_name!r} no longer present")
+            score_df = _replace_train_rows_with_oof(
+                score_df=score_df,
+                pred_col=pred_col,
+                split_name=split_name,
+                pipeline=pipeline,
+                train_df=split["train"],
+                model_type=model_type,
+                candidate=candidate,
+                candidate_version=candidate_version,
+                storage=storage,
+                upstream=upstream,
+            )
+
         # Save by re-saving the full result with the new score predictions
         # (preserving existing tune/test predictions and metadata).
         storage.save_result(
@@ -125,6 +145,64 @@ def score(
         logger.info(f"Wrote score.parquet for {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
     return candidate_version
+
+
+def _replace_train_rows_with_oof(
+    *,
+    score_df: pl.DataFrame,
+    pred_col: str,
+    split_name: str,
+    pipeline,
+    train_df: pl.DataFrame,
+    model_type: str,
+    candidate: str,
+    candidate_version: int,
+    storage: SnapshotStorage,
+    upstream: Dict[str, str],
+) -> pl.DataFrame:
+    """Run K-fold OOF on the train fold and substitute into score_df."""
+    from sklearn.base import clone
+    from src.models import oof
+    from src.models.outcomes.train import get_model_class
+    from src.models.outcomes.data import select_X_y
+
+    cfg = storage.load_candidate_config(model_type, candidate, candidate_version) or {}
+    oof_folds = int(cfg.get("oof_folds", 5))
+
+    # Clone the trained pipeline → an unfitted pipeline with the same structure
+    fresh_pipeline = clone(pipeline)
+
+    # Join upstream onto the train frame so X has the same columns as it
+    # did at train time
+    enriched_train = train_df
+    for upstream_type, upstream_candidate in upstream.items():
+        versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
+        if not versions:
+            continue
+        uv = versions[-1]
+        us = storage.load_score_predictions(upstream_type, upstream_candidate, uv, split_name)
+        if us is None:
+            continue
+        join_cols = [c for c in us.columns if c == "game_id" or c not in enriched_train.columns]
+        enriched_train = enriched_train.join(us.select(join_cols), on="game_id", how="left")
+
+    target_column = get_model_class(model_type)().target_column
+    X, y = select_X_y(enriched_train, target_column)
+
+    oof_preds = oof.kfold_oof_predict(
+        pipeline=fresh_pipeline,
+        X=X,
+        y=y,
+        k=oof_folds,
+        seed=42,
+    )
+
+    train_id_to_oof = dict(zip(enriched_train["game_id"].to_list(), oof_preds))
+    out_pd = score_df.to_pandas()
+    train_ids = set(enriched_train["game_id"].to_list())
+    mask = out_pd["game_id"].isin(train_ids)
+    out_pd.loc[mask, pred_col] = out_pd.loc[mask, "game_id"].map(train_id_to_oof)
+    return pl.from_pandas(out_pd)
 
 
 def main() -> int:

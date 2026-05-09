@@ -83,3 +83,45 @@ def test_pipeline_score_writes_score_parquet(tmp_path: Path) -> None:
     assert score.height == 200  # full universe
     assert "game_id" in score.columns
     assert "predicted_complexity" in score.columns
+
+
+def test_score_uses_oof_for_upstream_train_rows(tmp_path: Path, monkeypatch) -> None:
+    """When scoring an upstream model, kfold_oof_predict is invoked for train rows."""
+    base, v = _synthetic_universe(tmp_path)
+
+    # Train complexity with a small k so the test is fast
+    cfg = {
+        "name": "ard-complexity", "algorithm": "ridge",
+        "use_embeddings": False, "use_sample_weights": False,
+        "oof_folds": 3,
+    }
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=cfg,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+
+    calls = []
+    from src.models import oof as _oof
+    real = _oof.kfold_oof_predict
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("k"))
+        return real(*args, **kwargs)
+
+    # Patch where the function is LOOKED UP, not where it's defined.
+    # If pipeline.score does `from src.models.oof import kfold_oof_predict`
+    # then we need to patch `src.pipeline.score.kfold_oof_predict`.
+    # If it does `from src.models import oof; oof.kfold_oof_predict(...)`
+    # then we patch `src.models.oof.kfold_oof_predict`.
+    # Use the latter (module attr) as it's the more flexible default.
+    monkeypatch.setattr(_oof, "kfold_oof_predict", spy)
+
+    run_pipeline_score(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_version=1,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+
+    assert calls, "kfold_oof_predict was not called for upstream model"
+    assert calls[0] == 3, f"OOF was not called with k=3, got k={calls[0]}"
