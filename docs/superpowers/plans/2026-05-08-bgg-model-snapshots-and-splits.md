@@ -2967,7 +2967,9 @@ just snap-cascade snapshot=1 splits=yoy_2018,yoy_2019,yoy_2020,yoy_2021,yoy_2022
 
 ---
 
-## Stage 4: K-fold OOF Scoring for Upstream Models
+## Stage 4 (deferred): K-fold OOF Scoring for Upstream Models
+
+**Note on stage order.** The original plan had this stage execute next, before Finalize and Simulation. We swapped the order: Finalize (Stage 5 below) and Simulation (new Stage 5.5 below) execute first, OOF executes after. Reasoning: the upstream models are regularized ridge-style, so the in-sample-leak concern is real but small. We want a working end-to-end simulation evaluation first to know whether the methodology is sound at all; OOF is an honesty refinement on top. Read the stages in this order: Stage 5 → Stage 5.5 → Stage 4 → (final review at Task 23).
 
 End state: `score.parquet` for upstream models (complexity, rating, users_rated) uses K-fold OOF predictions for the train rows. Downstream models train on honest features.
 
@@ -3552,6 +3554,521 @@ Expected: PASS.
 ```bash
 git add src/pipeline/finalize.py tests/test_pipeline_finalize_snapshot.py
 git commit -m "feat: rewrite pipeline.finalize for snapshot tree (candidate-level finalized.pkl)"
+```
+
+## Stage 5.5: Simulation Evaluation
+
+End state: a `pipeline.evaluate_simulation` orchestrator that loads finalized pipelines from a snapshot, runs the chained-Bayesian simulation on a split's test fold, and writes per-game predictions + metrics under `_snapshots/v{N}/simulations/{name}/v{M}/`. This is the system-level metric that judges the methodology, not each model in isolation.
+
+The existing `src/models/outcomes/simulation.py` already provides the pure functions (`simulate_batch`, `compute_simulation_metrics`, `precompute_cholesky`, `SimulationResult`) — it takes pipelines + DataFrames in and returns results out. This stage just wraps it with snapshot-tree IO.
+
+The legacy `src/pipeline/evaluate_simulation.py` (~927 lines) drives this for the legacy training tree. Most of it (plotting, year-iteration, CLI) is reusable behavior; we factor it down to a snapshot-aware orchestrator that calls the same pure functions.
+
+### Task 22.5: Rewrite src/pipeline/evaluate_simulation.py for snapshot tree
+
+**Files:**
+- Modify: `src/pipeline/evaluate_simulation.py`
+- Test: `tests/test_pipeline_simulate_snapshot.py`
+
+The new orchestrator:
+
+1. Takes `--snapshot-version --split --simulation-name [--n-samples] [--candidates type=name,...]`.
+2. Resolves which finalized candidate to use for each upstream type (defaults to first candidate in `config.yaml`, override per-type via `--candidates`).
+3. Loads `finalized.pkl` for complexity, rating, users_rated, geek_rating from `SnapshotStorage`.
+4. Loads the split's `test.parquet` as the evaluation set.
+5. Calls `simulate_batch(...)` on the test rows.
+6. Calls `compute_simulation_metrics(...)` on the results.
+7. Writes:
+   - `_snapshots/v{N}/simulations/{simulation_name}/v{M}/predictions.parquet` — per-game samples summary.
+   - `_snapshots/v{N}/simulations/{simulation_name}/v{M}/metrics.json` — RMSE, MAE, R², coverage, interval widths per outcome.
+   - `_snapshots/v{N}/simulations/{simulation_name}/v{M}/registration.json` — which candidates were used, n_samples, etc.
+
+`simulation_name` defaults to `default` so the headline run is `simulations/default/v1/`. Multiple runs with different candidate compositions or sampling counts get different names: `simulations/lgbm_rating_swap/v1/`, `simulations/n5000/v1/`.
+
+- [ ] **Step 1: Add SnapshotStorage methods for simulation artifacts**
+
+In `src/models/snapshot_storage.py`, add (mirror the existing per-result IO patterns):
+
+```python
+    # --- Simulation artifacts ---
+
+    def simulation_dir(self, simulation_name: str, version: int) -> Path:
+        return self.snapshot_dir / "simulations" / simulation_name / f"v{version}"
+
+    def list_simulation_versions(self, simulation_name: str) -> List[int]:
+        sim_dir = self.snapshot_dir / "simulations" / simulation_name
+        if not sim_dir.exists():
+            return []
+        out: List[int] = []
+        for child in sim_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                out.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        return sorted(out)
+
+    def next_simulation_version(self, simulation_name: str) -> int:
+        existing = self.list_simulation_versions(simulation_name)
+        return (existing[-1] if existing else 0) + 1
+
+    def save_simulation(
+        self,
+        simulation_name: str,
+        version: int,
+        registration: Dict[str, Any],
+        metrics: Dict[str, Any],
+        predictions: pl.DataFrame,
+    ) -> Path:
+        rdir = self.simulation_dir(simulation_name, version)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "registration.json").write_text(json.dumps(registration, indent=2, default=str))
+        (rdir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
+        predictions.write_parquet(rdir / "predictions.parquet")
+        return rdir
+
+    def load_simulation(
+        self, simulation_name: str, version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if version is None:
+            versions = self.list_simulation_versions(simulation_name)
+            if not versions:
+                return None
+            version = versions[-1]
+        rdir = self.simulation_dir(simulation_name, version)
+        if not rdir.exists():
+            return None
+        return {
+            "registration": json.loads((rdir / "registration.json").read_text()),
+            "metrics": json.loads((rdir / "metrics.json").read_text()),
+            "predictions": pl.read_parquet(rdir / "predictions.parquet"),
+        }
+```
+
+Run: `uv run pytest tests/test_snapshot_storage.py -v` — should still pass (no behavior changes for existing tests). Add a quick round-trip test if you want, optional.
+
+- [ ] **Step 2: Write the failing simulation orchestrator test**
+
+Create `tests/test_pipeline_simulate_snapshot.py`:
+
+```python
+"""Smoke test for the snapshot-aware simulation orchestrator.
+
+Builds a synthetic snapshot+split, trains+finalizes the four-model
+chain, runs simulation on the test fold, asserts the simulation
+artifacts are written with the expected shape.
+"""
+
+from pathlib import Path
+
+import polars as pl
+
+from src.models.build_snapshot import build_snapshot
+from src.models.build_split import build_split
+from src.models.snapshot_storage import SnapshotStorage
+from src.pipeline.train import train as run_pipeline_train
+from src.pipeline.score import score as run_pipeline_score
+from src.pipeline.finalize import finalize as run_pipeline_finalize
+from src.pipeline.evaluate_simulation import evaluate_simulation as run_pipeline_simulate
+
+
+def _synthetic_universe(tmp_path: Path) -> tuple[Path, int]:
+    # Reuse the same helper shape as test_pipeline_train_snapshot.
+    # Larger sample to make the chain numerically stable.
+    base = tmp_path / "snaps"
+    n = 400
+    n_per_year = n // 4
+    df = pl.DataFrame({
+        "game_id": list(range(1, n + 1)),
+        "year_published": ([2018]*n_per_year + [2019]*n_per_year + [2020]*n_per_year + [2021]*n_per_year),
+        "users_rated": [(50 if i % 2 == 0 else 10) for i in range(n)],
+        "num_weights": [(5 if i % 3 == 0 else 3) for i in range(n)],
+        "complexity": [(2.0 + (i % 5) * 0.5) for i in range(n)],
+        "rating": [(6.5 + (i % 10) * 0.2) for i in range(n)],
+        "min_players": [(2 if i % 2 == 0 else 3) for i in range(n)],
+        "max_players": [(4 if i % 2 == 0 else 5) for i in range(n)],
+        "playing_time": [(60 if i % 2 == 0 else 90) for i in range(n)],
+        "min_age": [(8 if i % 2 == 0 else 12) for i in range(n)],
+        "name": [f"game_{i}" for i in range(n)],
+        "categories": [["strategy"] if i % 2 == 0 else ["family"] for i in range(n)],
+        "mechanics": [["dice"] if i % 2 == 0 else ["cards"] for i in range(n)],
+        "designers": [[f"d{i % 5}"] for i in range(n)],
+        "artists": [[f"a{i % 3}"] for i in range(n)],
+        "publishers": [[f"p{i % 4}"] for i in range(n)],
+        "families": [[f"f{i % 6}"] for i in range(n)],
+        "hurdle": [1 if i % 2 == 0 else 0 for i in range(n)],
+        "geek_rating": [(6.0 + (i % 10) * 0.15) for i in range(n)],
+    })
+    src = tmp_path / "src.parquet"
+    df.write_parquet(src)
+    v = build_snapshot(local_data=src, base_dir=base, use_embeddings=False)
+    build_split(
+        snapshot_version=v, split_name="standard",
+        train_through=2019, tune_start=2020, tune_through=2020,
+        test_start=2021, test_through=2021,
+        base_dir=base,
+    )
+    return base, v
+
+
+def _train_and_finalize_chain(base: Path, v: int) -> None:
+    # Train and finalize all four upstream models on the standard split.
+    # Use ARD because simulation requires a Bayesian model.
+    cfg_complexity = {"name": "ard-complexity", "algorithm": "ard",
+                      "use_embeddings": False, "use_sample_weights": False}
+    cfg_rating = {"name": "ard-ridge-rating", "algorithm": "ard",
+                  "use_embeddings": False, "use_sample_weights": False, "min_ratings": 0}
+    cfg_users_rated = {"name": "ard-ridge-users_rated", "algorithm": "ard",
+                       "use_embeddings": False, "use_sample_weights": False, "min_ratings": 0}
+    cfg_geek = {"name": "ard-geek_rating", "algorithm": "ard",
+                "use_embeddings": False, "min_ratings": 0,
+                "include_predictions": True, "mode": "direct"}
+
+    run_pipeline_train(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_config=cfg_complexity,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+    run_pipeline_score(
+        snapshot_version=v, model_type="complexity",
+        candidate="ard-complexity", candidate_version=1,
+        splits=["standard"], upstream={}, base_dir=base,
+    )
+
+    run_pipeline_train(
+        snapshot_version=v, model_type="rating",
+        candidate="ard-ridge-rating", candidate_config=cfg_rating,
+        splits=["standard"], upstream={"complexity": "ard-complexity"}, base_dir=base,
+    )
+    run_pipeline_train(
+        snapshot_version=v, model_type="users_rated",
+        candidate="ard-ridge-users_rated", candidate_config=cfg_users_rated,
+        splits=["standard"], upstream={"complexity": "ard-complexity"}, base_dir=base,
+    )
+
+    run_pipeline_score(
+        snapshot_version=v, model_type="rating",
+        candidate="ard-ridge-rating", candidate_version=1,
+        splits=["standard"], upstream={"complexity": "ard-complexity"}, base_dir=base,
+    )
+    run_pipeline_score(
+        snapshot_version=v, model_type="users_rated",
+        candidate="ard-ridge-users_rated", candidate_version=1,
+        splits=["standard"], upstream={"complexity": "ard-complexity"}, base_dir=base,
+    )
+
+    run_pipeline_train(
+        snapshot_version=v, model_type="geek_rating",
+        candidate="ard-geek_rating", candidate_config=cfg_geek,
+        splits=["standard"],
+        upstream={"complexity": "ard-complexity",
+                  "rating": "ard-ridge-rating",
+                  "users_rated": "ard-ridge-users_rated"},
+        base_dir=base,
+    )
+
+    # Finalize each candidate (Stage 5 / Task 22 must already be implemented)
+    for model_type, cand in [
+        ("complexity", "ard-complexity"),
+        ("rating", "ard-ridge-rating"),
+        ("users_rated", "ard-ridge-users_rated"),
+        ("geek_rating", "ard-geek_rating"),
+    ]:
+        run_pipeline_finalize(
+            snapshot_version=v, model_type=model_type, candidate=cand,
+            candidate_version=1, finalize_through=2021, base_dir=base,
+        )
+
+
+def test_simulate_writes_simulation_artifacts(tmp_path: Path) -> None:
+    base, v = _synthetic_universe(tmp_path)
+    _train_and_finalize_chain(base, v)
+
+    candidates = {
+        "complexity": "ard-complexity",
+        "rating": "ard-ridge-rating",
+        "users_rated": "ard-ridge-users_rated",
+        "geek_rating": "ard-geek_rating",
+    }
+    run_pipeline_simulate(
+        snapshot_version=v,
+        split_name="standard",
+        simulation_name="default",
+        candidates=candidates,
+        n_samples=50,  # small for speed
+        base_dir=base,
+    )
+
+    storage = SnapshotStorage(snapshot_version=v, base_dir=base)
+    sim = storage.load_simulation("default", version=1)
+    assert sim is not None
+    assert "predictions" in sim
+    assert "metrics" in sim
+    assert "registration" in sim
+    # Every game in the test fold should have a simulation summary row
+    test_fold = storage.load_split("standard")["test"]
+    assert sim["predictions"].height == test_fold.height
+    # Per-outcome metrics present
+    for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
+        assert outcome in sim["metrics"]
+```
+
+This test is heavy — it trains the full chain end-to-end. Acceptable for a smoke test of the simulation orchestrator (the chain training is fast on 400 synthetic rows). If the test is too slow on CI, it can be marked `@pytest.mark.slow` later.
+
+If this test fails because `simulate_batch` rejects the trained pipeline (e.g. ridge instead of ARD lacks the required `sigma_` attribute), check `_train_and_finalize_chain` — every model needs `algorithm: "ard"` for Bayesian sampling.
+
+- [ ] **Step 3: Read the existing `src/pipeline/evaluate_simulation.py`**
+
+Read the file. Focus on `evaluate_year(...)`, `simulate_batch(...)` calling pattern, and the metric/prediction extraction logic. We're going to factor out the IO to use `SnapshotStorage` but reuse `simulate_batch`, `compute_simulation_metrics`, `precompute_cholesky` from `src.models.outcomes.simulation`.
+
+The legacy `evaluate_year` does several things this snapshot-aware version doesn't need:
+
+- Year-by-year iteration → not needed (we do one (snapshot, split) at a time; multi-year is the YoY split case, which calls this once per split)
+- Loading from legacy `models/experiments/{model_type}/{name}/v{N}/finalized/pipeline.pkl` → replaced by `SnapshotStorage.load_finalized_pipeline`
+- Plot generation → out of scope for this stage; we can add later if useful
+
+We KEEP:
+
+- The pure simulate_batch + compute_simulation_metrics calls
+- Per-game prediction extraction (one row per game with point + median + interval columns)
+- Test fold loading, joining predicted_complexity etc. for input
+
+- [ ] **Step 4: Replace src/pipeline/evaluate_simulation.py**
+
+The new file. Note: this is a substantial rewrite. Instead of pasting the full contents here, the implementer should:
+
+1. Save the existing legacy file as `src/pipeline/evaluate_simulation_legacy.py` (move, don't delete) for reference.
+2. Write the new `src/pipeline/evaluate_simulation.py` from scratch with this skeleton:
+
+```python
+"""Snapshot-aware simulation evaluator.
+
+Loads finalized pipelines for the four-model chain (complexity → rating
++ users_rated → geek_rating) from a snapshot, runs the chained-Bayesian
+simulation on a split's test fold, and writes per-game predictions plus
+end-to-end metrics under ``_snapshots/v{N}/simulations/{name}/v{M}/``.
+
+CLI::
+
+    uv run python -m src.pipeline.evaluate_simulation \\
+        --snapshot-version 1 --split standard --simulation-name default \\
+        [--candidates complexity=ard-complexity,rating=ard-ridge-rating,...] \\
+        [--n-samples 500]
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import polars as pl
+
+from src.models.candidate_config import find_candidate, list_candidates
+from src.models.outcomes.simulation import (
+    simulate_batch,
+    compute_simulation_metrics,
+    precompute_cholesky,
+)
+from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
+from src.utils.logging import setup_logging
+
+logger = logging.getLogger(__name__)
+
+
+def evaluate_simulation(
+    snapshot_version: int,
+    split_name: str,
+    simulation_name: str = "default",
+    candidates: Optional[Dict[str, str]] = None,
+    n_samples: int = 500,
+    geek_rating_mode: str = "bayesian",
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+    random_state: int = 42,
+) -> int:
+    """Run simulation on the test fold of (snapshot_version, split_name).
+
+    Returns the simulation version assigned.
+    """
+    storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
+    if storage.load_universe() is None:
+        raise FileNotFoundError(f"No snapshot v{snapshot_version}")
+
+    # Resolve candidates: default to first listed in config.yaml per model type
+    if candidates is None:
+        candidates = {}
+    for model_type in ["complexity", "rating", "users_rated", "geek_rating"]:
+        if model_type not in candidates:
+            cands = list_candidates(model_type)
+            if not cands:
+                raise ValueError(f"No candidates for {model_type} in config.yaml")
+            candidates[model_type] = cands[0]
+
+    # Load finalized pipelines
+    pipelines: Dict[str, Any] = {}
+    for model_type, cand in candidates.items():
+        versions = storage.list_candidate_versions(model_type, cand)
+        if not versions:
+            raise FileNotFoundError(
+                f"No versions for {model_type}/{cand} in v{snapshot_version}"
+            )
+        v = versions[-1]
+        pipeline = storage.load_finalized_pipeline(model_type, cand, v)
+        if pipeline is None:
+            raise FileNotFoundError(
+                f"No finalized.pkl for {model_type}/{cand}/v{v} — run pipeline.finalize first"
+            )
+        pipelines[model_type] = pipeline
+
+    # Load test fold
+    split = storage.load_split(split_name)
+    if split is None:
+        raise FileNotFoundError(f"Split {split_name!r} not found in v{snapshot_version}")
+    test_df = split["test"]
+    test_pd = test_df.to_pandas()
+
+    # Pre-compute Cholesky (perf optimization shared by simulate_batch)
+    cholesky_cache = precompute_cholesky(
+        complexity_pipeline=pipelines["complexity"],
+        rating_pipeline=pipelines["rating"],
+        users_rated_pipeline=pipelines["users_rated"],
+        geek_rating_pipeline=(
+            pipelines["geek_rating"] if geek_rating_mode != "bayesian" else None
+        ),
+    )
+
+    # Run simulation
+    results = simulate_batch(
+        games=test_pd,
+        complexity_pipeline=pipelines["complexity"],
+        rating_pipeline=pipelines["rating"],
+        users_rated_pipeline=pipelines["users_rated"],
+        n_samples=n_samples,
+        random_state=random_state,
+        cholesky_cache=cholesky_cache,
+        geek_rating_mode=geek_rating_mode,
+        geek_rating_pipeline=pipelines.get("geek_rating"),
+    )
+
+    # Per-game predictions DataFrame: game_id + per-outcome columns
+    predictions_rows = []
+    for r in results:
+        s = r.summary()
+        row = {"game_id": r.game_id, "name": r.game_name}
+        for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
+            o = s[outcome]
+            row.update({
+                f"{outcome}_actual": o["actual"],
+                f"{outcome}_point": o["point"],
+                f"{outcome}_median": o["median"],
+                f"{outcome}_mean": o["mean"],
+                f"{outcome}_std": o["std"],
+                f"{outcome}_q05": o["interval_90"][0],
+                f"{outcome}_q95": o["interval_90"][1],
+                f"{outcome}_q25": o["interval_50"][0],
+                f"{outcome}_q75": o["interval_50"][1],
+            })
+        predictions_rows.append(row)
+    predictions = pl.DataFrame(predictions_rows)
+
+    metrics = compute_simulation_metrics(results)
+
+    # Versioned write
+    sim_version = storage.next_simulation_version(simulation_name)
+    registration = {
+        "snapshot_version": snapshot_version,
+        "split_name": split_name,
+        "simulation_name": simulation_name,
+        "version": sim_version,
+        "created_at": datetime.now().isoformat(),
+        "candidates": candidates,
+        "n_samples": n_samples,
+        "geek_rating_mode": geek_rating_mode,
+        "n_test_games": len(results),
+    }
+    storage.save_simulation(simulation_name, sim_version, registration, metrics, predictions)
+    logger.info(f"Wrote simulation {simulation_name}/v{sim_version}")
+    return sim_version
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--split", type=str, default="standard")
+    parser.add_argument("--simulation-name", type=str, default="default")
+    parser.add_argument("--candidates", type=str, default=None,
+                        help="Comma-separated overrides like 'rating=catboost-rating'")
+    parser.add_argument("--n-samples", type=int, default=500)
+    parser.add_argument("--geek-rating-mode", type=str, default="bayesian",
+                        choices=["bayesian", "stacking", "direct"])
+    parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
+    args = parser.parse_args()
+
+    setup_logging()
+
+    candidates: Dict[str, str] = {}
+    if args.candidates:
+        for pair in args.candidates.split(","):
+            k, v = pair.split("=", 1)
+            candidates[k.strip()] = v.strip()
+
+    version = evaluate_simulation(
+        snapshot_version=args.snapshot_version,
+        split_name=args.split,
+        simulation_name=args.simulation_name,
+        candidates=candidates,
+        n_samples=args.n_samples,
+        geek_rating_mode=args.geek_rating_mode,
+        base_dir=args.base_dir,
+    )
+    print(f"simulation: {args.simulation_name}/v{version}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 5: Run the test**
+
+Run: `uv run pytest tests/test_pipeline_simulate_snapshot.py -v`
+Expected: PASS. The test trains the full chain on synthetic data, finalizes each model, then runs the simulation. It's slow (~30-60 seconds) but should complete deterministically.
+
+If the test fails on `precompute_cholesky` complaining about a non-Bayesian model, the issue is that one of the candidates was finalized with a non-ARD algorithm. Check `_train_and_finalize_chain` in the test.
+
+If the test fails because the `geek_rating` model's `simulate_batch` path is "bayesian" but geek_rating's algorithm isn't directly Bayesian (only complexity/rating/users_rated are sampled), pass `geek_rating_mode="bayesian"` (default) — that means geek_rating is *computed* from upstream samples, not sampled directly.
+
+- [ ] **Step 6: Add justfile recipe**
+
+Append to `justfile` under the BGG section:
+
+```just
+# Run end-to-end simulation evaluation on the test fold.
+# Requires finalized.pkl for complexity, rating, users_rated, geek_rating.
+#
+#   just bgg-simulate
+#   just bgg-simulate snapshot=1 split=standard name=default samples=500
+bgg-simulate snapshot="1" split="standard" name="default" samples="500":
+    uv run python -m src.pipeline.evaluate_simulation \
+        --snapshot-version {{snapshot}} --split {{split}} \
+        --simulation-name {{name}} --n-samples {{samples}}
+```
+
+Verify: `just --list | grep bgg-simulate` should show one line.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/models/snapshot_storage.py \
+        src/pipeline/evaluate_simulation.py \
+        src/pipeline/evaluate_simulation_legacy.py \
+        tests/test_pipeline_simulate_snapshot.py \
+        justfile
+git commit -m "feat: snapshot-aware simulation evaluator (Stage 5.5)"
 ```
 
 ### Task 23: Self-review checklist (manual)
