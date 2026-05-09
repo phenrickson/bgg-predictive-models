@@ -190,3 +190,30 @@ def test_load_score_predictions_helper(tmp_path: Path) -> None:
     )
     loaded = storage.load_score_predictions("complexity", "ard-complexity", 1, "standard")
     assert loaded.equals(score)
+
+
+def test_save_and_load_simulation_roundtrip(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+
+    registration = {"split_name": "standard", "n_samples": 100}
+    metrics = {"complexity": {"rmse_sim": 0.5, "n": 10}}
+    predictions = pl.DataFrame({
+        "game_id": [1, 2, 3],
+        "complexity_median": [2.0, 3.0, 4.0],
+        "complexity_actual": [2.1, 3.0, 3.9],
+    })
+
+    assert storage.next_simulation_version("default") == 1
+    storage.save_simulation("default", 1, registration, metrics, predictions)
+    assert storage.next_simulation_version("default") == 2
+
+    loaded = storage.load_simulation("default", version=1)
+    assert loaded is not None
+    assert loaded["registration"] == registration
+    assert loaded["metrics"] == metrics
+    assert loaded["predictions"].equals(predictions)
+
+
+def test_load_simulation_when_missing(tmp_path: Path) -> None:
+    storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
+    assert storage.load_simulation("default") is None

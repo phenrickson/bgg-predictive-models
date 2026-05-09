@@ -469,3 +469,13 @@ bgg-finalize-all snapshot="1" finalize_through="":
             --snapshot-version {{snapshot}} \
             $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}")
     done
+
+# Run end-to-end simulation evaluation on the test fold.
+# Requires finalized.pkl for complexity, rating, users_rated, geek_rating.
+#
+#   just bgg-simulate
+#   just bgg-simulate snapshot=1 split=standard name=default samples=500
+bgg-simulate snapshot="1" split="standard" name="default" samples="500":
+    uv run python -m src.pipeline.evaluate_simulation \
+        --snapshot-version {{snapshot}} --split {{split}} \
+        --simulation-name {{name}} --n-samples {{samples}}

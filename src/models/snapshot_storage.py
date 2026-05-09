@@ -297,3 +297,58 @@ class SnapshotStorage:
         if not p.exists():
             return None
         return pl.read_parquet(p)
+
+    # --- Simulation artifacts ---
+
+    def simulation_dir(self, simulation_name: str, version: int) -> Path:
+        return self.snapshot_dir / "simulations" / simulation_name / f"v{version}"
+
+    def list_simulation_versions(self, simulation_name: str) -> List[int]:
+        sim_dir = self.snapshot_dir / "simulations" / simulation_name
+        if not sim_dir.exists():
+            return []
+        out: List[int] = []
+        for child in sim_dir.iterdir():
+            if not child.is_dir() or not child.name.startswith("v"):
+                continue
+            try:
+                out.append(int(child.name[1:]))
+            except ValueError:
+                continue
+        return sorted(out)
+
+    def next_simulation_version(self, simulation_name: str) -> int:
+        existing = self.list_simulation_versions(simulation_name)
+        return (existing[-1] if existing else 0) + 1
+
+    def save_simulation(
+        self,
+        simulation_name: str,
+        version: int,
+        registration: Dict[str, Any],
+        metrics: Dict[str, Any],
+        predictions: pl.DataFrame,
+    ) -> Path:
+        rdir = self.simulation_dir(simulation_name, version)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "registration.json").write_text(json.dumps(registration, indent=2, default=str))
+        (rdir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
+        predictions.write_parquet(rdir / "predictions.parquet")
+        return rdir
+
+    def load_simulation(
+        self, simulation_name: str, version: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if version is None:
+            versions = self.list_simulation_versions(simulation_name)
+            if not versions:
+                return None
+            version = versions[-1]
+        rdir = self.simulation_dir(simulation_name, version)
+        if not rdir.exists():
+            return None
+        return {
+            "registration": json.loads((rdir / "registration.json").read_text()),
+            "metrics": json.loads((rdir / "metrics.json").read_text()),
+            "predictions": pl.read_parquet(rdir / "predictions.parquet"),
+        }
