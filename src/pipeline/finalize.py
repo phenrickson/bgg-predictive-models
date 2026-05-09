@@ -1,338 +1,117 @@
-#!/usr/bin/env python3
+"""Snapshot-aware finalize orchestrator.
+
+Refits a candidate's pipeline on the full snapshot universe (filtered
+through ``finalize_through`` if provided) and writes ``finalized.pkl``
+at the candidate level. Operational scoring downstream uses this
+artifact.
+
+CLI::
+
+    uv run python -m src.pipeline.finalize \\
+        --model complexity --candidate ard-complexity \\
+        --snapshot-version 1 [--candidate-version N] [--finalize-through 2024]
 """
-Finalize models for production.
 
-Reads model configurations from config.yaml and finalizes each model
-in dependency order, including intermediate complexity scoring.
-
-For each model:
-  1. hurdle - finalized independently
-  2. complexity - finalized independently
-  3. complexity scored - generates predictions for downstream models
-  4. rating - finalized with complexity predictions
-  5. users_rated - finalized with complexity predictions
-  6. geek_rating - trained via src.models.outcomes.geek_rating with all upstream experiments
-
-Usage:
-    uv run -m src.pipeline.finalize
-    uv run -m src.pipeline.finalize --dry-run
-    uv run -m src.pipeline.finalize --model complexity
-"""
+from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional, Union
 
-from src.utils.config import load_config
+import polars as pl
+from sklearn.base import clone
+
+from src.models.outcomes.data import select_X_y
+from src.models.outcomes.train import get_model_class
+from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
 from src.utils.logging import setup_logging
-from src.models.outcomes.train import finalize_model
-from src.models.experiments import ExperimentTracker
-
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_experiment_version(model_type: str, experiment_name: str) -> Optional[int]:
-    """Resolve the latest version number for an experiment on disk.
-
-    Args:
-        model_type: Model type (hurdle, complexity, etc.).
-        experiment_name: Experiment name.
-
-    Returns:
-        Latest version number, or None if experiment not found.
-    """
-    try:
-        tracker = ExperimentTracker(model_type)
-        experiment_dir = tracker.model_dir / experiment_name
-        if not experiment_dir.exists():
-            return None
-        versions = [
-            int(v.name[1:])
-            for v in experiment_dir.iterdir()
-            if v.is_dir() and v.name.startswith("v") and v.name[1:].isdigit()
-        ]
-        return max(versions) if versions else None
-    except Exception:
-        return None
-
-
-def run_command(cmd: List[str], description: str, dry_run: bool = False) -> bool:
-    """Run a command and log output.
-
-    Args:
-        cmd: Command to run as list of strings.
-        description: Description for logging.
-        dry_run: If True, just log what would run.
-
-    Returns:
-        True if successful, False otherwise.
-    """
-    cmd_str = " ".join(cmd)
-
-    if dry_run:
-        logger.info(f"  [DRY RUN] {description}: {cmd_str}")
-        return True
-
-    logger.info(f"  {description}: {cmd_str}")
-
-    try:
-        subprocess.run(cmd, check=True, capture_output=False)
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"  Command failed with exit code {e.returncode}")
-        return False
-
-
-def finalize_single_model(
+def finalize(
+    snapshot_version: int,
     model_type: str,
-    experiment_name: str,
-    config,
-    dry_run: bool = False,
-    complexity_predictions_path: Optional[str] = None,
-) -> bool:
-    """Finalize a single model.
+    candidate: str,
+    candidate_version: Optional[int] = None,
+    finalize_through: Optional[int] = None,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+) -> Path:
+    """Refit candidate on snapshot universe (≤ finalize_through) and save finalized.pkl."""
+    storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
+    universe = storage.load_universe()
+    if universe is None:
+        raise FileNotFoundError(f"No snapshot v{snapshot_version}")
 
-    Args:
-        model_type: Model type (hurdle, complexity, rating, users_rated).
-        experiment_name: Experiment name from config.
-        config: Loaded config object.
-        dry_run: If True, just log what would run.
-        complexity_predictions_path: Path to complexity predictions (for rating/users_rated).
+    if candidate_version is None:
+        versions = storage.list_candidate_versions(model_type, candidate)
+        if not versions:
+            raise FileNotFoundError(
+                f"No versions for {model_type}/{candidate}"
+            )
+        candidate_version = versions[-1]
 
-    Returns:
-        True if successful, False otherwise.
-    """
-    model_config = config.models.get(model_type)
-    use_embeddings = getattr(model_config, "use_embeddings", False)
-    recent_year_threshold = getattr(config.years, "recent_year_threshold", 2)
-
-    if dry_run:
-        logger.info(f"  [DRY RUN] Finalize {model_type}: {experiment_name}")
-        if use_embeddings:
-            logger.info(f"    use_embeddings: True")
-        if complexity_predictions_path and model_type in ("rating", "users_rated"):
-            logger.info(f"    complexity_predictions: {complexity_predictions_path}")
-        return True
-
-    logger.info(f"  Finalizing {model_type}: {experiment_name}")
-
-    try:
-        finalize_model(
-            model_type=model_type,
-            experiment_name=experiment_name,
-            use_embeddings=use_embeddings if use_embeddings else None,
-            complexity_predictions_path=(
-                complexity_predictions_path
-                if model_type in ("rating", "users_rated")
-                else None
-            ),
-            recent_year_threshold=recent_year_threshold,
+    # Use any existing per-split pipeline to produce a clone for refitting
+    cand_dir = storage.experiment_dir(model_type, candidate, candidate_version) / "results"
+    if not cand_dir.exists() or not any(cand_dir.iterdir()):
+        raise FileNotFoundError(
+            f"No results for {model_type}/{candidate}/v{candidate_version}; train first"
         )
-        return True
-    except Exception as e:
-        logger.error(f"  Failed to finalize {model_type}: {e}")
-        return False
+    any_split = next(cand_dir.iterdir()).name
+    base_result = storage.load_result(model_type, candidate, candidate_version, any_split)
+    if base_result is None:
+        raise FileNotFoundError(f"Failed to load any result for {model_type}/{candidate}")
+    template_pipeline = base_result["pipeline"]
 
+    df = universe
+    if finalize_through is not None:
+        df = df.filter(pl.col("year_published") <= int(finalize_through))
 
-def score_complexity(
-    experiment_name: str,
-    dry_run: bool = False,
-) -> bool:
-    """Score all data using complexity model to generate predictions for downstream models.
+    target_column = get_model_class(model_type)().target_column
+    X, y = select_X_y(df, target_column)
 
-    Args:
-        experiment_name: Complexity experiment name.
-        dry_run: If True, just log what would run.
+    finalized_pipeline = clone(template_pipeline)
+    finalized_pipeline.fit(X, y)
 
-    Returns:
-        True if successful, False otherwise.
-    """
-    cmd = [
-        "uv", "run", "-m", "src.pipeline.score",
-        "--model", "complexity",
-        "--experiment", experiment_name,
-        "--all-years",
-    ]
+    storage.save_finalized_pipeline(model_type, candidate, candidate_version, finalized_pipeline)
 
-    return run_command(cmd, f"Scoring complexity: {experiment_name}", dry_run=dry_run)
+    reg = storage.load_candidate_registration(model_type, candidate, candidate_version) or {}
+    reg["finalize_through"] = int(finalize_through) if finalize_through is not None else None
+    reg["finalized_at"] = datetime.now().isoformat()
+    storage.save_candidate_registration(model_type, candidate, candidate_version, reg)
 
-
-def train_geek_rating(
-    experiment_names: dict,
-    config,
-    dry_run: bool = False,
-) -> bool:
-    """Train geek_rating model using upstream finalized experiments.
-
-    Args:
-        experiment_names: Dict mapping model type to experiment name.
-        config: Loaded config object.
-        dry_run: If True, just log what would run.
-
-    Returns:
-        True if successful, False otherwise.
-    """
-    geek_config = config.models.get("geek_rating")
-    geek_experiment = getattr(geek_config, "experiment_name", "geek_rating")
-    mode = getattr(geek_config, "mode", "direct")
-    include_predictions = getattr(geek_config, "include_predictions", True)
-
-    cmd = [
-        "uv", "run", "-m", "src.pipeline.train",
-        "--model", "geek_rating",
-        "--experiment", geek_experiment,
-        "--mode", mode,
-        "--include-predictions", str(include_predictions).lower(),
-        "--hurdle-experiment", experiment_names["hurdle"],
-        "--complexity-experiment", experiment_names["complexity"],
-        "--rating-experiment", experiment_names["rating"],
-        "--users-rated-experiment", experiment_names["users_rated"],
-    ]
-
-    return run_command(cmd, f"Training geek_rating: {geek_experiment}", dry_run=dry_run)
-
-
-def finalize_all(config, dry_run: bool = False, single_model: Optional[str] = None) -> None:
-    """Finalize all models in dependency order.
-
-    Args:
-        config: Loaded config object.
-        dry_run: If True, just log what would run.
-        single_model: If set, only finalize this model.
-    """
-    predictions_dir = Path(config.predictions_dir)
-    predictions_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build experiment name map from config
-    experiment_names = {}
-    for model_type in ("hurdle", "complexity", "rating", "users_rated"):
-        model_config = config.models.get(model_type)
-        if model_config:
-            experiment_names[model_type] = getattr(model_config, "experiment_name")
-
-    # Define dependency order
-    ordered_steps = [
-        "hurdle",
-        "complexity",
-        "score_complexity",
-        "rating",
-        "users_rated",
-        "geek_rating",
-    ]
-
-    # If single model requested, determine which steps are needed
-    if single_model:
-        if single_model in ("hurdle", "complexity"):
-            ordered_steps = [single_model]
-        elif single_model in ("rating", "users_rated"):
-            # Need complexity scored first
-            ordered_steps = ["score_complexity", single_model]
-        elif single_model == "geek_rating":
-            ordered_steps = ["geek_rating"]
-        else:
-            logger.error(f"Unknown model: {single_model}")
-            sys.exit(1)
-
-    logger.info("=" * 60)
-    logger.info("FINALIZATION PIPELINE")
-    logger.info("=" * 60)
-    logger.info(f"Steps: {ordered_steps}")
-    logger.info(f"Dry run: {dry_run}")
-
-    for model_type in ("hurdle", "complexity", "rating", "users_rated"):
-        if model_type in experiment_names:
-            exp_name = experiment_names[model_type]
-            version = resolve_experiment_version(model_type, exp_name)
-            version_str = f"v{version}" if version else "not found"
-            logger.info(f"  {model_type}: {exp_name} ({version_str})")
-
-    geek_config = config.models.get("geek_rating")
-    if geek_config:
-        geek_exp = getattr(geek_config, "experiment_name", "N/A")
-        version = resolve_experiment_version("geek_rating", geek_exp)
-        version_str = f"v{version}" if version else "not found"
-        logger.info(f"  geek_rating: {geek_exp} ({version_str})")
-
-    if dry_run:
-        logger.info("\n[DRY RUN MODE - No commands will be executed]")
-
-    # Complexity predictions path
-    complexity_experiment = experiment_names.get("complexity", "")
-    complexity_predictions_path = str(predictions_dir / f"{complexity_experiment}.parquet")
-
-    # Execute steps
-    for step in ordered_steps:
-        logger.info(f"\n{'-'*60}")
-
-        if step == "score_complexity":
-            success = score_complexity(
-                experiment_name=complexity_experiment,
-                dry_run=dry_run,
-            )
-        elif step == "geek_rating":
-            success = train_geek_rating(
-                experiment_names=experiment_names,
-                config=config,
-                dry_run=dry_run,
-            )
-        else:
-            success = finalize_single_model(
-                model_type=step,
-                experiment_name=experiment_names[step],
-                config=config,
-                dry_run=dry_run,
-                complexity_predictions_path=complexity_predictions_path,
-            )
-
-        if not success:
-            logger.error(f"Step '{step}' failed. Stopping pipeline.")
-            sys.exit(1)
-
-    logger.info("\n" + "=" * 60)
-    logger.info("FINALIZATION COMPLETE")
-    logger.info("=" * 60)
-
-
-def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Finalize models for production",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  uv run -m src.pipeline.finalize                     # finalize all from config
-  uv run -m src.pipeline.finalize --model complexity   # just one
-  uv run -m src.pipeline.finalize --dry-run            # show what would run
-        """,
+    finalized_path = (
+        storage.experiment_dir(model_type, candidate, candidate_version) / "finalized.pkl"
     )
+    logger.info(f"Finalized {model_type}/{candidate}/v{candidate_version} → {finalized_path}")
+    return finalized_path
 
-    parser.add_argument(
-        "--model",
-        type=str,
-        choices=["hurdle", "complexity", "rating", "users_rated", "geek_rating"],
-        help="Finalize only this model (default: all)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be run without executing",
-    )
 
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--candidate", type=str, required=True)
+    parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--candidate-version", type=int, default=None)
+    parser.add_argument("--finalize-through", type=int, default=None)
+    parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
     args = parser.parse_args()
 
     setup_logging()
-    config = load_config()
-
-    finalize_all(
-        config=config,
-        dry_run=args.dry_run,
-        single_model=args.model,
+    finalize(
+        snapshot_version=args.snapshot_version,
+        model_type=args.model,
+        candidate=args.candidate,
+        candidate_version=args.candidate_version,
+        finalize_through=args.finalize_through,
+        base_dir=args.base_dir,
     )
+    print(f"finalized: {args.model}/{args.candidate}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

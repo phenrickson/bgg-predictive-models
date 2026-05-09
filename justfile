@@ -438,3 +438,34 @@ bgg-train-all snapshot="1" splits="standard":
         --upstream complexity=$COMPLEXITY,rating=$RATING,users_rated=$USERS_RATED
 
     echo "===== done ====="
+
+# Finalize one candidate (refits pipeline on full snapshot universe).
+#   just bgg-finalize snapshot=1 model=complexity candidate=ard-complexity finalize_through=2024
+bgg-finalize snapshot="1" model="complexity" candidate="" finalize_through="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.finalize \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} \
+        $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}")
+
+# Finalize the full chain (every model in the cascade).
+#   just bgg-finalize-all snapshot=1 finalize_through=2024
+bgg-finalize-all snapshot="1" finalize_through="":
+    #!/usr/bin/env bash
+    set -e
+    cand_for() {
+        uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$1')[0])"
+    }
+    for m in hurdle complexity rating users_rated geek_rating; do
+        cand=$(cand_for $m)
+        echo "===== $m / $cand ====="
+        uv run python -m src.pipeline.finalize \
+            --model $m --candidate $cand \
+            --snapshot-version {{snapshot}} \
+            $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}")
+    done
