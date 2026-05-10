@@ -112,6 +112,17 @@ def finalize(
             )
         candidate_version = versions[-1]
 
+    # If the caller didn't specify upstream, fall back to whatever was
+    # recorded in registration.json at train time. This is what we want
+    # in the common case — a candidate's finalize uses the same cascade
+    # it was trained against.
+    if upstream is None:
+        reg = storage.load_candidate_registration(model_type, candidate, candidate_version) or {}
+        recorded = reg.get("upstream_experiments") or {}
+        if recorded:
+            upstream = dict(recorded)
+            logger.info(f"Using upstream from registration.json: {upstream}")
+
     # Use any existing per-split pipeline to produce a clone for refitting
     cand_dir = storage.experiment_dir(model_type, candidate, candidate_version) / "results"
     if not cand_dir.exists() or not any(cand_dir.iterdir()):
