@@ -219,6 +219,9 @@ def train_one(
     # Tuning metric
     if metric is None:
         metric = "log_loss" if model.model_task == "classification" else "rmse"
+    logger.info(f"  tuning metric: {metric}, patience: {patience}")
+    if use_sample_weights:
+        logger.info(f"  sample_weights: {weight_column}, n={len(sample_weights)}")
 
     tuned_pipeline, best_params, _ = tune_model(
         pipeline=pipeline,
@@ -231,10 +234,12 @@ def train_one(
         patience=patience,
         sample_weights=sample_weights,
     )
+    logger.info(f"  best params: {best_params}")
 
     # Train-set metrics from a clone fit on train only
     train_pipeline = clone(tuned_pipeline).fit(train_X, train_y)
     train_metrics = evaluate_model(train_pipeline, train_X, train_y, "training")
+    _log_metrics_summary("train", train_metrics)
 
     # Optional threshold optimization (classification only)
     optimal_threshold: Optional[float] = None
@@ -242,8 +247,10 @@ def train_one(
         tune_pred_proba = train_pipeline.predict_proba(tune_X)[:, 1]
         threshold_results = model.find_optimal_threshold(tune_y, tune_pred_proba)
         optimal_threshold = float(threshold_results["threshold"])
+        logger.info(f"  optimal threshold: {optimal_threshold:.4f}")
 
     tune_metrics = evaluate_model(train_pipeline, tune_X, tune_y, "tuning")
+    _log_metrics_summary("tune", tune_metrics)
 
     # Refit on train + tune (matches existing behavior)
     if hasattr(model, "filter_for_refit"):
@@ -270,6 +277,7 @@ def train_one(
     test_pred = final_pipeline.predict(test_X)
     additional = model.compute_additional_metrics(test_y.values, test_pred, "test")
     test_metrics.update(additional)
+    _log_metrics_summary("test", test_metrics)
 
     # Predictions frames (polars, suitable for SnapshotStorage.save_result)
     tune_preds = _build_predictions_frame(
@@ -278,6 +286,11 @@ def train_one(
     test_preds = _build_predictions_frame(
         final_pipeline, test_X, test_y, test_df, model.model_task,
     )
+
+    # Feature importance / coefficients
+    feature_importance = _extract_feature_importance(final_pipeline)
+    if feature_importance is not None:
+        _log_top_features(feature_importance, top_n=10)
 
     out: Dict[str, Any] = {
         "pipeline": final_pipeline,
@@ -288,7 +301,75 @@ def train_one(
     }
     if optimal_threshold is not None:
         out["optimal_threshold"] = optimal_threshold
+    if feature_importance is not None:
+        out["feature_importance"] = feature_importance
     return out
+
+
+def _log_metrics_summary(fold: str, metrics: Dict[str, Any]) -> None:
+    """Log a one-line summary of the scalar numeric metrics for a fold."""
+    parts = []
+    for k, v in metrics.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            parts.append(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}")
+    if parts:
+        logger.info(f"  {fold} metrics: " + ", ".join(parts))
+
+
+def _extract_feature_importance(pipeline) -> Optional[pl.DataFrame]:
+    """Pull coefficients (linear) or feature_importances_ (tree) from a fitted
+    sklearn pipeline. Returns a polars DataFrame ready for save_result, or None."""
+    try:
+        preprocessor = pipeline.named_steps.get("preprocessor")
+        model = pipeline.named_steps.get("model")
+        if preprocessor is None or model is None:
+            return None
+
+        feature_names = None
+        try:
+            feature_names = preprocessor.get_feature_names_out()
+        except Exception:
+            if hasattr(preprocessor, "named_steps"):
+                for _name, step in reversed(list(preprocessor.named_steps.items())):
+                    try:
+                        feature_names = step.get_feature_names_out()
+                        break
+                    except Exception:
+                        continue
+
+        if hasattr(model, "coef_"):
+            coef = np.asarray(model.coef_)
+            if coef.ndim == 2:
+                coef = coef[0]
+            if feature_names is None or len(feature_names) != len(coef):
+                feature_names = [f"f{i}" for i in range(len(coef))]
+            return pl.DataFrame({
+                "feature": list(feature_names),
+                "coefficient": coef.tolist(),
+                "abs_coefficient": np.abs(coef).tolist(),
+            }).sort("abs_coefficient", descending=True)
+
+        if hasattr(model, "feature_importances_"):
+            imp = np.asarray(model.feature_importances_)
+            if feature_names is None or len(feature_names) != len(imp):
+                feature_names = [f"f{i}" for i in range(len(imp))]
+            return pl.DataFrame({
+                "feature": list(feature_names),
+                "importance": imp.tolist(),
+            }).sort("importance", descending=True)
+    except Exception as e:
+        logger.warning(f"Feature importance extraction failed: {e}")
+    return None
+
+
+def _log_top_features(fi: pl.DataFrame, top_n: int = 10) -> None:
+    """Log the top-N features by absolute coefficient or importance."""
+    sort_col = "abs_coefficient" if "coefficient" in fi.columns else "importance"
+    val_col = "coefficient" if "coefficient" in fi.columns else "importance"
+    top = fi.head(top_n).to_pandas()
+    logger.info(f"  top {top_n} features by {sort_col}:")
+    for _, row in top.iterrows():
+        logger.info(f"    {row['feature']:40s}  {val_col}={row[val_col]:+.4f}")
 
 
 def _build_predictions_frame(

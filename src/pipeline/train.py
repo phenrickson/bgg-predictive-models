@@ -95,6 +95,7 @@ def train(
             parameters=artifacts["parameters"],
             tune_predictions=artifacts.get("tune_predictions"),
             test_predictions=artifacts.get("test_predictions"),
+            feature_importance=artifacts.get("feature_importance"),
         )
         logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
