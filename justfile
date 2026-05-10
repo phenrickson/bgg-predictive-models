@@ -507,15 +507,26 @@ bgg-simulate snapshot="1" split="standard" name="default" samples="500":
         --snapshot-version {{snapshot}} --split {{split}} \
         --simulation-name {{name}} --n-samples {{samples}}
 
-# Run simulation across the standard split plus all yoy_* splits.
-# Useful for year-over-year system evaluation.
+# Run simulation across one or more splits.
+# `splits=all` (default) resolves to every split that exists under the snapshot.
 #
 #   just bgg-simulate-all
+#   just bgg-simulate-all snapshot=1 splits=yoy_2021,yoy_2022
 #   just bgg-simulate-all snapshot=2 samples=200
-bgg-simulate-all snapshot="1" name="default" samples="500":
+bgg-simulate-all snapshot="1" splits="all" name="default" samples="500":
     #!/usr/bin/env bash
     set -e
-    splits=$(uv run python -c "from src.models.snapshot_storage import SnapshotStorage; print(' '.join(SnapshotStorage({{snapshot}}).list_splits()))")
+    splits="{{splits}}"
+    if [ "$splits" = "all" ]; then
+        splits=$(uv run python -c "from src.models.snapshot_storage import SnapshotStorage; print(' '.join(SnapshotStorage({{snapshot}}).list_splits()))")
+        if [ -z "$splits" ]; then
+            echo "No splits under snapshot v{{snapshot}}." >&2
+            exit 1
+        fi
+    else
+        # Convert comma-separated to whitespace-separated for the for-loop
+        splits=$(echo "$splits" | tr ',' ' ')
+    fi
     for split in $splits; do
         echo "===== $split ====="
         uv run python -m src.pipeline.evaluate_simulation \
