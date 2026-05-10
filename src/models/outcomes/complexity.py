@@ -3,6 +3,7 @@
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 from sklearn.base import BaseEstimator
 
 from src.models.outcomes.base import (
@@ -30,14 +31,44 @@ class ComplexityModel(TrainableModel):
         supports_embeddings=True,
     )
 
-    def __init__(self, training_config: TrainingConfig = None, **kwargs):
+    def __init__(
+        self,
+        training_config: TrainingConfig = None,
+        min_weights: Optional[int] = None,
+        **kwargs,
+    ):
         """Initialize ComplexityModel.
 
         Args:
             training_config: Training configuration.
+            min_weights: Minimum ``num_weights`` for a game to be eligible
+                for training/eval. Defaults to ``data_config.min_weights`` (5).
             **kwargs: Additional arguments passed to TrainableModel.
         """
         super().__init__(training_config=training_config, **kwargs)
+        self.min_weights = (
+            min_weights if min_weights is not None else self.data_config.min_weights
+        )
+
+    def prepare_features(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        split_name: str,
+        args: Any = None,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Filter to games with sufficient complexity votes.
+
+        Games with ``num_weights < min_weights`` have target == 0 (no votes
+        recorded), which would drag the model toward the mean of the
+        unrated population. Apply the same filter at training and eval time.
+        """
+        if "num_weights" not in X.columns:
+            return X, y
+        mask = X["num_weights"] >= self.min_weights
+        if y is None:
+            return X.loc[mask], None
+        return X.loc[mask], y.loc[mask]
 
     def configure_model(
         self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None

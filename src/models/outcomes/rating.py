@@ -36,14 +36,44 @@ class RatingModel(TrainableModel):
         supports_embeddings=True,
     )
 
-    def __init__(self, training_config: TrainingConfig = None, **kwargs):
+    def __init__(
+        self,
+        training_config: TrainingConfig = None,
+        min_ratings: Optional[int] = None,
+        **kwargs,
+    ):
         """Initialize RatingModel.
 
         Args:
             training_config: Training configuration.
+            min_ratings: Minimum ``users_rated`` for a game to be eligible
+                for training/eval. Defaults to ``data_config.min_ratings`` (5).
             **kwargs: Additional arguments passed to TrainableModel.
         """
         super().__init__(training_config=training_config, **kwargs)
+        self.min_ratings = (
+            min_ratings if min_ratings is not None else self.data_config.min_ratings
+        )
+
+    def prepare_features(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        split_name: str,
+        args: Any = None,
+    ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Filter to games with sufficient ratings.
+
+        Games with ``users_rated < min_ratings`` have target == 0 (no
+        rating signal) and would drag the model toward the mean of the
+        unrated population. Apply the same filter at training and eval time.
+        """
+        if "users_rated" not in X.columns:
+            return X, y
+        mask = X["users_rated"] >= self.min_ratings
+        if y is None:
+            return X.loc[mask], None
+        return X.loc[mask], y.loc[mask]
 
     def configure_model(
         self, algorithm: str, algorithm_params: Optional[Dict[str, Any]] = None

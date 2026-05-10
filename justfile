@@ -392,8 +392,12 @@ bgg-score snapshot="1" model="complexity" candidate="" splits="standard" upstrea
 # Run the full training cascade for one snapshot+split. Each model trains and
 # (where downstream models depend on it) scores before the next layer trains.
 #
+# `splits=all` resolves to every split that exists under the snapshot —
+# convenient for year-over-year runs after `just bgg-yoy`.
+#
 #   just bgg-train-all
 #   just bgg-train-all snapshot=2 splits=standard,yoy_2024
+#   just bgg-train-all snapshot=1 splits=all
 bgg-train-all snapshot="1" splits="standard":
     #!/usr/bin/env bash
     set -e
@@ -401,6 +405,16 @@ bgg-train-all snapshot="1" splits="standard":
     cand_for() {
         uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$1')[0])"
     }
+
+    splits="{{splits}}"
+    if [ "$splits" = "all" ]; then
+        splits=$(uv run python -c "from src.models.snapshot_storage import SnapshotStorage; print(','.join(SnapshotStorage({{snapshot}}).list_splits()))")
+        if [ -z "$splits" ]; then
+            echo "No splits under snapshot v{{snapshot}}. Run bgg-split or bgg-yoy first." >&2
+            exit 1
+        fi
+        echo "Resolved splits=all → $splits"
+    fi
 
     HURDLE=$(cand_for hurdle)
     COMPLEXITY=$(cand_for complexity)
@@ -410,31 +424,31 @@ bgg-train-all snapshot="1" splits="standard":
 
     echo "===== hurdle ====="
     uv run python -m src.pipeline.train --model hurdle --candidate "$HURDLE" \
-        --snapshot-version {{snapshot}} --splits {{splits}}
+        --snapshot-version {{snapshot}} --splits "$splits"
 
     echo "===== complexity (train + score) ====="
     uv run python -m src.pipeline.train --model complexity --candidate "$COMPLEXITY" \
-        --snapshot-version {{snapshot}} --splits {{splits}}
+        --snapshot-version {{snapshot}} --splits "$splits"
     uv run python -m src.pipeline.score --model complexity --candidate "$COMPLEXITY" \
-        --snapshot-version {{snapshot}} --splits {{splits}}
+        --snapshot-version {{snapshot}} --splits "$splits"
 
     echo "===== rating + users_rated (train, then score) ====="
     uv run python -m src.pipeline.train --model rating --candidate "$RATING" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --snapshot-version {{snapshot}} --splits "$splits" \
         --upstream complexity=$COMPLEXITY
     uv run python -m src.pipeline.train --model users_rated --candidate "$USERS_RATED" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --snapshot-version {{snapshot}} --splits "$splits" \
         --upstream complexity=$COMPLEXITY
     uv run python -m src.pipeline.score --model rating --candidate "$RATING" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --snapshot-version {{snapshot}} --splits "$splits" \
         --upstream complexity=$COMPLEXITY
     uv run python -m src.pipeline.score --model users_rated --candidate "$USERS_RATED" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --snapshot-version {{snapshot}} --splits "$splits" \
         --upstream complexity=$COMPLEXITY
 
     echo "===== geek_rating ====="
     uv run python -m src.pipeline.train --model geek_rating --candidate "$GEEK_RATING" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
+        --snapshot-version {{snapshot}} --splits "$splits" \
         --upstream complexity=$COMPLEXITY,rating=$RATING,users_rated=$USERS_RATED
 
     echo "===== done ====="

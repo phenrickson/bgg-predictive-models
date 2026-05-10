@@ -128,6 +128,8 @@ def train_one(
     model_kwargs: Dict[str, Any] = {}
     if "min_ratings" in candidate_config:
         model_kwargs["min_ratings"] = candidate_config["min_ratings"]
+    if "min_weights" in candidate_config:
+        model_kwargs["min_weights"] = candidate_config["min_weights"]
     if "mode" in candidate_config:
         model_kwargs["mode"] = candidate_config["mode"]
     if "include_predictions" in candidate_config:
@@ -139,6 +141,9 @@ def train_one(
         algorithm = "ridge" if model.model_task == "regression" else "lightgbm"
 
     logger.info(f"train_one: {model.model_type} / {algorithm}")
+    logger.info(
+        f"  input frames: train={train_df.shape}, tune={tune_df.shape}, test={test_df.shape}"
+    )
 
     # X / y
     train_X, train_y = select_X_y(train_df, model.target_column)
@@ -159,6 +164,10 @@ def train_one(
     train_X, train_y = model.prepare_features(train_X, train_y, "train", prep_args)
     tune_X, tune_y = model.prepare_features(tune_X, tune_y, "tune", prep_args)
     test_X, test_y = model.prepare_features(test_X, test_y, "test", prep_args)
+    logger.info(
+        f"  after prepare_features: "
+        f"train_X={train_X.shape}, tune_X={tune_X.shape}, test_X={test_X.shape}"
+    )
 
     # Filter polars frames to match if prepare_features dropped rows
     if len(train_X) < len(train_df):
