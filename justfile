@@ -440,6 +440,7 @@ bgg-train-all snapshot="1" splits="standard":
     echo "===== done ====="
 
 # Finalize one candidate (refits pipeline on full snapshot universe).
+# Defaults finalize_through to config.years.training.test_through.
 #   just bgg-finalize snapshot=1 model=complexity candidate=ard-complexity finalize_through=2024
 bgg-finalize snapshot="1" model="complexity" candidate="" finalize_through="":
     #!/usr/bin/env bash
@@ -448,26 +449,37 @@ bgg-finalize snapshot="1" model="complexity" candidate="" finalize_through="":
     if [ -z "$cand" ]; then
         cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
     fi
+    ft="{{finalize_through}}"
+    if [ -z "$ft" ]; then
+        ft=$(uv run python -c 'from src.utils.config import load_config; print(load_config().years.training.test_through)')
+    fi
     uv run python -m src.pipeline.finalize \
         --model {{model}} --candidate "$cand" \
         --snapshot-version {{snapshot}} \
-        $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}")
+        --finalize-through "$ft"
 
 # Finalize the full chain (every model in the cascade).
-#   just bgg-finalize-all snapshot=1 finalize_through=2024
+# Defaults finalize_through to config.years.training.test_through.
+#   just bgg-finalize-all snapshot=1
+#   just bgg-finalize-all snapshot=1 finalize_through=2023
 bgg-finalize-all snapshot="1" finalize_through="":
     #!/usr/bin/env bash
     set -e
     cand_for() {
         uv run python -c "from src.models.candidate_config import list_candidates; print(list_candidates('$1')[0])"
     }
+    ft="{{finalize_through}}"
+    if [ -z "$ft" ]; then
+        ft=$(uv run python -c 'from src.utils.config import load_config; print(load_config().years.training.test_through)')
+    fi
+    echo "Finalizing through year $ft"
     for m in hurdle complexity rating users_rated geek_rating; do
         cand=$(cand_for $m)
         echo "===== $m / $cand ====="
         uv run python -m src.pipeline.finalize \
             --model $m --candidate $cand \
             --snapshot-version {{snapshot}} \
-            $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}")
+            --finalize-through "$ft"
     done
 
 # Run end-to-end simulation evaluation on the year following finalize_through.
