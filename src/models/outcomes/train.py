@@ -168,6 +168,9 @@ def train_one(
         f"  after prepare_features: "
         f"train_X={train_X.shape}, tune_X={tune_X.shape}, test_X={test_X.shape}"
     )
+    logger.info("  target stats:")
+    for fold_name, fold_y in [("train", train_y), ("tune", tune_y), ("test", test_y)]:
+        _log_target_stats(fold_name, model.target_column, fold_y, model.model_task)
 
     # Filter polars frames to match if prepare_features dropped rows
     if len(train_X) < len(train_df):
@@ -304,6 +307,31 @@ def train_one(
     if feature_importance is not None:
         out["feature_importance"] = feature_importance
     return out
+
+
+def _log_target_stats(fold: str, target_col: str, y, model_task: str) -> None:
+    """Log per-fold target distribution: regression → min/mean/std/n_zero,
+    classification → class counts."""
+    if y is None or len(y) == 0:
+        logger.info(f"    {fold}: <empty>")
+        return
+    arr = np.asarray(y)
+    if model_task == "classification":
+        n_pos = int((arr == 1).sum())
+        n_neg = int((arr == 0).sum())
+        ratio = (n_pos / max(n_pos + n_neg, 1)) if (n_pos + n_neg) else 0.0
+        logger.info(
+            f"    {fold}: {target_col} pos={n_pos}, neg={n_neg}, "
+            f"pos_ratio={ratio:.3f}"
+        )
+    else:
+        n_zero = int((arr == 0).sum())
+        logger.info(
+            f"    {fold}: {target_col} "
+            f"min={float(arr.min()):.3f}, max={float(arr.max()):.3f}, "
+            f"mean={float(arr.mean()):.3f}, std={float(arr.std()):.3f}, "
+            f"n_zero={n_zero}"
+        )
 
 
 def _log_metrics_summary(fold: str, metrics: Dict[str, Any]) -> None:

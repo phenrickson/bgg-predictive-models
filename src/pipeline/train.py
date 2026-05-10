@@ -72,6 +72,16 @@ def train(
         if split is None:
             raise FileNotFoundError(f"Split {split_name!r} not found in v{snapshot_version}")
 
+        meta = split.get("metadata") or {}
+        if meta:
+            logger.info(
+                f"  split years: train ≤ {meta.get('train_through')}, "
+                f"tune = {meta.get('tune_start')}..{meta.get('tune_through')}, "
+                f"test = {meta.get('test_start')}..{meta.get('test_through')}"
+            )
+        if upstream:
+            logger.info(f"  upstream: {upstream}")
+
         train_df, tune_df, test_df = split["train"], split["tune"], split["test"]
         train_df, tune_df, test_df = _join_upstream(
             storage, upstream, split_name, train_df, tune_df, test_df,
