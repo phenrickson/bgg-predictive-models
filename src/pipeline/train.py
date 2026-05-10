@@ -109,6 +109,22 @@ def train(
         )
         logger.info(f"Wrote result {model_type}/{candidate}/v{candidate_version}/{split_name}")
 
+        # Diagnostic plot from the test fold predictions
+        try:
+            _save_diagnostics_plot(
+                storage=storage,
+                model_type=model_type,
+                candidate=candidate,
+                version=candidate_version,
+                split_name=split_name,
+                test_predictions=artifacts.get("test_predictions"),
+                model_task=("classification" if "tune_predictions" in artifacts and
+                            "predicted_proba_class_1" in artifacts["tune_predictions"].columns
+                            else "regression"),
+            )
+        except Exception as e:
+            logger.warning(f"Diagnostic plot skipped for {split_name}: {e}")
+
     _write_summary(storage, model_type, candidate, candidate_version, splits)
     return candidate_version
 
@@ -140,6 +156,42 @@ def _write_summary(
     path = storage.experiment_dir(model_type, candidate, version) / "summary.json"
     path.write_text(_json.dumps(summary, indent=2, default=str))
     return path
+
+
+def _save_diagnostics_plot(
+    storage: SnapshotStorage,
+    model_type: str,
+    candidate: str,
+    version: int,
+    split_name: str,
+    test_predictions: Optional[pl.DataFrame],
+    model_task: str,
+) -> Optional[Path]:
+    """Render a regression or classification diagnostic plot from the test
+    fold predictions and save it to ``results/{split}/plots/diagnostics.png``."""
+    if test_predictions is None or test_predictions.height == 0:
+        return None
+
+    import matplotlib.pyplot as plt
+
+    if model_task == "classification":
+        from src.visualizations.classification_diagnostics import (
+            plot_classification_diagnostics,
+        )
+        fig, _ = plot_classification_diagnostics(test_predictions)
+    else:
+        from src.visualizations.regression_diagnostics import (
+            plot_regression_diagnostics,
+        )
+        fig, _ = plot_regression_diagnostics(test_predictions)
+
+    plots_dir = storage.result_dir(model_type, candidate, version, split_name) / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    plot_path = plots_dir / "diagnostics.png"
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"  saved diagnostics plot → {plot_path}")
+    return plot_path
 
 
 def _join_upstream(

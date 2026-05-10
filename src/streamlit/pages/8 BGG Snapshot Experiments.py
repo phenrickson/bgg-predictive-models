@@ -261,7 +261,7 @@ preds_pd = preds_df.to_pandas()
 
 # Sanity: scatter prediction vs actual.
 if "prediction" in preds_pd.columns and "actual" in preds_pd.columns:
-    pred_col = "predicted_proba" if "predicted_proba" in preds_pd.columns else "prediction"
+    pred_col = "predicted_proba_class_1" if "predicted_proba_class_1" in preds_pd.columns else "prediction"
     fig = px.scatter(
         preds_pd,
         x=pred_col,
@@ -271,7 +271,7 @@ if "prediction" in preds_pd.columns and "actual" in preds_pd.columns:
         opacity=0.5,
     )
     # 45° line over the data range
-    if pred_col != "predicted_proba":
+    if pred_col != "predicted_proba_class_1":
         lo = float(min(preds_pd[pred_col].min(), preds_pd["actual"].min()))
         hi = float(max(preds_pd[pred_col].max(), preds_pd["actual"].max()))
         fig.add_shape(

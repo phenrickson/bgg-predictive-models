@@ -417,7 +417,9 @@ def _build_predictions_frame(
         try:
             proba = pipeline.predict_proba(X)
             if proba.ndim == 2 and proba.shape[1] >= 2:
-                out = out.with_columns(pl.Series("predicted_proba", proba[:, 1]))
+                out = out.with_columns(
+                    pl.Series("predicted_proba_class_1", proba[:, 1])
+                )
         except Exception:
             pass
     return out
