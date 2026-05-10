@@ -13,7 +13,7 @@ CLI::
         [--simulation-name default] [--simulation-version N] \\
         [--top-n 100]
 
-Output: ``_snapshots/v{N}/simulations/{name}/v{M}/top_{top_n}_games.png``
+Output: ``models/bgg/snapshots/v{N}/simulations/{name}/v{M}/top_{top_n}_games.png``
 """
 
 from __future__ import annotations

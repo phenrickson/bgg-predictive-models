@@ -4,7 +4,7 @@ Loads per-split pipelines for the four-model chain (complexity → rating
 + users_rated → geek_rating), runs the chained-Bayesian simulation on
 the year immediately after the split's test fold, and writes per-game
 predictions plus end-to-end metrics under
-``_snapshots/v{N}/simulations/{name}/{split_name}/v{M}/``.
+``models/bgg/snapshots/v{N}/simulations/{name}/{split_name}/v{M}/``.
 
 Eval year is derived from the split's ``test_through + 1``. This is the
 genuinely-held-out year — the chain is being asked to predict games it

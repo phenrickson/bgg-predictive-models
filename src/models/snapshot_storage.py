@@ -1,6 +1,6 @@
 """Storage layer for model snapshots, splits, and experiment results.
 
-Owns the path layout and I/O for ``models/experiments/_snapshots/v{N}/``.
+Owns the path layout and I/O for ``models/bgg/snapshots/v{N}/``.
 Two experiments under the same ``(snapshot_version, split_name)`` are
 guaranteed to have seen identical bytes for train/tune/test.
 
@@ -37,7 +37,7 @@ import polars as pl
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_DIR = "models/experiments/_snapshots"
+DEFAULT_BASE_DIR = "models/bgg/snapshots"
 
 
 class SnapshotStorage:

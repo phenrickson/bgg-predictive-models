@@ -5,7 +5,7 @@ Run::
     uv run python -m src.models.build_snapshot \\
         [--use-embeddings] [--local-data PATH]
 
-Writes ``models/experiments/_snapshots/v{N}/universe.parquet`` and
+Writes ``models/bgg/snapshots/v{N}/universe.parquet`` and
 ``metadata.json``. The version number is auto-assigned to the next available
 integer. Once built, a snapshot is immutable.
 """
