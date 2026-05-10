@@ -203,11 +203,11 @@ def test_save_and_load_simulation_roundtrip(tmp_path: Path) -> None:
         "complexity_actual": [2.1, 3.0, 3.9],
     })
 
-    assert storage.next_simulation_version("default") == 1
-    storage.save_simulation("default", 1, registration, metrics, predictions)
-    assert storage.next_simulation_version("default") == 2
+    assert storage.next_simulation_version("default", "standard") == 1
+    storage.save_simulation("default", "standard", 1, registration, metrics, predictions)
+    assert storage.next_simulation_version("default", "standard") == 2
 
-    loaded = storage.load_simulation("default", version=1)
+    loaded = storage.load_simulation("default", "standard", version=1)
     assert loaded is not None
     assert loaded["registration"] == registration
     assert loaded["metrics"] == metrics
@@ -216,4 +216,4 @@ def test_save_and_load_simulation_roundtrip(tmp_path: Path) -> None:
 
 def test_load_simulation_when_missing(tmp_path: Path) -> None:
     storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
-    assert storage.load_simulation("default") is None
+    assert storage.load_simulation("default", "standard") is None

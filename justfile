@@ -482,27 +482,42 @@ bgg-finalize-all snapshot="1" finalize_through="":
             --finalize-through "$ft"
     done
 
-# Run end-to-end simulation evaluation on the year following finalize_through.
-# Requires finalized.pkl for complexity, rating, users_rated, geek_rating
-# (run `just bgg-finalize-all` first). Eval year = finalize_through + 1,
-# auto-derived from each model's registration.
+# Run end-to-end simulation evaluation on the year after the split's test fold.
+# Loads per-split pipelines (NOT finalized — finalize is for production scoring).
+# eval_year = split.test_through + 1.
 #
 #   just bgg-simulate
-#   just bgg-simulate snapshot=1 name=default samples=500
-bgg-simulate snapshot="1" name="default" samples="500":
+#   just bgg-simulate snapshot=1 split=yoy_2019 name=default samples=500
+bgg-simulate snapshot="1" split="standard" name="default" samples="500":
     uv run python -m src.pipeline.evaluate_simulation \
-        --snapshot-version {{snapshot}} \
+        --snapshot-version {{snapshot}} --split {{split}} \
         --simulation-name {{name}} --n-samples {{samples}}
 
+# Run simulation across the standard split plus all yoy_* splits.
+# Useful for year-over-year system evaluation.
+#
+#   just bgg-simulate-all
+#   just bgg-simulate-all snapshot=2 samples=200
+bgg-simulate-all snapshot="1" name="default" samples="500":
+    #!/usr/bin/env bash
+    set -e
+    splits=$(uv run python -c "from src.models.snapshot_storage import SnapshotStorage; print(' '.join(SnapshotStorage({{snapshot}}).list_splits()))")
+    for split in $splits; do
+        echo "===== $split ====="
+        uv run python -m src.pipeline.evaluate_simulation \
+            --snapshot-version {{snapshot}} --split $split \
+            --simulation-name {{name}} --n-samples {{samples}}
+    done
+
 # Plot top-N games by predicted geek_rating from a simulation run.
-# Defaults: latest simulation under name=default, top-N=100.
+# Defaults: latest simulation under name=default, split=standard, top-N=100.
 #
 #   just bgg-plot
-#   just bgg-plot snapshot=1 name=default top=50
-bgg-plot snapshot="1" name="default" top="100" version="":
+#   just bgg-plot snapshot=1 split=standard name=default top=50
+bgg-plot snapshot="1" split="standard" name="default" top="100" version="":
     #!/usr/bin/env bash
     set -e
     uv run python -m src.pipeline.plot_simulation \
-        --snapshot-version {{snapshot}} \
+        --snapshot-version {{snapshot}} --split {{split}} \
         --simulation-name {{name}} --top-n {{top}} \
         $([ -n "{{version}}" ] && echo "--simulation-version {{version}}")

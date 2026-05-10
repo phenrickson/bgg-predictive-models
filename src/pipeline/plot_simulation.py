@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 def plot_top_games(
     snapshot_version: int,
     simulation_name: str = "default",
+    split_name: str = "standard",
     simulation_version: Optional[int] = None,
     top_n: int = 100,
     base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
@@ -43,16 +44,16 @@ def plot_top_games(
     """Plot the top-N games by predicted geek_rating from a simulation run."""
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
 
-    sim = storage.load_simulation(simulation_name, version=simulation_version)
+    sim = storage.load_simulation(simulation_name, split_name, version=simulation_version)
     if sim is None:
         raise FileNotFoundError(
-            f"No simulation {simulation_name}/v{simulation_version or 'latest'} "
+            f"No simulation {simulation_name}/{split_name}/v{simulation_version or 'latest'} "
             f"under snapshot v{snapshot_version}"
         )
 
     # Resolve actual version used by load_simulation (latest if None was passed)
     resolved_version = sim["registration"]["version"]
-    sim_dir = storage.simulation_dir(simulation_name, resolved_version)
+    sim_dir = storage.simulation_dir(simulation_name, split_name, resolved_version)
 
     eval_year = sim["registration"].get("eval_year", "unknown")
     df = sim["predictions"].to_pandas()
@@ -110,7 +111,7 @@ def plot_top_games(
     axes[0].invert_yaxis()
 
     plt.suptitle(
-        f"Top {top_n} Games by Predicted Geek Rating - {eval_year}\n"
+        f"Top {top_n} Games by Predicted Geek Rating - {eval_year} ({split_name})\n"
         "(line = 90% interval, thick = 50% interval, dot = predicted, circle = actual)",
         fontsize=13, y=1.01,
     )
@@ -126,6 +127,7 @@ def plot_top_games(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--split", type=str, default="standard")
     parser.add_argument("--simulation-name", type=str, default="default")
     parser.add_argument("--simulation-version", type=int, default=None)
     parser.add_argument("--top-n", type=int, default=100)
@@ -137,6 +139,7 @@ def main() -> int:
     path = plot_top_games(
         snapshot_version=args.snapshot_version,
         simulation_name=args.simulation_name,
+        split_name=args.split,
         simulation_version=args.simulation_version,
         top_n=args.top_n,
         base_dir=args.base_dir,

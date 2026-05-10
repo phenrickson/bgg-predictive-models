@@ -1,23 +1,22 @@
-"""Snapshot-aware simulation evaluator.
+"""Snapshot-aware simulation evaluator (per-split).
 
-Loads finalized pipelines for the four-model chain (complexity → rating
-+ users_rated → geek_rating) from a snapshot, runs the chained-Bayesian
-simulation on the year following ``finalize_through``, and writes per-
-game predictions plus end-to-end metrics under
-``_snapshots/v{N}/simulations/{name}/v{M}/``.
+Loads per-split pipelines for the four-model chain (complexity → rating
++ users_rated → geek_rating), runs the chained-Bayesian simulation on
+the year immediately after the split's test fold, and writes per-game
+predictions plus end-to-end metrics under
+``_snapshots/v{N}/simulations/{name}/{split_name}/v{M}/``.
 
-Eval year is derived from the complexity candidate's
-``finalize_through`` (recorded in registration.json by pipeline.finalize).
-The simulation evaluates the deployed-style chain on the immediately-
-following year — even if that year's actual values aren't fully
-realized yet, the per-game predictions are useful to inspect.
+Eval year is derived from the split's ``test_through + 1``. This is the
+genuinely-held-out year — the chain is being asked to predict games it
+has not seen at any stage. Repeat across all YoY splits to get a
+year-over-year picture of methodology performance.
 
 CLI::
 
     uv run python -m src.pipeline.evaluate_simulation \\
-        --snapshot-version 1 \\
+        --snapshot-version 1 --split standard \\
         [--simulation-name default] \\
-        [--candidates complexity=ard-complexity,rating=ard-ridge-rating,...] \\
+        [--candidates complexity=ard-complexity,...] \\
         [--n-samples 500]
 """
 
@@ -46,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 def evaluate_simulation(
     snapshot_version: int,
+    split_name: str = "standard",
     simulation_name: str = "default",
     candidates: Optional[Dict[str, str]] = None,
     n_samples: int = 500,
@@ -53,14 +53,22 @@ def evaluate_simulation(
     base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
     random_state: int = 42,
 ) -> int:
-    """Run simulation on the year immediately following finalize_through.
-
-    Returns the simulation version assigned.
-    """
+    """Run chain simulation on the year after the split's test fold."""
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
     universe = storage.load_universe()
     if universe is None:
         raise FileNotFoundError(f"No snapshot v{snapshot_version}")
+
+    split = storage.load_split(split_name)
+    if split is None:
+        raise FileNotFoundError(f"Split {split_name!r} not found in v{snapshot_version}")
+    split_meta = split.get("metadata") or {}
+    test_through = split_meta.get("test_through")
+    if test_through is None:
+        raise ValueError(
+            f"Split {split_name!r} has no test_through in its metadata"
+        )
+    eval_year = int(test_through) + 1
 
     if candidates is None:
         candidates = {}
@@ -71,11 +79,10 @@ def evaluate_simulation(
                 raise ValueError(f"No candidates for {model_type} in config.yaml")
             candidates[model_type] = cands[0]
 
-    # Load finalized pipelines + figure out eval year from each model's
-    # registration. We require all four to share the same finalize_through
-    # so the eval year is unambiguous.
+    # Load per-split trained pipelines (NOT finalized — finalize is a
+    # production-deployment concern; simulation evaluates the trained chain).
     pipelines: Dict[str, Any] = {}
-    finalize_throughs: Dict[str, int] = {}
+    candidate_versions: Dict[str, int] = {}
     for model_type, cand in candidates.items():
         versions = storage.list_candidate_versions(model_type, cand)
         if not versions:
@@ -83,42 +90,25 @@ def evaluate_simulation(
                 f"No versions for {model_type}/{cand} in v{snapshot_version}"
             )
         v = versions[-1]
-        pipeline = storage.load_finalized_pipeline(model_type, cand, v)
-        if pipeline is None:
+        result = storage.load_result(model_type, cand, v, split_name)
+        if result is None:
             raise FileNotFoundError(
-                f"No finalized.pkl for {model_type}/{cand}/v{v} — run pipeline.finalize first"
+                f"No result for {model_type}/{cand}/v{v} on split {split_name!r} — "
+                f"run pipeline.train against this split first"
             )
-        pipelines[model_type] = pipeline
-        reg = storage.load_candidate_registration(model_type, cand, v) or {}
-        ft = reg.get("finalize_through")
-        if ft is None:
-            raise ValueError(
-                f"{model_type}/{cand}/v{v} has no finalize_through in its registration. "
-                f"Re-finalize with --finalize-through to set it."
-            )
-        finalize_throughs[model_type] = int(ft)
+        pipelines[model_type] = result["pipeline"]
+        candidate_versions[model_type] = v
 
-    distinct = set(finalize_throughs.values())
-    if len(distinct) > 1:
-        raise ValueError(
-            f"Models have inconsistent finalize_through values: {finalize_throughs}. "
-            f"Re-finalize all models to a common cutoff."
-        )
-    finalize_through = next(iter(distinct))
-    eval_year = finalize_through + 1
-
-    # Filter universe to the eval year
     eval_df = universe.filter(pl.col("year_published") == eval_year)
     if eval_df.height == 0:
         raise ValueError(
             f"No games in universe with year_published == {eval_year} "
-            f"(finalize_through+1). Either bump the snapshot to include "
-            f"newer games, or re-finalize at a lower cutoff."
+            f"(split {split_name}'s test_through + 1)"
         )
     eval_pd = eval_df.to_pandas()
     logger.info(
-        f"Evaluating {eval_df.height} games from year {eval_year} "
-        f"(finalize_through={finalize_through})"
+        f"Simulating {eval_df.height} games from {eval_year} "
+        f"(split={split_name}, test_through={test_through})"
     )
 
     cholesky_cache = precompute_cholesky(
@@ -164,36 +154,37 @@ def evaluate_simulation(
 
     metrics = compute_simulation_metrics(results)
 
-    sim_version = storage.next_simulation_version(simulation_name)
+    sim_version = storage.next_simulation_version(simulation_name, split_name)
     registration = {
         "snapshot_version": snapshot_version,
+        "split_name": split_name,
         "simulation_name": simulation_name,
         "version": sim_version,
         "created_at": datetime.now().isoformat(),
         "candidates": candidates,
-        "finalize_through": finalize_through,
+        "candidate_versions": candidate_versions,
+        "test_through": int(test_through),
         "eval_year": eval_year,
         "n_samples": n_samples,
         "geek_rating_mode": geek_rating_mode,
         "n_eval_games": len(results),
     }
-    storage.save_simulation(simulation_name, sim_version, registration, metrics, predictions)
-    logger.info(f"Wrote simulation {simulation_name}/v{sim_version}")
+    storage.save_simulation(simulation_name, split_name, sim_version, registration, metrics, predictions)
+    logger.info(f"Wrote simulation {simulation_name}/{split_name}/v{sim_version}")
 
-    # Emit the top-N forest plot alongside the artifacts. Lazy import so
-    # matplotlib isn't a hard dependency for callers that only consume
-    # the metrics/predictions programmatically.
+    # Emit the top-N forest plot alongside the artifacts.
     try:
         from src.pipeline.plot_simulation import plot_top_games
         plot_top_games(
             snapshot_version=snapshot_version,
             simulation_name=simulation_name,
+            split_name=split_name,
             simulation_version=sim_version,
             top_n=100,
             base_dir=base_dir,
         )
     except Exception as e:
-        logger.warning(f"Skipped plot for {simulation_name}/v{sim_version}: {e}")
+        logger.warning(f"Skipped plot for {simulation_name}/{split_name}/v{sim_version}: {e}")
 
     return sim_version
 
@@ -201,6 +192,8 @@ def evaluate_simulation(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--split", type=str, default="standard",
+                        help="Split name. Eval year = split's test_through + 1.")
     parser.add_argument("--simulation-name", type=str, default="default")
     parser.add_argument("--candidates", type=str, default=None,
                         help="Comma-separated overrides like 'rating=catboost-rating'")
@@ -220,13 +213,14 @@ def main() -> int:
 
     version = evaluate_simulation(
         snapshot_version=args.snapshot_version,
+        split_name=args.split,
         simulation_name=args.simulation_name,
         candidates=candidates,
         n_samples=args.n_samples,
         geek_rating_mode=args.geek_rating_mode,
         base_dir=args.base_dir,
     )
-    print(f"simulation: {args.simulation_name}/v{version}")
+    print(f"simulation: {args.simulation_name}/{args.split}/v{version}")
     return 0
 
 

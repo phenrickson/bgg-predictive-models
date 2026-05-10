@@ -300,11 +300,11 @@ class SnapshotStorage:
 
     # --- Simulation artifacts ---
 
-    def simulation_dir(self, simulation_name: str, version: int) -> Path:
-        return self.snapshot_dir / "simulations" / simulation_name / f"v{version}"
+    def simulation_dir(self, simulation_name: str, split_name: str, version: int) -> Path:
+        return self.snapshot_dir / "simulations" / simulation_name / split_name / f"v{version}"
 
-    def list_simulation_versions(self, simulation_name: str) -> List[int]:
-        sim_dir = self.snapshot_dir / "simulations" / simulation_name
+    def list_simulation_versions(self, simulation_name: str, split_name: str) -> List[int]:
+        sim_dir = self.snapshot_dir / "simulations" / simulation_name / split_name
         if not sim_dir.exists():
             return []
         out: List[int] = []
@@ -317,19 +317,20 @@ class SnapshotStorage:
                 continue
         return sorted(out)
 
-    def next_simulation_version(self, simulation_name: str) -> int:
-        existing = self.list_simulation_versions(simulation_name)
+    def next_simulation_version(self, simulation_name: str, split_name: str) -> int:
+        existing = self.list_simulation_versions(simulation_name, split_name)
         return (existing[-1] if existing else 0) + 1
 
     def save_simulation(
         self,
         simulation_name: str,
+        split_name: str,
         version: int,
         registration: Dict[str, Any],
         metrics: Dict[str, Any],
         predictions: pl.DataFrame,
     ) -> Path:
-        rdir = self.simulation_dir(simulation_name, version)
+        rdir = self.simulation_dir(simulation_name, split_name, version)
         rdir.mkdir(parents=True, exist_ok=True)
         (rdir / "registration.json").write_text(json.dumps(registration, indent=2, default=str))
         (rdir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
@@ -337,14 +338,14 @@ class SnapshotStorage:
         return rdir
 
     def load_simulation(
-        self, simulation_name: str, version: Optional[int] = None,
+        self, simulation_name: str, split_name: str, version: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         if version is None:
-            versions = self.list_simulation_versions(simulation_name)
+            versions = self.list_simulation_versions(simulation_name, split_name)
             if not versions:
                 return None
             version = versions[-1]
-        rdir = self.simulation_dir(simulation_name, version)
+        rdir = self.simulation_dir(simulation_name, split_name, version)
         if not rdir.exists():
             return None
         return {
