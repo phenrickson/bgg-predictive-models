@@ -2,13 +2,21 @@
 
 Loads finalized pipelines for the four-model chain (complexity → rating
 + users_rated → geek_rating) from a snapshot, runs the chained-Bayesian
-simulation on a split's test fold, and writes per-game predictions plus
-end-to-end metrics under ``_snapshots/v{N}/simulations/{name}/v{M}/``.
+simulation on the year following ``finalize_through``, and writes per-
+game predictions plus end-to-end metrics under
+``_snapshots/v{N}/simulations/{name}/v{M}/``.
+
+Eval year is derived from the complexity candidate's
+``finalize_through`` (recorded in registration.json by pipeline.finalize).
+The simulation evaluates the deployed-style chain on the immediately-
+following year — even if that year's actual values aren't fully
+realized yet, the per-game predictions are useful to inspect.
 
 CLI::
 
     uv run python -m src.pipeline.evaluate_simulation \\
-        --snapshot-version 1 --split standard --simulation-name default \\
+        --snapshot-version 1 \\
+        [--simulation-name default] \\
         [--candidates complexity=ard-complexity,rating=ard-ridge-rating,...] \\
         [--n-samples 500]
 """
@@ -38,7 +46,6 @@ logger = logging.getLogger(__name__)
 
 def evaluate_simulation(
     snapshot_version: int,
-    split_name: str,
     simulation_name: str = "default",
     candidates: Optional[Dict[str, str]] = None,
     n_samples: int = 500,
@@ -46,12 +53,13 @@ def evaluate_simulation(
     base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
     random_state: int = 42,
 ) -> int:
-    """Run simulation on the test fold of (snapshot_version, split_name).
+    """Run simulation on the year immediately following finalize_through.
 
     Returns the simulation version assigned.
     """
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
-    if storage.load_universe() is None:
+    universe = storage.load_universe()
+    if universe is None:
         raise FileNotFoundError(f"No snapshot v{snapshot_version}")
 
     if candidates is None:
@@ -63,7 +71,11 @@ def evaluate_simulation(
                 raise ValueError(f"No candidates for {model_type} in config.yaml")
             candidates[model_type] = cands[0]
 
+    # Load finalized pipelines + figure out eval year from each model's
+    # registration. We require all four to share the same finalize_through
+    # so the eval year is unambiguous.
     pipelines: Dict[str, Any] = {}
+    finalize_throughs: Dict[str, int] = {}
     for model_type, cand in candidates.items():
         versions = storage.list_candidate_versions(model_type, cand)
         if not versions:
@@ -77,12 +89,37 @@ def evaluate_simulation(
                 f"No finalized.pkl for {model_type}/{cand}/v{v} — run pipeline.finalize first"
             )
         pipelines[model_type] = pipeline
+        reg = storage.load_candidate_registration(model_type, cand, v) or {}
+        ft = reg.get("finalize_through")
+        if ft is None:
+            raise ValueError(
+                f"{model_type}/{cand}/v{v} has no finalize_through in its registration. "
+                f"Re-finalize with --finalize-through to set it."
+            )
+        finalize_throughs[model_type] = int(ft)
 
-    split = storage.load_split(split_name)
-    if split is None:
-        raise FileNotFoundError(f"Split {split_name!r} not found in v{snapshot_version}")
-    test_df = split["test"]
-    test_pd = test_df.to_pandas()
+    distinct = set(finalize_throughs.values())
+    if len(distinct) > 1:
+        raise ValueError(
+            f"Models have inconsistent finalize_through values: {finalize_throughs}. "
+            f"Re-finalize all models to a common cutoff."
+        )
+    finalize_through = next(iter(distinct))
+    eval_year = finalize_through + 1
+
+    # Filter universe to the eval year
+    eval_df = universe.filter(pl.col("year_published") == eval_year)
+    if eval_df.height == 0:
+        raise ValueError(
+            f"No games in universe with year_published == {eval_year} "
+            f"(finalize_through+1). Either bump the snapshot to include "
+            f"newer games, or re-finalize at a lower cutoff."
+        )
+    eval_pd = eval_df.to_pandas()
+    logger.info(
+        f"Evaluating {eval_df.height} games from year {eval_year} "
+        f"(finalize_through={finalize_through})"
+    )
 
     cholesky_cache = precompute_cholesky(
         complexity_pipeline=pipelines["complexity"],
@@ -94,7 +131,7 @@ def evaluate_simulation(
     )
 
     results = simulate_batch(
-        games=test_pd,
+        games=eval_pd,
         complexity_pipeline=pipelines["complexity"],
         rating_pipeline=pipelines["rating"],
         users_rated_pipeline=pipelines["users_rated"],
@@ -130,14 +167,15 @@ def evaluate_simulation(
     sim_version = storage.next_simulation_version(simulation_name)
     registration = {
         "snapshot_version": snapshot_version,
-        "split_name": split_name,
         "simulation_name": simulation_name,
         "version": sim_version,
         "created_at": datetime.now().isoformat(),
         "candidates": candidates,
+        "finalize_through": finalize_through,
+        "eval_year": eval_year,
         "n_samples": n_samples,
         "geek_rating_mode": geek_rating_mode,
-        "n_test_games": len(results),
+        "n_eval_games": len(results),
     }
     storage.save_simulation(simulation_name, sim_version, registration, metrics, predictions)
     logger.info(f"Wrote simulation {simulation_name}/v{sim_version}")
@@ -147,7 +185,6 @@ def evaluate_simulation(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--snapshot-version", type=int, required=True)
-    parser.add_argument("--split", type=str, default="standard")
     parser.add_argument("--simulation-name", type=str, default="default")
     parser.add_argument("--candidates", type=str, default=None,
                         help="Comma-separated overrides like 'rating=catboost-rating'")
@@ -167,7 +204,6 @@ def main() -> int:
 
     version = evaluate_simulation(
         snapshot_version=args.snapshot_version,
-        split_name=args.split,
         simulation_name=args.simulation_name,
         candidates=candidates,
         n_samples=args.n_samples,

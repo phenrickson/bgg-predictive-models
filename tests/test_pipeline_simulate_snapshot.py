@@ -66,6 +66,8 @@ def _train_and_finalize_chain(base: Path, v: int) -> None:
 
     All upstream models use ARD (Bayesian) so simulate_batch can sample
     from their posteriors. geek_rating uses ARD in 'direct' mode.
+    Finalized through 2020 so that eval year = 2021 (the next year in the
+    synthetic universe).
     """
     cfg_complexity = {"name": "ard-complexity", "algorithm": "ard",
                       "use_embeddings": False, "use_sample_weights": False}
@@ -122,21 +124,21 @@ def _train_and_finalize_chain(base: Path, v: int) -> None:
 
     run_pipeline_finalize(
         snapshot_version=v, model_type="complexity", candidate="ard-complexity",
-        candidate_version=1, finalize_through=2021, base_dir=base,
+        candidate_version=1, finalize_through=2020, base_dir=base,
     )
     run_pipeline_finalize(
         snapshot_version=v, model_type="rating", candidate="ard-ridge-rating",
-        candidate_version=1, finalize_through=2021, base_dir=base,
+        candidate_version=1, finalize_through=2020, base_dir=base,
         upstream={"complexity": "ard-complexity"},
     )
     run_pipeline_finalize(
         snapshot_version=v, model_type="users_rated", candidate="ard-ridge-users_rated",
-        candidate_version=1, finalize_through=2021, base_dir=base,
+        candidate_version=1, finalize_through=2020, base_dir=base,
         upstream={"complexity": "ard-complexity"},
     )
     run_pipeline_finalize(
         snapshot_version=v, model_type="geek_rating", candidate="ard-geek_rating",
-        candidate_version=1, finalize_through=2021, base_dir=base,
+        candidate_version=1, finalize_through=2020, base_dir=base,
         upstream={"complexity": "ard-complexity", "rating": "ard-ridge-rating",
                   "users_rated": "ard-ridge-users_rated"},
     )
@@ -154,7 +156,6 @@ def test_simulate_writes_simulation_artifacts(tmp_path: Path) -> None:
     }
     run_pipeline_simulate(
         snapshot_version=v,
-        split_name="standard",
         simulation_name="default",
         candidates=candidates,
         n_samples=50,
@@ -167,7 +168,12 @@ def test_simulate_writes_simulation_artifacts(tmp_path: Path) -> None:
     assert "predictions" in sim
     assert "metrics" in sim
     assert "registration" in sim
-    test_fold = storage.load_split("standard")["test"]
-    assert sim["predictions"].height == test_fold.height
+
+    # Eval year = finalize_through + 1 = 2020 + 1 = 2021
+    universe = storage.load_universe()
+    eval_year_rows = universe.filter(pl.col("year_published") == 2021)
+    assert sim["predictions"].height == eval_year_rows.height
+    assert sim["registration"]["eval_year"] == 2021
+
     for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
         assert outcome in sim["metrics"]
