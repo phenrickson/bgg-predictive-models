@@ -179,6 +179,22 @@ def evaluate_simulation(
     }
     storage.save_simulation(simulation_name, sim_version, registration, metrics, predictions)
     logger.info(f"Wrote simulation {simulation_name}/v{sim_version}")
+
+    # Emit the top-N forest plot alongside the artifacts. Lazy import so
+    # matplotlib isn't a hard dependency for callers that only consume
+    # the metrics/predictions programmatically.
+    try:
+        from src.pipeline.plot_simulation import plot_top_games
+        plot_top_games(
+            snapshot_version=snapshot_version,
+            simulation_name=simulation_name,
+            simulation_version=sim_version,
+            top_n=100,
+            base_dir=base_dir,
+        )
+    except Exception as e:
+        logger.warning(f"Skipped plot for {simulation_name}/v{sim_version}: {e}")
+
     return sim_version
 
 
