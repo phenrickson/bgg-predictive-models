@@ -493,3 +493,16 @@ bgg-simulate snapshot="1" name="default" samples="500":
     uv run python -m src.pipeline.evaluate_simulation \
         --snapshot-version {{snapshot}} \
         --simulation-name {{name}} --n-samples {{samples}}
+
+# Plot top-N games by predicted geek_rating from a simulation run.
+# Defaults: latest simulation under name=default, top-N=100.
+#
+#   just bgg-plot
+#   just bgg-plot snapshot=1 name=default top=50
+bgg-plot snapshot="1" name="default" top="100" version="":
+    #!/usr/bin/env bash
+    set -e
+    uv run python -m src.pipeline.plot_simulation \
+        --snapshot-version {{snapshot}} \
+        --simulation-name {{name}} --top-n {{top}} \
+        $([ -n "{{version}}" ] && echo "--simulation-version {{version}}")
