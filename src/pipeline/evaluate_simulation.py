@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 def evaluate_simulation(
     snapshot_version: int,
     split_name: str = "standard",
-    simulation_name: str = "default",
+    simulation_name: Optional[str] = None,
     candidates: Optional[Dict[str, str]] = None,
     n_samples: int = 500,
     geek_rating_mode: Optional[str] = None,
@@ -54,12 +54,17 @@ def evaluate_simulation(
     random_state: int = 42,
 ) -> int:
     """Run chain simulation on the year after the split's test fold."""
-    if geek_rating_mode is None:
+    if geek_rating_mode is None or simulation_name is None:
         from src.utils.config import load_config
         cfg = load_config()
-        geek_rating_mode = (
-            cfg.simulation.geek_rating_mode if cfg.simulation else "bayesian"
-        )
+        if geek_rating_mode is None:
+            geek_rating_mode = (
+                cfg.simulation.geek_rating_mode if cfg.simulation else "bayesian"
+            )
+        if simulation_name is None:
+            simulation_name = (
+                cfg.simulation.experiment_name if cfg.simulation else "default"
+            )
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
     universe = storage.load_universe()
     if universe is None:
@@ -207,7 +212,8 @@ def main() -> int:
     parser.add_argument("--snapshot-version", type=int, required=True)
     parser.add_argument("--split", type=str, default="standard",
                         help="Split name. Eval year = split's test_through + 1.")
-    parser.add_argument("--simulation-name", type=str, default="default")
+    parser.add_argument("--simulation-name", type=str, default=None,
+                        help="Override config.simulation.experiment_name")
     parser.add_argument("--candidates", type=str, default=None,
                         help="Comma-separated overrides like 'rating=catboost-rating'")
     parser.add_argument("--n-samples", type=int, default=500)

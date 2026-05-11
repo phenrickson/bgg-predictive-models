@@ -26,6 +26,10 @@ ml_project:
   # Default environment
 default_environment: dev
 
+# Evaluate models over time
+evaluate:
+  output_dir: "./models/experiments"
+
 # Year Configuration
 # All years are inclusive (e.g., train_through: 2021 means include 2021)
 years:
@@ -39,7 +43,7 @@ years:
     test_through: 2024
   # years to run over for year over year evaluation
   eval:
-    start: 2018
+    start: 2021
     end: 2024
   # data to score with trained model
   score:
@@ -69,20 +73,6 @@ models:
         use_sample_weights: false
         use_embeddings: true
         min_weights: 5
-  rating:
-    type: ard
-    experiment_name: ard-ridge-rating
-    use_sample_weights: false
-    min_ratings: 5
-    use_embeddings: true
-    candidates:
-      - name: ard-ridge-rating
-        algorithm: ard
-        use_sample_weights: false
-        min_ratings: 5
-        use_embeddings: true
-        upstream:
-          complexity: ard-complexity
   users_rated:
     type: ard
     experiment_name: ard-ridge-users_rated
@@ -97,6 +87,21 @@ models:
         use_embeddings: true
         upstream:
           complexity: ard-complexity
+  rating:
+    type: ard
+    experiment_name: ard-ridge-rating
+    use_sample_weights: false
+    min_ratings: 5
+    use_embeddings: true
+    candidates:
+      - name: ard-ridge-rating
+        algorithm: ard
+        use_sample_weights: false
+        min_ratings: 5
+        use_embeddings: true
+        upstream:
+          complexity: ard-complexity
+          users_rated: ard-ridge-users_rated
   geek_rating:
     type: ard
     experiment_name: ard-geek_rating
@@ -116,13 +121,10 @@ models:
           rating: ard-ridge-rating
           users_rated: ard-ridge-users_rated
 
-# Evaluate models over time
-evaluate:
-  output_dir: "./models/experiments"
-
 # Simulation Configuration
 # Settings for simulation-based uncertainty estimation
 simulation:
+  experiment_name: ard-ridge-rating-ur # Name written under simulations/<name>/<split>/v{N}/
   n_samples: 500 # Number of posterior samples per game
   geek_rating_mode: direct # bayesian, stacking, or direct
   output_dir: "./models/simulation"

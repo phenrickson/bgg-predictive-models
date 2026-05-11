@@ -203,6 +203,7 @@ class ModelConfig:
 class SimulationConfig:
     """Configuration for simulation-based uncertainty estimation."""
 
+    experiment_name: str = "default"  # Name written under simulations/<name>/<split>/v{N}/
     n_samples: int = 500  # Number of posterior samples
     geek_rating_mode: str = "bayesian"  # bayesian, stacking, or direct
     output_dir: str = "models/simulation"
@@ -512,6 +513,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     if "simulation" in config:
         sim = config["simulation"]
         simulation_config = SimulationConfig(
+            experiment_name=sim.get("experiment_name", "default"),
             n_samples=sim.get("n_samples", 500),
             geek_rating_mode=sim.get("geek_rating_mode", "bayesian"),
             output_dir=sim.get("output_dir", "models/simulation"),

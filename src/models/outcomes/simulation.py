@@ -251,6 +251,15 @@ def sample_weights_fast(
     return coef + z @ cholesky_L.T
 
 
+def pipeline_has_feature(pipeline: Pipeline, column_name: str) -> bool:
+    """True if the preprocessor's output includes ``column_name``."""
+    try:
+        get_scaler_params_for_column(pipeline, column_name)
+        return True
+    except ValueError:
+        return False
+
+
 def get_scaler_params_for_column(
     pipeline: Pipeline, column_name: str
 ) -> Tuple[float, float, int]:
@@ -424,6 +433,96 @@ def sample_conditional_on_complexity(
             ) / complexity_std
             X_sample = X_base.copy()
             X_sample[:, complexity_idx] = scaled_complexity
+            predictions[:, i] = model.predict(X_sample)
+
+    return predictions
+
+
+def sample_conditional_on_upstreams(
+    pipeline: Pipeline,
+    features: pd.DataFrame,
+    upstream_samples: Dict[str, np.ndarray],
+    sample_posterior_weights: bool = True,
+    include_noise: bool = True,
+    random_state: int = 42,
+    cholesky_L: np.ndarray = None,
+) -> np.ndarray:
+    """Sample from a posterior conditional on multiple upstream sample columns.
+
+    Generalization of ``sample_conditional_on_complexity`` for models with
+    more than one upstream dependency (e.g. rating | complexity, users_rated).
+
+    For each MC sample i, each upstream column gets its i-th sample written
+    into the preprocessed feature matrix at the scaler's stored scale, then
+    the linear model produces a prediction. Posterior weight sampling and
+    observation noise are handled the same as the single-upstream case.
+
+    Args:
+        pipeline: Fitted sklearn pipeline.
+        features: Base features (placeholders for upstream columns are fine).
+        upstream_samples: Map from upstream column name (as the model sees it,
+            e.g. ``predicted_complexity``) to a (n_games, n_samples) array of
+            samples for that column.
+        sample_posterior_weights, include_noise, random_state, cholesky_L:
+            Same as ``sample_conditional_on_complexity``.
+
+    Returns:
+        Predictions of shape (n_games, n_samples).
+    """
+    if not upstream_samples:
+        raise ValueError("sample_conditional_on_upstreams requires at least one upstream")
+
+    preprocessor = pipeline.named_steps["preprocessor"]
+    model = pipeline.named_steps["model"]
+
+    # Shapes must match across upstreams
+    shapes = {k: v.shape for k, v in upstream_samples.items()}
+    if len(set(shapes.values())) > 1:
+        raise ValueError(f"Upstream sample shapes disagree: {shapes}")
+    n_games, n_samples = next(iter(upstream_samples.values())).shape
+    rng = np.random.default_rng(random_state)
+
+    # Cache (mean, std, idx) per upstream column from the fitted scaler.
+    scaler_params = {
+        col: get_scaler_params_for_column(pipeline, col)
+        for col in upstream_samples
+    }
+
+    # Transform base features once with first-sample placeholders for each upstream.
+    features_with_upstreams = features.copy()
+    for col, samples in upstream_samples.items():
+        features_with_upstreams[col] = samples[:, 0]
+    X_base = preprocessor.transform(features_with_upstreams)
+    if hasattr(X_base, "values"):
+        X_base = X_base.values
+
+    predictions = np.zeros((n_games, n_samples))
+
+    if sample_posterior_weights and hasattr(model, "sigma_"):
+        if cholesky_L is None:
+            cholesky_L = compute_cholesky(model)
+        weight_samples = sample_weights_fast(model.coef_, cholesky_L, n_samples, rng)
+
+        for i in range(n_samples):
+            X_sample = X_base.copy()
+            for col, samples in upstream_samples.items():
+                mean, std, idx = scaler_params[col]
+                X_sample[:, idx] = (samples[:, i] - mean) / std
+
+            pred = X_sample @ weight_samples[i]
+            if hasattr(model, "intercept_"):
+                pred += model.intercept_
+            predictions[:, i] = pred
+
+        if include_noise and hasattr(model, "alpha_"):
+            noise_std = 1.0 / np.sqrt(model.alpha_)
+            predictions += rng.normal(0, noise_std, size=predictions.shape)
+    else:
+        for i in range(n_samples):
+            X_sample = X_base.copy()
+            for col, samples in upstream_samples.items():
+                mean, std, idx = scaler_params[col]
+                X_sample[:, idx] = (samples[:, i] - mean) / std
             predictions[:, i] = model.predict(X_sample)
 
     return predictions
@@ -603,7 +702,7 @@ def sample_geek_rating_direct(
                 geek_rating_pipeline, "predicted_rating"
             )
             users_rated_mean, users_rated_std, users_rated_idx = get_scaler_params_for_column(
-                geek_rating_pipeline, "predicted_users_rated_log"
+                geek_rating_pipeline, "predicted_users_rated"
             )
             use_fast_path = True
     except (ValueError, AttributeError, KeyError):
@@ -618,7 +717,7 @@ def sample_geek_rating_direct(
             games_sample = games.copy()
             games_sample["predicted_complexity"] = complexity_samples[:, i]
             games_sample["predicted_rating"] = rating_samples[:, i]
-            games_sample["predicted_users_rated_log"] = users_rated_log_samples[:, i]
+            games_sample["predicted_users_rated"] = users_rated_log_samples[:, i]
 
             X_transformed = preprocessor.transform(games_sample)
             if hasattr(X_transformed, "values"):
@@ -639,7 +738,7 @@ def sample_geek_rating_direct(
     games_with_predictions = games.copy()
     games_with_predictions["predicted_complexity"] = complexity_samples[:, 0]
     games_with_predictions["predicted_rating"] = rating_samples[:, 0]
-    games_with_predictions["predicted_users_rated_log"] = users_rated_log_samples[:, 0]
+    games_with_predictions["predicted_users_rated"] = users_rated_log_samples[:, 0]
 
     X_base = preprocessor.transform(games_with_predictions)
     if hasattr(X_base, "values"):
@@ -777,21 +876,9 @@ def simulate_geek_rating(
         random_state=random_state,
         cholesky_L=complexity_L,
     )
-    complexity_samples = np.clip(complexity_samples, 1, 5)
 
-    # Step 2: Sample rating conditional on complexity
-    rating_samples = sample_conditional_on_complexity(
-        rating_pipeline,
-        game,
-        complexity_samples,
-        sample_posterior_weights=True,
-        include_noise=include_noise,
-        random_state=random_state + 1,
-        cholesky_L=rating_L,
-    )
-    rating_samples = np.clip(rating_samples, 1, 10)
-
-    # Step 3: Sample users_rated conditional on complexity
+    # Step 2: Sample users_rated conditional on complexity (must precede rating
+    # in case the rating model takes predicted_users_rated as an upstream)
     users_rated_samples = sample_conditional_on_complexity(
         users_rated_pipeline,
         game,
@@ -801,6 +888,33 @@ def simulate_geek_rating(
         random_state=random_state + 2,
         cholesky_L=users_rated_L,
     )
+
+    # Step 3: Sample rating. If the rating model was trained with
+    # predicted_users_rated as an upstream feature, condition on both;
+    # otherwise condition on complexity only (original cascade).
+    if pipeline_has_feature(rating_pipeline, "predicted_users_rated"):
+        rating_samples = sample_conditional_on_upstreams(
+            rating_pipeline,
+            game,
+            {
+                "predicted_complexity": complexity_samples,
+                "predicted_users_rated": users_rated_samples,
+            },
+            sample_posterior_weights=True,
+            include_noise=include_noise,
+            random_state=random_state + 1,
+            cholesky_L=rating_L,
+        )
+    else:
+        rating_samples = sample_conditional_on_complexity(
+            rating_pipeline,
+            game,
+            complexity_samples,
+            sample_posterior_weights=True,
+            include_noise=include_noise,
+            random_state=random_state + 1,
+            cholesky_L=rating_L,
+        )
 
     # Step 4: Compute geek rating using selected mode
     if geek_rating_mode == "bayesian":
@@ -936,21 +1050,10 @@ def simulate_batch(
         random_state=random_state,
         cholesky_L=cholesky_cache.get("complexity"),
     )
-    complexity_samples = np.clip(complexity_samples, 1, 5)
 
-    # Step 2: Sample rating conditional on complexity for ALL games
-    rating_samples = sample_conditional_on_complexity(
-        rating_pipeline,
-        games,
-        complexity_samples,
-        sample_posterior_weights=True,
-        include_noise=True,
-        random_state=random_state + 1,
-        cholesky_L=cholesky_cache.get("rating"),
-    )
-    rating_samples = np.clip(rating_samples, 1, 10)
-
-    # Step 3: Sample users_rated conditional on complexity for ALL games
+    # Step 2: Sample users_rated conditional on complexity (must precede
+    # rating in case the rating model takes predicted_users_rated as an
+    # upstream feature).
     users_rated_samples = sample_conditional_on_complexity(
         users_rated_pipeline,
         games,
@@ -960,6 +1063,33 @@ def simulate_batch(
         random_state=random_state + 2,
         cholesky_L=cholesky_cache.get("users_rated"),
     )
+
+    # Step 3: Sample rating. If the rating model was trained with
+    # predicted_users_rated as an upstream feature, condition on both;
+    # otherwise condition on complexity only (original cascade).
+    if pipeline_has_feature(rating_pipeline, "predicted_users_rated"):
+        rating_samples = sample_conditional_on_upstreams(
+            rating_pipeline,
+            games,
+            {
+                "predicted_complexity": complexity_samples,
+                "predicted_users_rated": users_rated_samples,
+            },
+            sample_posterior_weights=True,
+            include_noise=True,
+            random_state=random_state + 1,
+            cholesky_L=cholesky_cache.get("rating"),
+        )
+    else:
+        rating_samples = sample_conditional_on_complexity(
+            rating_pipeline,
+            games,
+            complexity_samples,
+            sample_posterior_weights=True,
+            include_noise=True,
+            random_state=random_state + 1,
+            cholesky_L=cholesky_cache.get("rating"),
+        )
 
     # Step 4: Compute geek rating using selected mode
     if geek_rating_mode == "bayesian":

@@ -219,7 +219,10 @@ def main() -> int:
 
     setup_logging()
 
-    upstream: Dict[str, str] = {}
+    # Default upstream from the candidate's config; --upstream overrides.
+    from src.models.candidate_config import find_candidate
+    candidate_config = find_candidate(model_type=args.model, candidate=args.candidate)
+    upstream: Dict[str, str] = dict(candidate_config.get("upstream") or {})
     if args.upstream:
         for pair in args.upstream.split(","):
             k, v = pair.split("=", 1)

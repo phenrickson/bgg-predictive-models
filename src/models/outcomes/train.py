@@ -191,7 +191,11 @@ def train_one(
     if model_type == "geek_rating" and prep_args.mode == "direct":
         preserve_columns.append("predicted_complexity")
         if prep_args.include_predictions:
-            preserve_columns.extend(["predicted_rating", "predicted_users_rated_log"])
+            preserve_columns.extend(["predicted_rating", "predicted_users_rated"])
+    # If any upstream is users_rated (e.g. rating | complexity, users_rated),
+    # preserve its prediction column joined in via _join_upstream.
+    if "users_rated" in (candidate_config.get("upstream") or {}):
+        preserve_columns.append("predicted_users_rated")
 
     preprocessor_kwargs = dict(candidate_config.get("preprocessor_kwargs", {}) or {})
     preprocessor_kwargs.update(

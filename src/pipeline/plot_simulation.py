@@ -202,7 +202,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("--snapshot-version", type=int, required=True)
     parser.add_argument("--split", type=str, default="standard")
-    parser.add_argument("--simulation-name", type=str, default="default")
+    parser.add_argument("--simulation-name", type=str, default=None,
+                        help="Override config.simulation.experiment_name")
     parser.add_argument("--simulation-version", type=int, default=None)
     parser.add_argument("--top-n", type=int, default=100)
     parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
@@ -210,9 +211,15 @@ def main() -> int:
 
     setup_logging()
 
+    simulation_name = args.simulation_name
+    if simulation_name is None:
+        from src.utils.config import load_config
+        cfg = load_config()
+        simulation_name = cfg.simulation.experiment_name if cfg.simulation else "default"
+
     path = plot_top_games(
         snapshot_version=args.snapshot_version,
-        simulation_name=args.simulation_name,
+        simulation_name=simulation_name,
         split_name=args.split,
         simulation_version=args.simulation_version,
         top_n=args.top_n,

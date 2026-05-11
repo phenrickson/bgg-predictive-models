@@ -449,24 +449,21 @@ bgg-train-all splits="standard":
     uv run python -m src.pipeline.score --model complexity --candidate "$COMPLEXITY" \
         --snapshot-version {{snapshot}} --splits "$splits"
 
-    echo "===== rating + users_rated (train, then score) ====="
-    uv run python -m src.pipeline.train --model rating --candidate "$RATING" \
-        --snapshot-version {{snapshot}} --splits "$splits" \
-        --upstream complexity=$COMPLEXITY
+    echo "===== users_rated (train + score) ====="
     uv run python -m src.pipeline.train --model users_rated --candidate "$USERS_RATED" \
-        --snapshot-version {{snapshot}} --splits "$splits" \
-        --upstream complexity=$COMPLEXITY
-    uv run python -m src.pipeline.score --model rating --candidate "$RATING" \
-        --snapshot-version {{snapshot}} --splits "$splits" \
-        --upstream complexity=$COMPLEXITY
+        --snapshot-version {{snapshot}} --splits "$splits"
     uv run python -m src.pipeline.score --model users_rated --candidate "$USERS_RATED" \
-        --snapshot-version {{snapshot}} --splits "$splits" \
-        --upstream complexity=$COMPLEXITY
+        --snapshot-version {{snapshot}} --splits "$splits"
+
+    echo "===== rating (train + score) ====="
+    uv run python -m src.pipeline.train --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits "$splits"
+    uv run python -m src.pipeline.score --model rating --candidate "$RATING" \
+        --snapshot-version {{snapshot}} --splits "$splits"
 
     echo "===== geek_rating ====="
     uv run python -m src.pipeline.train --model geek_rating --candidate "$GEEK_RATING" \
-        --snapshot-version {{snapshot}} --splits "$splits" \
-        --upstream complexity=$COMPLEXITY,rating=$RATING,users_rated=$USERS_RATED
+        --snapshot-version {{snapshot}} --splits "$splits"
 
     echo "===== done ====="
 
@@ -537,11 +534,11 @@ bgg-finalize-yoy start end:
 #   just bgg-simulate-yoy 2021 2022 default 200
 #
 # Simulate across a YoY range. Expands [start, end] into yoy_{start},...,yoy_{end} and hands off to bgg-simulate-all.
-bgg-simulate-yoy start end name="default" samples="500":
+bgg-simulate-yoy start end name="" samples="500":
     #!/usr/bin/env bash
     set -e
     splits=$(seq {{start}} {{end}} | sed 's/^/yoy_/' | paste -sd, -)
-    just bgg-simulate-all "$splits" {{name}} {{samples}}
+    just bgg-simulate-all "$splits" "{{name}}" {{samples}}
 
 # Examples:
 #   just bgg-simulate-all
@@ -549,7 +546,7 @@ bgg-simulate-yoy start end name="default" samples="500":
 #   just bgg-simulate-all all default 200
 #
 # Simulate across one or more splits. `splits=all` resolves to every split in the snapshot.
-bgg-simulate-all splits="all" name="default" samples="500":
+bgg-simulate-all splits="all" name="" samples="500":
     #!/usr/bin/env bash
     set -e
     splits="{{splits}}"
@@ -560,14 +557,14 @@ bgg-simulate-all splits="all" name="default" samples="500":
             exit 1
         fi
     else
-        # Convert comma-separated to whitespace-separated for the for-loop
         splits=$(echo "$splits" | tr ',' ' ')
     fi
     for split in $splits; do
         echo "===== $split ====="
         uv run python -m src.pipeline.evaluate_simulation \
             --snapshot-version {{snapshot}} --split $split \
-            --simulation-name {{name}} --n-samples {{samples}}
+            --n-samples {{samples}} \
+            $([ -n "{{name}}" ] && echo "--simulation-name {{name}}")
     done
 
 # Examples:
@@ -575,10 +572,11 @@ bgg-simulate-all splits="all" name="default" samples="500":
 #   just bgg-simulate yoy_2019 default 500
 #
 # Simulate one split on eval_year = split.test_through + 1. Requires per-split finalize first.
-bgg-simulate split="standard" name="default" samples="500":
+bgg-simulate split="standard" name="" samples="500":
     uv run python -m src.pipeline.evaluate_simulation \
         --snapshot-version {{snapshot}} --split {{split}} \
-        --simulation-name {{name}} --n-samples {{samples}}
+        --n-samples {{samples}} \
+        $([ -n "{{name}}" ] && echo "--simulation-name {{name}}")
 
 # === 6. Plot ===
 
@@ -587,10 +585,11 @@ bgg-simulate split="standard" name="default" samples="500":
 #   just bgg-plot yoy_2021 default 50
 #
 # Re-render top-N geek_rating plot for an existing simulation.
-bgg-plot split="standard" name="default" top="100" version="":
+bgg-plot split="standard" name="" top="100" version="":
     #!/usr/bin/env bash
     set -e
     uv run python -m src.pipeline.plot_simulation \
         --snapshot-version {{snapshot}} --split {{split}} \
-        --simulation-name {{name}} --top-n {{top}} \
+        --top-n {{top}} \
+        $([ -n "{{name}}" ] && echo "--simulation-name {{name}}") \
         $([ -n "{{version}}" ] && echo "--simulation-version {{version}}")

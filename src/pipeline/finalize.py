@@ -50,7 +50,7 @@ def _join_upstream_predictions(
     Column name convention mirrors score.py:
       complexity   → predicted_complexity
       rating       → predicted_rating
-      users_rated  → predicted_users_rated_log  (log-scale raw output)
+      users_rated  → predicted_users_rated  (log-scale raw output)
     """
     for upstream_type, upstream_candidate in upstream.items():
         versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
@@ -71,7 +71,7 @@ def _join_upstream_predictions(
         col_map = {
             "complexity": "predicted_complexity",
             "rating": "predicted_rating",
-            "users_rated": "predicted_users_rated_log",
+            "users_rated": "predicted_users_rated",
         }
         pred_col = col_map.get(upstream_type, f"predicted_{upstream_type}")
 
