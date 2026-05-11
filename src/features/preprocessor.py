@@ -30,7 +30,13 @@ def create_bgg_preprocessor(
     remove_correlated: bool = False,
     correlation_threshold: float = 0.95,
     normalize_row_families: list = None,
-    winsorize: bool = True,
+    winsorize_columns: list = [
+        "max_playtime",
+        "min_playtime",
+        "time_per_player",
+        "max_players",
+        "min_players",
+    ],
     winsorize_quantiles: tuple = (0.005, 0.995),
     **kwargs,
 ) -> Pipeline:
@@ -129,9 +135,10 @@ def create_bgg_preprocessor(
         )
         if row_norm_prefixes:
             pipeline_steps.append(("row_normalizer", RowNormalizer(prefixes=row_norm_prefixes)))
-        if winsorize:
+        if winsorize_columns:
             pipeline_steps.append(
                 ("winsorizer", Winsorizer(
+                    columns=list(winsorize_columns),
                     lower_quantile=winsorize_quantiles[0],
                     upper_quantile=winsorize_quantiles[1],
                 ))

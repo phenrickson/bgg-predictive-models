@@ -21,17 +21,17 @@ local_root := "models/collections"
 # a new snapshot. Override per-invocation with `just bgg-... snapshot=2`.
 snapshot := "1"
 
-# Show available recipes
+# Show available recipes (in file order, not alphabetical).
 default:
-    @just --list
+    @just --list --unsorted
 
 # Show only BGG game-model recipes (snapshot pipeline).
 bgg:
-    @just --list | grep -E '^    bgg' || true
+    @just --list --unsorted | grep -E '^    bgg' || true
 
 # Show only collection-model recipes.
 collection:
-    @just --list | grep -E '^    collection' || true
+    @just --list --unsorted | grep -E '^    collection' || true
 
 # Fetch a user's collection from BGG and upsert into BigQuery.
 # Run this before `collection-sweep` for a user whose collection has not been
@@ -349,59 +349,72 @@ collection-pull-artifacts-all prune="":
 
 # --- BGG game models (snapshot pipeline) ---
 #
-# These recipes drive the snapshot+split training framework for the
-# universe-wide game models (hurdle, complexity, rating, users_rated,
-# geek_rating). Collection-models recipes are prefixed `collection-`.
+# Pipeline order: build snapshot → build splits → train cascade →
+# finalize on train+tune+test → simulate eval_year. Recipes are
+# defined below in that order; `just --list --unsorted` shows them
+# that way.
+#
+# Most-common entry points:
+#   just bgg-build                     one-time, pulls features from BigQuery
+#   just bgg-run-yoy 2021 2022         end-to-end YoY pipeline
+#
+# Universe-wide models: hurdle, complexity, rating, users_rated, geek_rating.
+# Collection-models recipes are prefixed `collection-`.
+
+# === 0. End-to-end ===
+
+# Examples:
+#   just bgg-run-yoy 2021 2022
+#   just bgg-run-yoy 2022 2022    # single year
+#
+# End-to-end YoY pipeline for [start, end]: split → train → finalize → simulate.
+bgg-run-yoy start end:
+    #!/usr/bin/env bash
+    set -e
+    just bgg-split-yoy {{start}} {{end}}
+    just bgg-train-yoy {{start}} {{end}}
+    just bgg-finalize-yoy {{start}} {{end}}
+    just bgg-simulate-yoy {{start}} {{end}}
+
+# === 1. Build snapshot ===
 
 # Build a versioned data snapshot from BigQuery.
 bgg-build:
     uv run python -m src.models.build_snapshot --use-embeddings
 
-# Build a single named split from a snapshot.
-bgg-split split="standard":
-    uv run python -m src.models.build_split \
-        --snapshot-version {{snapshot}} --split-name {{split}}
+# === 2. Build splits ===
 
-# Build the YoY family of splits.
+# Examples:
+#   just bgg-split-yoy 2021 2022
+#
+# Build the YoY family of splits for years [start, end].
 bgg-split-yoy start="2018" end="2024":
     uv run python -m src.models.build_split \
         --snapshot-version {{snapshot}} --yoy --yoy-start {{start}} --yoy-end {{end}}
 
-# Train one candidate.
-bgg-train model="hurdle" candidate="" splits="standard" upstream="":
+# Build a single named split from the snapshot.
+bgg-split split="standard":
+    uv run python -m src.models.build_split \
+        --snapshot-version {{snapshot}} --split-name {{split}}
+
+# === 3. Train cascade ===
+
+# Examples:
+#   just bgg-train-yoy 2021 2022
+#
+# Train the cascade across a YoY range. Expands [start, end] into yoy_{start},...,yoy_{end} and hands off to bgg-train-all.
+bgg-train-yoy start end:
     #!/usr/bin/env bash
     set -e
-    cand="{{candidate}}"
-    if [ -z "$cand" ]; then
-        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
-    fi
-    uv run python -m src.pipeline.train \
-        --model {{model}} --candidate "$cand" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
-        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+    splits=$(seq {{start}} {{end}} | sed 's/^/yoy_/' | paste -sd, -)
+    just bgg-train-all "$splits"
 
-# Score one candidate (writes score.parquet under each split).
-bgg-score model="complexity" candidate="" splits="standard" upstream="":
-    #!/usr/bin/env bash
-    set -e
-    cand="{{candidate}}"
-    if [ -z "$cand" ]; then
-        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
-    fi
-    uv run python -m src.pipeline.score \
-        --model {{model}} --candidate "$cand" \
-        --snapshot-version {{snapshot}} --splits {{splits}} \
-        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
-
-# Run the full training cascade for one snapshot+split. Each model trains and
-# (where downstream models depend on it) scores before the next layer trains.
-#
-# `splits=all` resolves to every split that exists under the snapshot —
-# convenient for year-over-year runs after `just bgg-yoy`.
-#
+# Examples:
 #   just bgg-train-all
 #   just bgg-train-all standard,yoy_2024
 #   just bgg-train-all all
+#
+# Train the full cascade (hurdle → complexity → rating + users_rated → geek_rating) on one or more splits. `splits=all` resolves to every split in the snapshot.
 bgg-train-all splits="standard":
     #!/usr/bin/env bash
     set -e
@@ -414,7 +427,7 @@ bgg-train-all splits="standard":
     if [ "$splits" = "all" ]; then
         splits=$(uv run python -c "from src.models.snapshot_storage import SnapshotStorage; print(','.join(SnapshotStorage({{snapshot}}).list_splits()))")
         if [ -z "$splits" ]; then
-            echo "No splits under snapshot v{{snapshot}}. Run bgg-split or bgg-yoy first." >&2
+            echo "No splits under snapshot v{{snapshot}}. Run bgg-split-yoy or bgg-split first." >&2
             exit 1
         fi
         echo "Resolved splits=all → $splits"
@@ -457,12 +470,39 @@ bgg-train-all splits="standard":
 
     echo "===== done ====="
 
-# Finalize the full chain for each YoY split in [start, end]. Each split's
-# finalize refits the cascade on train+tune+test (year_published <=
-# split.test_through), in dependency order so upstream finalized pipelines
-# exist when downstream models need them.
-#
+# Train one candidate against named splits.
+bgg-train model="hurdle" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.train \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# Score one candidate (writes score.parquet under each split).
+bgg-score model="complexity" candidate="" splits="standard" upstream="":
+    #!/usr/bin/env bash
+    set -e
+    cand="{{candidate}}"
+    if [ -z "$cand" ]; then
+        cand=$(uv run python -c 'from src.models.candidate_config import list_candidates; print(list_candidates("{{model}}")[0])')
+    fi
+    uv run python -m src.pipeline.score \
+        --model {{model}} --candidate "$cand" \
+        --snapshot-version {{snapshot}} --splits {{splits}} \
+        $([ -n "{{upstream}}" ] && echo "--upstream {{upstream}}")
+
+# === 4. Finalize cascade ===
+
+# Examples:
 #   just bgg-finalize-yoy 2021 2022
+#   just bgg-finalize-yoy 2022 2022    # single year
+#
+# Finalize the cascade for each YoY split: refit on train+tune+test through split.test_through.
 bgg-finalize-yoy start end:
     #!/usr/bin/env bash
     set -e
@@ -490,23 +530,25 @@ bgg-finalize-yoy start end:
         done
     done
 
-# Run end-to-end simulation evaluation on the year after the split's test fold.
-# Loads per-split pipelines (NOT finalized — finalize is for production scoring).
-# eval_year = split.test_through + 1.
-#
-#   just bgg-simulate
-#   just bgg-simulate yoy_2019 default 500
-bgg-simulate split="standard" name="default" samples="500":
-    uv run python -m src.pipeline.evaluate_simulation \
-        --snapshot-version {{snapshot}} --split {{split}} \
-        --simulation-name {{name}} --n-samples {{samples}}
+# === 5. Simulate ===
 
-# Run simulation across one or more splits.
-# `splits=all` (default) resolves to every split that exists under the snapshot.
+# Examples:
+#   just bgg-simulate-yoy 2021 2022
+#   just bgg-simulate-yoy 2021 2022 default 200
 #
+# Simulate across a YoY range. Expands [start, end] into yoy_{start},...,yoy_{end} and hands off to bgg-simulate-all.
+bgg-simulate-yoy start end name="default" samples="500":
+    #!/usr/bin/env bash
+    set -e
+    splits=$(seq {{start}} {{end}} | sed 's/^/yoy_/' | paste -sd, -)
+    just bgg-simulate-all "$splits" {{name}} {{samples}}
+
+# Examples:
 #   just bgg-simulate-all
 #   just bgg-simulate-all yoy_2021,yoy_2022
 #   just bgg-simulate-all all default 200
+#
+# Simulate across one or more splits. `splits=all` resolves to every split in the snapshot.
 bgg-simulate-all splits="all" name="default" samples="500":
     #!/usr/bin/env bash
     set -e
@@ -528,47 +570,23 @@ bgg-simulate-all splits="all" name="default" samples="500":
             --simulation-name {{name}} --n-samples {{samples}}
     done
 
-# End-to-end YoY pipeline: split → train → finalize → simulate for
-# [start, end]. Stops on the first failure (set -e). Use this when you
-# want the whole thing in one shot; use the per-step recipes when
-# iterating on a single stage.
+# Examples:
+#   just bgg-simulate
+#   just bgg-simulate yoy_2019 default 500
 #
-#   just bgg-run-yoy 2021 2022
-#   just bgg-run-yoy 2022 2022    # single year
-bgg-run-yoy start end:
-    #!/usr/bin/env bash
-    set -e
-    just bgg-split-yoy {{start}} {{end}}
-    just bgg-train-yoy {{start}} {{end}}
-    just bgg-finalize-yoy {{start}} {{end}}
-    just bgg-simulate-yoy {{start}} {{end}}
+# Simulate one split on eval_year = split.test_through + 1. Requires per-split finalize first.
+bgg-simulate split="standard" name="default" samples="500":
+    uv run python -m src.pipeline.evaluate_simulation \
+        --snapshot-version {{snapshot}} --split {{split}} \
+        --simulation-name {{name}} --n-samples {{samples}}
 
-# Train the full chain across a YoY range. Expands start..end into
-# yoy_{start},...,yoy_{end} and hands off to bgg-train-all.
-#
-#   just bgg-train-yoy 2018 2020
-bgg-train-yoy start end:
-    #!/usr/bin/env bash
-    set -e
-    splits=$(seq {{start}} {{end}} | sed 's/^/yoy_/' | paste -sd, -)
-    just bgg-train-all "$splits"
+# === 6. Plot ===
 
-# Simulate across a YoY range. Expands start..end into
-# yoy_{start},...,yoy_{end} and hands off to bgg-simulate-all.
-#
-#   just bgg-simulate-yoy 2018 2020
-#   just bgg-simulate-yoy 2018 2020 default 200
-bgg-simulate-yoy start end name="default" samples="500":
-    #!/usr/bin/env bash
-    set -e
-    splits=$(seq {{start}} {{end}} | sed 's/^/yoy_/' | paste -sd, -)
-    just bgg-simulate-all "$splits" {{name}} {{samples}}
-
-# Plot top-N games by predicted geek_rating from a simulation run.
-# Defaults: latest simulation under name=default, split=standard, top-N=100.
-#
+# Examples:
 #   just bgg-plot
-#   just bgg-plot standard default 50
+#   just bgg-plot yoy_2021 default 50
+#
+# Re-render top-N geek_rating plot for an existing simulation.
 bgg-plot split="standard" name="default" top="100" version="":
     #!/usr/bin/env bash
     set -e

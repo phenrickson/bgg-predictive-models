@@ -95,30 +95,33 @@ class RowNormalizer(BaseEstimator, TransformerMixin):
 
 
 class Winsorizer(BaseEstimator, TransformerMixin):
-    """Clip numeric columns to train-set quantile bounds.
+    """Clip a fixed list of columns to train-set quantile bounds.
 
     At ``fit`` time, learns per-column lower/upper quantiles on the training
     data (defaults: 0.5%/99.5%). At ``transform`` time clips each column to
-    those bounds. This tames pathological outliers — BGG entries with junk
-    ``max_playtime`` values, etc. — without dropping rows from the universe,
-    so downstream scoring still produces a number for every game.
+    those bounds. This tames pathological outliers in known-problematic
+    BGG columns — junk ``max_playtime`` values, etc. — without dropping
+    rows from the universe.
 
-    Applied AFTER log/year transforms and BEFORE ``StandardScaler``: clipping
-    in raw or log space stops the scaler's mean/std from being warped by a
-    handful of extreme rows.
+    Opt-in by column name: pass the columns you expect to have data quality
+    issues. Columns not in the list pass through untouched. NEVER apply to
+    embeddings, upstream score columns, year-derived features, or columns
+    whose distribution legitimately shifts at evaluation time — clipping
+    those clips real signal.
+
+    Applied AFTER log/year transforms and BEFORE ``StandardScaler``.
 
     Parameters
     ----------
-    columns : list of str, optional
-        Columns to winsorize. If None, winsorizes every numeric column at
-        fit time (excludes binary 0/1 indicator columns automatically).
+    columns : list of str
+        Columns to winsorize. Required; missing columns are silently skipped.
     lower_quantile : float, default 0.005
     upper_quantile : float, default 0.995
     """
 
     def __init__(
         self,
-        columns: Optional[List[str]] = None,
+        columns: List[str],
         lower_quantile: float = 0.005,
         upper_quantile: float = 0.995,
     ):
@@ -130,17 +133,7 @@ class Winsorizer(BaseEstimator, TransformerMixin):
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
 
-        if self.columns is None:
-            # Auto-select non-binary numeric columns. Binary indicators
-            # (categories/mechanics/etc.) already have a [0,1] range and
-            # don't benefit from clipping.
-            numeric = X.select_dtypes(include="number")
-            self.columns_ = [
-                c for c in numeric.columns
-                if not numeric[c].dropna().isin([0, 1]).all()
-            ]
-        else:
-            self.columns_ = [c for c in self.columns if c in X.columns]
+        self.columns_ = [c for c in self.columns if c in X.columns]
 
         self.lower_ = {}
         self.upper_ = {}

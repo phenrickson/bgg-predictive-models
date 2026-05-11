@@ -49,11 +49,17 @@ def evaluate_simulation(
     simulation_name: str = "default",
     candidates: Optional[Dict[str, str]] = None,
     n_samples: int = 500,
-    geek_rating_mode: str = "bayesian",
+    geek_rating_mode: Optional[str] = None,
     base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
     random_state: int = 42,
 ) -> int:
     """Run chain simulation on the year after the split's test fold."""
+    if geek_rating_mode is None:
+        from src.utils.config import load_config
+        cfg = load_config()
+        geek_rating_mode = (
+            cfg.simulation.geek_rating_mode if cfg.simulation else "bayesian"
+        )
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
     universe = storage.load_universe()
     if universe is None:
@@ -205,8 +211,9 @@ def main() -> int:
     parser.add_argument("--candidates", type=str, default=None,
                         help="Comma-separated overrides like 'rating=catboost-rating'")
     parser.add_argument("--n-samples", type=int, default=500)
-    parser.add_argument("--geek-rating-mode", type=str, default="bayesian",
-                        choices=["bayesian", "stacking", "direct"])
+    parser.add_argument("--geek-rating-mode", type=str, default=None,
+                        choices=["bayesian", "stacking", "direct"],
+                        help="Override config.simulation.geek_rating_mode")
     parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
     args = parser.parse_args()
 
