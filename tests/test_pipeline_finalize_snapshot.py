@@ -1,4 +1,4 @@
-"""Tests for pipeline.finalize writing finalized.pkl at the candidate level."""
+"""Tests for pipeline.finalize writing finalized.pkl per split."""
 
 from pathlib import Path
 
@@ -47,7 +47,7 @@ def _synthetic_universe(tmp_path: Path) -> tuple[Path, int]:
     return base, v
 
 
-def test_finalize_writes_candidate_level_pipeline(tmp_path: Path) -> None:
+def test_finalize_writes_per_split_pipeline(tmp_path: Path) -> None:
     base, v = _synthetic_universe(tmp_path)
     storage = SnapshotStorage(snapshot_version=v, base_dir=base)
     cfg = {
@@ -65,14 +65,14 @@ def test_finalize_writes_candidate_level_pipeline(tmp_path: Path) -> None:
         snapshot_version=v,
         model_type="complexity",
         candidate="ard-complexity",
+        split_name="standard",
         candidate_version=1,
-        finalize_through=2021,
         base_dir=base,
     )
 
-    finalized = storage.load_finalized_pipeline("complexity", "ard-complexity", 1)
+    finalized = storage.load_finalized_pipeline("complexity", "ard-complexity", 1, "standard")
     assert finalized is not None
 
     reg = storage.load_candidate_registration("complexity", "ard-complexity", 1)
-    assert reg["finalize_through"] == 2021
-    assert "finalized_at" in reg
+    assert reg["finalize"]["standard"]["finalize_through"] == 2021
+    assert "finalized_at" in reg["finalize"]["standard"]

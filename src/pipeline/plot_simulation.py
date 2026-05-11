@@ -30,6 +30,11 @@ import numpy as np
 from src.models.snapshot_storage import DEFAULT_BASE_DIR, SnapshotStorage
 from src.utils.logging import setup_logging
 
+# Fallback chain for CJK glyphs in game titles. DejaVu Sans (matplotlib default)
+# can't render katakana/CJK; Hiragino Sans and Arial Unicode MS both ship with
+# macOS and cover what we need. Order = priority.
+plt.rcParams["font.family"] = ["DejaVu Sans", "Hiragino Sans", "Arial Unicode MS"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,6 +123,75 @@ def plot_top_games(
     plt.tight_layout()
 
     plot_path = sim_dir / f"top_{top_n}_games.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    logger.info(f"Saved {plot_path}")
+    return plot_path
+
+
+def plot_predicted_vs_actual(
+    snapshot_version: int,
+    simulation_name: str = "default",
+    split_name: str = "standard",
+    simulation_version: Optional[int] = None,
+    base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
+) -> Path:
+    """Scatter predicted vs actual for each outcome (2x2 grid).
+
+    Drops rows where actual is null (games without ratings/votes yet).
+    """
+    storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
+
+    sim = storage.load_simulation(simulation_name, split_name, version=simulation_version)
+    if sim is None:
+        raise FileNotFoundError(
+            f"No simulation {simulation_name}/{split_name}/v{simulation_version or 'latest'} "
+            f"under snapshot v{snapshot_version}"
+        )
+
+    resolved_version = sim["registration"]["version"]
+    sim_dir = storage.simulation_dir(simulation_name, split_name, resolved_version)
+    eval_year = sim["registration"].get("eval_year", "unknown")
+    df = sim["predictions"].to_pandas()
+
+    outcomes = ["complexity", "rating", "users_rated", "geek_rating"]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+
+    for ax, outcome in zip(axes.ravel(), outcomes):
+        sub = df[[f"{outcome}_point", f"{outcome}_actual"]].dropna()
+        pred = sub[f"{outcome}_point"].to_numpy()
+        actual = sub[f"{outcome}_actual"].to_numpy()
+        n = len(sub)
+
+        if n == 0:
+            ax.text(0.5, 0.5, "no actuals", ha="center", va="center", transform=ax.transAxes)
+            ax.set_title(outcome.replace("_", " ").title(), fontsize=12, fontweight="bold")
+            continue
+
+        ax.scatter(pred, actual, alpha=0.4, s=15, color="steelblue", edgecolors="none")
+
+        lo = float(min(pred.min(), actual.min()))
+        hi = float(max(pred.max(), actual.max()))
+        ax.plot([lo, hi], [lo, hi], color="red", linewidth=1, linestyle="--", alpha=0.7)
+
+        corr = float(np.corrcoef(pred, actual)[0, 1]) if n > 1 else float("nan")
+        rmse = float(np.sqrt(np.mean((pred - actual) ** 2)))
+
+        ax.set_xlabel("Predicted", fontsize=10)
+        ax.set_ylabel("Actual", fontsize=10)
+        ax.set_title(
+            f"{outcome.replace('_', ' ').title()}  (n={n}, r={corr:.3f}, rmse={rmse:.3f})",
+            fontsize=11, fontweight="bold",
+        )
+        ax.grid(True, alpha=0.3)
+
+    plt.suptitle(
+        f"Predicted vs Actual - {eval_year} ({split_name})",
+        fontsize=13, y=1.00,
+    )
+    plt.tight_layout()
+
+    plot_path = sim_dir / "predicted_vs_actual.png"
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close()
     logger.info(f"Saved {plot_path}")

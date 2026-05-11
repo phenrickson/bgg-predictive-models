@@ -407,11 +407,16 @@ def _build_predictions_frame(
     df: pl.DataFrame,
     model_task: str,
 ) -> pl.DataFrame:
-    """Produce a polars frame matching df's rows + ``prediction``/``actual`` columns."""
+    """Lean prediction frame: identity columns + actual + prediction (+ proba).
+
+    Joins back to the universe by game_id if you need features later — no
+    point persisting the entire feature frame per (model, candidate, split).
+    """
     preds = pipeline.predict(X)
-    out = df.clone().with_columns([
-        pl.Series("prediction", preds),
+    id_cols = [c for c in ("game_id", "name", "year_published") if c in df.columns]
+    out = df.select(id_cols).with_columns([
         pl.Series("actual", y.values),
+        pl.Series("prediction", preds),
     ])
     if model_task == "classification" and hasattr(pipeline, "predict_proba"):
         try:

@@ -1,19 +1,21 @@
-"""Snapshot-aware finalize orchestrator.
+"""Per-split finalize: refit a candidate on train+tune+test of one split.
 
-Refits a candidate's pipeline on the full snapshot universe (filtered
-through ``finalize_through`` if provided) and writes ``finalized.pkl``
-at the candidate level. Operational scoring downstream uses this
-artifact.
+For a given split, refits the candidate pipeline on the universe filtered to
+``year_published <= split.test_through`` (i.e. every row the split treated as
+in-distribution training-window data). Writes ``finalized.pkl`` alongside the
+per-split ``pipeline.pkl`` under ``results/{split_name}/``.
 
-For models with upstream dependencies (e.g. rating depends on
-complexity), pass ``upstream`` so the finalized upstream pipeline's
-predictions are joined into the training frame before refitting.
+Upstream cascade is resolved from the candidate's ``registration.json``. For
+each upstream, this loads the upstream's *per-split finalized* pipeline (same
+split as we're finalizing on) and joins its predictions onto the universe
+before refitting. Finalize is run in cascade order (complexity → rating &
+users_rated → geek_rating) so upstream finalized pipelines exist.
 
 CLI::
 
     uv run python -m src.pipeline.finalize \\
         --model complexity --candidate ard-complexity \\
-        --snapshot-version 1 [--candidate-version N] [--finalize-through 2024]
+        --snapshot-version 1 --split yoy_2021
 """
 
 from __future__ import annotations
@@ -23,9 +25,9 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Union
+from types import SimpleNamespace
+from typing import Any, Dict, Optional, Union
 
-import numpy as np
 import polars as pl
 from sklearn.base import clone
 
@@ -40,19 +42,16 @@ logger = logging.getLogger(__name__)
 def _join_upstream_predictions(
     df: pl.DataFrame,
     upstream: Dict[str, str],
+    split_name: str,
     storage: SnapshotStorage,
 ) -> pl.DataFrame:
-    """Use finalized upstream pipelines to predict on df and join results.
+    """Use each upstream's per-split finalized pipeline to predict on df.
 
-    For each upstream {model_type: candidate}, loads the candidate's
-    finalized.pkl, predicts on ``df``, and adds the predicted column.
-    The column name convention mirrors what score.py writes:
+    Column name convention mirrors score.py:
       complexity   → predicted_complexity
       rating       → predicted_rating
       users_rated  → predicted_users_rated_log  (log-scale raw output)
     """
-    import pandas as pd
-
     for upstream_type, upstream_candidate in upstream.items():
         versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
         if not versions:
@@ -60,13 +59,15 @@ def _join_upstream_predictions(
                 f"Upstream {upstream_type}/{upstream_candidate} has no versions"
             )
         v = versions[-1]
-        upstream_pipeline = storage.load_finalized_pipeline(upstream_type, upstream_candidate, v)
+        upstream_pipeline = storage.load_finalized_pipeline(
+            upstream_type, upstream_candidate, v, split_name
+        )
         if upstream_pipeline is None:
             raise FileNotFoundError(
-                f"No finalized.pkl for upstream {upstream_type}/{upstream_candidate}/v{v}"
+                f"No finalized.pkl for upstream {upstream_type}/{upstream_candidate}/v{v} "
+                f"on split {split_name!r} — finalize upstream first"
             )
 
-        # Determine output column name
         col_map = {
             "complexity": "predicted_complexity",
             "rating": "predicted_rating",
@@ -77,7 +78,10 @@ def _join_upstream_predictions(
         df_pd = df.to_pandas()
         preds = upstream_pipeline.predict(df_pd)
         df = df.with_columns(pl.Series(pred_col, preds))
-        logger.info(f"Joined {pred_col} from finalized {upstream_type}/{upstream_candidate}/v{v}")
+        logger.info(
+            f"Joined {pred_col} from finalized {upstream_type}/{upstream_candidate}/v{v} "
+            f"({split_name})"
+        )
 
     return df
 
@@ -86,23 +90,27 @@ def finalize(
     snapshot_version: int,
     model_type: str,
     candidate: str,
+    split_name: str,
     candidate_version: Optional[int] = None,
-    finalize_through: Optional[int] = None,
     upstream: Optional[Dict[str, str]] = None,
     base_dir: Union[str, Path] = DEFAULT_BASE_DIR,
 ) -> Path:
-    """Refit candidate on snapshot universe (≤ finalize_through) and save finalized.pkl.
+    """Refit ``candidate`` on universe ≤ ``split.test_through`` and save finalized.pkl.
 
-    Args:
-        upstream: Optional mapping of model_type → candidate for models that
-            depend on upstream predictions (e.g. {'complexity': 'ard-complexity'}).
-            When provided, the upstream finalized pipelines are used to generate
-            prediction columns and join them onto the universe before refitting.
+    The refit cutoff comes from the split's own metadata — every YoY split
+    finalizes through its own ``test_through``.
     """
     storage = SnapshotStorage(snapshot_version=snapshot_version, base_dir=base_dir)
     universe = storage.load_universe()
     if universe is None:
         raise FileNotFoundError(f"No snapshot v{snapshot_version}")
+
+    split = storage.load_split(split_name)
+    if split is None:
+        raise FileNotFoundError(
+            f"No split {split_name!r} under snapshot v{snapshot_version}"
+        )
+    test_through = int(split["metadata"]["test_through"])
 
     if candidate_version is None:
         versions = storage.list_candidate_versions(model_type, candidate)
@@ -112,10 +120,7 @@ def finalize(
             )
         candidate_version = versions[-1]
 
-    # If the caller didn't specify upstream, fall back to whatever was
-    # recorded in registration.json at train time. This is what we want
-    # in the common case — a candidate's finalize uses the same cascade
-    # it was trained against.
+    # Upstream cascade defaults to whatever was recorded at train time.
     if upstream is None:
         reg = storage.load_candidate_registration(model_type, candidate, candidate_version) or {}
         recorded = reg.get("upstream_experiments") or {}
@@ -123,46 +128,69 @@ def finalize(
             upstream = dict(recorded)
             logger.info(f"Using upstream from registration.json: {upstream}")
 
-    # Use any existing per-split pipeline to produce a clone for refitting
-    cand_dir = storage.experiment_dir(model_type, candidate, candidate_version) / "results"
-    if not cand_dir.exists() or not any(cand_dir.iterdir()):
-        raise FileNotFoundError(
-            f"No results for {model_type}/{candidate}/v{candidate_version}; train first"
-        )
-    any_split = next(cand_dir.iterdir()).name
-    base_result = storage.load_result(model_type, candidate, candidate_version, any_split)
+    # Clone the per-split pipeline as the refit template.
+    base_result = storage.load_result(model_type, candidate, candidate_version, split_name)
     if base_result is None:
-        raise FileNotFoundError(f"Failed to load any result for {model_type}/{candidate}")
+        raise FileNotFoundError(
+            f"No result for {model_type}/{candidate}/v{candidate_version} on "
+            f"split {split_name!r} — run pipeline.train against this split first"
+        )
     template_pipeline = base_result["pipeline"]
 
-    df = universe
-    if finalize_through is not None:
-        df = df.filter(pl.col("year_published") <= int(finalize_through))
+    df = universe.filter(pl.col("year_published") <= test_through)
+    logger.info(
+        f"Finalizing {model_type}/{candidate}/v{candidate_version} on {split_name}: "
+        f"refit through {test_through} ({df.height} rows)"
+    )
 
-    # Join upstream predictions if the model has upstream dependencies
     if upstream:
-        df = _join_upstream_predictions(df, upstream, storage)
+        df = _join_upstream_predictions(df, upstream, split_name, storage)
 
-    target_column = get_model_class(model_type)().target_column
-    X, y = select_X_y(df, target_column)
+    # Instantiate the model the same way train.py does so prepare_features
+    # applies the candidate's filters (min_ratings/min_weights) and any
+    # outcome-specific transforms (geek_rating's 0→prior substitution, etc).
+    candidate_config = (
+        storage.load_candidate_config(model_type, candidate, candidate_version) or {}
+    )
+    model_class = get_model_class(model_type)
+    model_kwargs: Dict[str, Any] = {}
+    for k in ("min_ratings", "min_weights", "mode", "include_predictions"):
+        if k in candidate_config:
+            model_kwargs[k] = candidate_config[k]
+    model = model_class(**model_kwargs)
+
+    X, y = select_X_y(df, model.target_column)
+    prep_args = SimpleNamespace(
+        use_embeddings=bool(candidate_config.get("use_embeddings", False)),
+        sub_model_experiments=candidate_config.get("sub_model_experiments", {}),
+        mode=candidate_config.get("mode"),
+        include_predictions=candidate_config.get("include_predictions", True),
+    )
+    X, y = model.prepare_features(X, y, "train", prep_args)
+    logger.info(
+        f"  after prepare_features: {len(X)} rows "
+        f"(dropped {df.height - len(X)} via filters)"
+    )
 
     finalized_pipeline = clone(template_pipeline)
     finalized_pipeline.fit(X, y)
 
-    storage.save_finalized_pipeline(model_type, candidate, candidate_version, finalized_pipeline)
+    path = storage.save_finalized_pipeline(
+        model_type, candidate, candidate_version, split_name, finalized_pipeline
+    )
 
     reg = storage.load_candidate_registration(model_type, candidate, candidate_version) or {}
-    reg["finalize_through"] = int(finalize_through) if finalize_through is not None else None
-    reg["finalized_at"] = datetime.now().isoformat()
-    if upstream:
-        reg["upstream"] = upstream
+    finalize_log: Dict[str, Any] = reg.get("finalize", {}) or {}
+    finalize_log[split_name] = {
+        "finalize_through": test_through,
+        "finalized_at": datetime.now().isoformat(),
+        "upstream": upstream or {},
+    }
+    reg["finalize"] = finalize_log
     storage.save_candidate_registration(model_type, candidate, candidate_version, reg)
 
-    finalized_path = (
-        storage.experiment_dir(model_type, candidate, candidate_version) / "finalized.pkl"
-    )
-    logger.info(f"Finalized {model_type}/{candidate}/v{candidate_version} → {finalized_path}")
-    return finalized_path
+    logger.info(f"Finalized {model_type}/{candidate}/v{candidate_version}/{split_name} → {path}")
+    return path
 
 
 def main() -> int:
@@ -170,8 +198,8 @@ def main() -> int:
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--candidate", type=str, required=True)
     parser.add_argument("--snapshot-version", type=int, required=True)
+    parser.add_argument("--split", type=str, required=True)
     parser.add_argument("--candidate-version", type=int, default=None)
-    parser.add_argument("--finalize-through", type=int, default=None)
     parser.add_argument("--upstream", type=str, default=None,
                         help="Comma-separated upstream like 'complexity=ard-complexity'")
     parser.add_argument("--base-dir", type=str, default=DEFAULT_BASE_DIR)
@@ -189,12 +217,12 @@ def main() -> int:
         snapshot_version=args.snapshot_version,
         model_type=args.model,
         candidate=args.candidate,
+        split_name=args.split,
         candidate_version=args.candidate_version,
-        finalize_through=args.finalize_through,
         upstream=upstream or None,
         base_dir=args.base_dir,
     )
-    print(f"finalized: {args.model}/{args.candidate}")
+    print(f"finalized: {args.model}/{args.candidate}/{args.split}")
     return 0
 
 

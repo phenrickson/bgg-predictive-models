@@ -94,6 +94,81 @@ class RowNormalizer(BaseEstimator, TransformerMixin):
         return np.asarray(self.feature_names_in_)
 
 
+class Winsorizer(BaseEstimator, TransformerMixin):
+    """Clip numeric columns to train-set quantile bounds.
+
+    At ``fit`` time, learns per-column lower/upper quantiles on the training
+    data (defaults: 0.5%/99.5%). At ``transform`` time clips each column to
+    those bounds. This tames pathological outliers — BGG entries with junk
+    ``max_playtime`` values, etc. — without dropping rows from the universe,
+    so downstream scoring still produces a number for every game.
+
+    Applied AFTER log/year transforms and BEFORE ``StandardScaler``: clipping
+    in raw or log space stops the scaler's mean/std from being warped by a
+    handful of extreme rows.
+
+    Parameters
+    ----------
+    columns : list of str, optional
+        Columns to winsorize. If None, winsorizes every numeric column at
+        fit time (excludes binary 0/1 indicator columns automatically).
+    lower_quantile : float, default 0.005
+    upper_quantile : float, default 0.995
+    """
+
+    def __init__(
+        self,
+        columns: Optional[List[str]] = None,
+        lower_quantile: float = 0.005,
+        upper_quantile: float = 0.995,
+    ):
+        self.columns = columns
+        self.lower_quantile = lower_quantile
+        self.upper_quantile = upper_quantile
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        if self.columns is None:
+            # Auto-select non-binary numeric columns. Binary indicators
+            # (categories/mechanics/etc.) already have a [0,1] range and
+            # don't benefit from clipping.
+            numeric = X.select_dtypes(include="number")
+            self.columns_ = [
+                c for c in numeric.columns
+                if not numeric[c].dropna().isin([0, 1]).all()
+            ]
+        else:
+            self.columns_ = [c for c in self.columns if c in X.columns]
+
+        self.lower_ = {}
+        self.upper_ = {}
+        for c in self.columns_:
+            col = X[c].astype(float)
+            self.lower_[c] = float(col.quantile(self.lower_quantile))
+            self.upper_[c] = float(col.quantile(self.upper_quantile))
+
+        self.feature_names_in_ = list(X.columns)
+        return self
+
+    def transform(self, X):
+        is_pandas = isinstance(X, pd.DataFrame)
+        if not is_pandas:
+            X = pd.DataFrame(X)
+        X = X.copy()
+        for c in self.columns_:
+            if c not in X.columns:
+                continue
+            X[c] = X[c].clip(lower=self.lower_[c], upper=self.upper_[c])
+        return X
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is not None:
+            return np.asarray(list(input_features))
+        return np.asarray(self.feature_names_in_)
+
+
 class LogTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer to apply log(1+x) transformation to specified columns.

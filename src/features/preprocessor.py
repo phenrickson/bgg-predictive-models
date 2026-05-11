@@ -3,7 +3,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 
-from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer, CorrelationFilter, RowNormalizer
+from .transformers import LogTransformer, YearTransformer, BaseBGGTransformer, CorrelationFilter, RowNormalizer, Winsorizer
 
 
 _ROW_NORM_FAMILY_PREFIXES = {
@@ -30,6 +30,8 @@ def create_bgg_preprocessor(
     remove_correlated: bool = False,
     correlation_threshold: float = 0.95,
     normalize_row_families: list = None,
+    winsorize: bool = True,
+    winsorize_quantiles: tuple = (0.005, 0.995),
     **kwargs,
 ) -> Pipeline:
     """
@@ -127,6 +129,13 @@ def create_bgg_preprocessor(
         )
         if row_norm_prefixes:
             pipeline_steps.append(("row_normalizer", RowNormalizer(prefixes=row_norm_prefixes)))
+        if winsorize:
+            pipeline_steps.append(
+                ("winsorizer", Winsorizer(
+                    lower_quantile=winsorize_quantiles[0],
+                    upper_quantile=winsorize_quantiles[1],
+                ))
+            )
         pipeline_steps.append(("scaler", StandardScaler()))
     elif model_type == "tree":
         # Minimal preprocessing for tree-based models

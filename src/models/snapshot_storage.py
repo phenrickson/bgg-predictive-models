@@ -15,9 +15,9 @@ Path layout::
         experiments/{model_type}/{candidate}/v{M}/
             config.json
             registration.json
-            finalized.pkl                           # candidate-level
             results/{split_name}/
-                pipeline.pkl
+                pipeline.pkl                        # train+tune fit
+                finalized.pkl                       # refit on train+tune+test
                 metrics.json, parameters.json
                 feature_importance.csv
                 predictions/{tune,test,score}.parquet
@@ -224,18 +224,27 @@ class SnapshotStorage:
         return json.loads(path.read_text())
 
     def save_finalized_pipeline(
-        self, model_type: str, candidate: str, version: int, pipeline: Any
+        self,
+        model_type: str,
+        candidate: str,
+        version: int,
+        split_name: str,
+        pipeline: Any,
     ) -> Path:
         path = self._ensure(
-            self.experiment_dir(model_type, candidate, version) / "finalized.pkl"
+            self.result_dir(model_type, candidate, version, split_name) / "finalized.pkl"
         )
         path.write_bytes(pickle.dumps(pipeline))
         return path
 
     def load_finalized_pipeline(
-        self, model_type: str, candidate: str, version: int
+        self,
+        model_type: str,
+        candidate: str,
+        version: int,
+        split_name: str,
     ) -> Optional[Any]:
-        path = self.experiment_dir(model_type, candidate, version) / "finalized.pkl"
+        path = self.result_dir(model_type, candidate, version, split_name) / "finalized.pkl"
         if not path.exists():
             return None
         return pickle.loads(path.read_bytes())

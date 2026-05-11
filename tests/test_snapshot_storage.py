@@ -139,13 +139,17 @@ def test_save_and_load_candidate_config_and_registration(tmp_path: Path) -> None
     assert loaded_reg == registration
 
 
-def test_save_and_load_candidate_finalized(tmp_path: Path) -> None:
+def test_save_and_load_finalized_per_split(tmp_path: Path) -> None:
     storage = SnapshotStorage(snapshot_version=1, base_dir=tmp_path / "snaps")
 
-    obj = {"my": "pipeline"}  # any picklable object
-    storage.save_finalized_pipeline("hurdle", "logistic-hurdle", 1, obj)
-    loaded = storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1)
-    assert loaded == obj
+    obj_a = {"my": "pipeline-a"}
+    obj_b = {"my": "pipeline-b"}
+    storage.save_finalized_pipeline("hurdle", "logistic-hurdle", 1, "yoy_2021", obj_a)
+    storage.save_finalized_pipeline("hurdle", "logistic-hurdle", 1, "yoy_2022", obj_b)
+
+    assert storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1, "yoy_2021") == obj_a
+    assert storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1, "yoy_2022") == obj_b
+    assert storage.load_finalized_pipeline("hurdle", "logistic-hurdle", 1, "missing") is None
 
 
 def test_save_and_load_result_artifacts(tmp_path: Path) -> None:

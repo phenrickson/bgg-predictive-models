@@ -79,8 +79,8 @@ def evaluate_simulation(
                 raise ValueError(f"No candidates for {model_type} in config.yaml")
             candidates[model_type] = cands[0]
 
-    # Load per-split trained pipelines (NOT finalized — finalize is a
-    # production-deployment concern; simulation evaluates the trained chain).
+    # Load per-split FINALIZED pipelines (refit on train+tune+test). The
+    # finalize step must have been run for this split first.
     pipelines: Dict[str, Any] = {}
     candidate_versions: Dict[str, int] = {}
     for model_type, cand in candidates.items():
@@ -90,13 +90,13 @@ def evaluate_simulation(
                 f"No versions for {model_type}/{cand} in v{snapshot_version}"
             )
         v = versions[-1]
-        result = storage.load_result(model_type, cand, v, split_name)
-        if result is None:
+        finalized = storage.load_finalized_pipeline(model_type, cand, v, split_name)
+        if finalized is None:
             raise FileNotFoundError(
-                f"No result for {model_type}/{cand}/v{v} on split {split_name!r} — "
-                f"run pipeline.train against this split first"
+                f"No finalized.pkl for {model_type}/{cand}/v{v} on split {split_name!r} — "
+                f"run `just bgg-finalize-yoy` (or `just bgg-finalize`) before simulating"
             )
-        pipelines[model_type] = result["pipeline"]
+        pipelines[model_type] = finalized
         candidate_versions[model_type] = v
 
     eval_df = universe.filter(pl.col("year_published") == eval_year)
@@ -150,7 +150,7 @@ def evaluate_simulation(
                 f"{outcome}_q75": o["interval_50"][1],
             })
         predictions_rows.append(row)
-    predictions = pl.DataFrame(predictions_rows)
+    predictions = pl.DataFrame(predictions_rows, infer_schema_length=None)
 
     metrics = compute_simulation_metrics(results)
 
@@ -172,15 +172,22 @@ def evaluate_simulation(
     storage.save_simulation(simulation_name, split_name, sim_version, registration, metrics, predictions)
     logger.info(f"Wrote simulation {simulation_name}/{split_name}/v{sim_version}")
 
-    # Emit the top-N forest plot alongside the artifacts.
+    # Emit plots alongside the artifacts.
     try:
-        from src.pipeline.plot_simulation import plot_top_games
+        from src.pipeline.plot_simulation import plot_predicted_vs_actual, plot_top_games
         plot_top_games(
             snapshot_version=snapshot_version,
             simulation_name=simulation_name,
             split_name=split_name,
             simulation_version=sim_version,
             top_n=100,
+            base_dir=base_dir,
+        )
+        plot_predicted_vs_actual(
+            snapshot_version=snapshot_version,
+            simulation_name=simulation_name,
+            split_name=split_name,
+            simulation_version=sim_version,
             base_dir=base_dir,
         )
     except Exception as e:
