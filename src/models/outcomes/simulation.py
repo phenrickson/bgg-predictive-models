@@ -1288,7 +1288,19 @@ def compute_simulation_metrics(
     """
     metrics = {}
 
-    for outcome in ["complexity", "rating", "users_rated", "geek_rating"]:
+    # Two geek_rating reports: "geek_rating" includes games whose actual sits
+    # at the bayes_average prior (~5.5, i.e. games with very few votes), and
+    # "geek_rating_rated" excludes those so metrics reflect games with real
+    # rating signal.
+    PRIOR_RATING = 5.5
+    outcome_loops = [
+        ("complexity", "complexity"),
+        ("rating", "rating"),
+        ("users_rated", "users_rated"),
+        ("geek_rating", "geek_rating"),
+        ("geek_rating_rated", "geek_rating"),
+    ]
+    for report_key, outcome in outcome_loops:
         actuals = []
         medians = []
         points = []
@@ -1300,24 +1312,27 @@ def compute_simulation_metrics(
             if actual_val is None:
                 continue
             # Skip missing data (0 means not yet rated/voted):
-            # - complexity == 0: no complexity votes
-            # - rating == 0: no ratings
-            # - users_rated == 0: no ratings
-            # - geek_rating: skip if users_rated == 0 (can't have valid geek_rating)
+            # - complexity != 0
+            # - rating != 0
+            # - users_rated: kept regardless (0 is real)
+            # - geek_rating: skip if users_rated == 0 (no valid geek_rating yet)
+            # - geek_rating_rated: also skip actuals near the bayes prior 5.5
             if outcome == "complexity" and actual_val == 0:
                 continue
             if outcome == "rating" and actual_val == 0:
                 continue
-            if outcome == "users_rated" and actual_val == 0:
-                continue
             if outcome == "geek_rating" and s["users_rated"]["actual"] == 0:
+                continue
+            if report_key == "geek_rating_rated" and (
+                s["users_rated"]["actual"] == 0 or actual_val <= PRIOR_RATING
+            ):
                 continue
             actuals.append(actual_val)
             medians.append(s[outcome]["median"])
             points.append(s[outcome]["point"])
 
         if not actuals:
-            metrics[outcome] = {"n": 0}
+            metrics[report_key] = {"n": 0}
             continue
 
         actuals = np.array(actuals)
@@ -1337,7 +1352,7 @@ def compute_simulation_metrics(
         ss_res_point = np.sum((actuals - points) ** 2)
         r2_point = float(1 - ss_res_point / ss_tot) if ss_tot > 0 else 0.0
 
-        metrics[outcome] = {
+        metrics[report_key] = {
             "n": len(actuals),
             "rmse_sim": rmse_sim,
             "mae_sim": mae_sim,

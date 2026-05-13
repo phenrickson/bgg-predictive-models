@@ -157,8 +157,26 @@ def plot_predicted_vs_actual(
     outcomes = ["complexity", "users_rated", "rating", "geek_rating"]
     fig, axes = plt.subplots(2, 2, figsize=(12, 12))
 
+    # Drop "no data" rows so metrics + scatter reflect rows with real signal:
+    # - complexity / rating: actual != 0
+    # - users_rated: keep all (0 is real)
+    # - geek_rating: drop rows whose users_rated_actual == 0; color the
+    #   remaining ones orange when users_rated < 25 (low-data, dominated by
+    #   the bayes prior) and steelblue otherwise. Title carries both n/r/rmse
+    #   pairs (overall and rated-only).
+    #
+    # users_rated_actual in the predictions parquet is log-scale (log1p),
+    # so the 25-rating threshold maps to log1p(25) ≈ 3.258.
+    MIN_RATINGS = 25
+    LOG_MIN_RATINGS = float(np.log1p(MIN_RATINGS))
+
     for ax, outcome in zip(axes.ravel(), outcomes):
         sub = df[[f"{outcome}_point", f"{outcome}_actual"]].dropna()
+        if outcome in ("complexity", "rating"):
+            sub = sub[sub[f"{outcome}_actual"] != 0]
+        elif outcome == "geek_rating":
+            ur_actual = df.loc[sub.index, "users_rated_actual"]
+            sub = sub[ur_actual != 0]
         pred = sub[f"{outcome}_point"].to_numpy()
         actual = sub[f"{outcome}_actual"].to_numpy()
         n = len(sub)
@@ -168,21 +186,73 @@ def plot_predicted_vs_actual(
             ax.set_title(outcome.replace("_", " ").title(), fontsize=12, fontweight="bold")
             continue
 
-        ax.scatter(pred, actual, alpha=0.4, s=15, color="steelblue", edgecolors="none")
+        # Color rule applies to complexity / rating / geek_rating: orange when
+        # users_rated_actual < log1p(25), blue otherwise. users_rated panel
+        # has no second axis (the x-axis already IS users_rated) so leave it
+        # uncolored.
+        if outcome in ("complexity", "rating", "geek_rating"):
+            ur_actual_arr = df.loc[sub.index, "users_rated_actual"].to_numpy()
+            low_mask = ur_actual_arr < LOG_MIN_RATINGS
+            rated_mask = ~low_mask
+            ax.scatter(
+                pred[low_mask], actual[low_mask],
+                alpha=0.4, s=12, color="darkorange", edgecolors="none",
+                label=f"<{MIN_RATINGS} ratings (n={low_mask.sum()})",
+            )
+            ax.scatter(
+                pred[rated_mask], actual[rated_mask],
+                alpha=0.5, s=15, color="steelblue", edgecolors="none",
+                label=f"≥{MIN_RATINGS} ratings (n={rated_mask.sum()})",
+            )
+        else:
+            ax.scatter(pred, actual, alpha=0.4, s=15, color="steelblue", edgecolors="none")
+            rated_mask = None
 
         lo = float(min(pred.min(), actual.min()))
         hi = float(max(pred.max(), actual.max()))
-        ax.plot([lo, hi], [lo, hi], color="red", linewidth=1, linestyle="--", alpha=0.7)
+        ax.plot([lo, hi], [lo, hi], color="red", linewidth=1, linestyle="--",
+                alpha=0.7, label="y = x")
 
-        corr = float(np.corrcoef(pred, actual)[0, 1]) if n > 1 else float("nan")
-        rmse = float(np.sqrt(np.mean((pred - actual) ** 2)))
+        corr_all = float(np.corrcoef(pred, actual)[0, 1]) if n > 1 else float("nan")
+        rmse_all = float(np.sqrt(np.mean((pred - actual) ** 2)))
+
+        # OLS fit through all points; if we have a rated subset, also fit
+        # through just those. Draw both lines so the user can see how the
+        # low-information points pull the overall fit away from the y=x.
+        xs = np.linspace(lo, hi, 100)
+        if n > 1:
+            slope_all, intercept_all = np.polyfit(pred, actual, 1)
+            ax.plot(
+                xs, slope_all * xs + intercept_all,
+                color="darkorange", linewidth=1.5, alpha=0.9,
+                label=f"fit all (slope={slope_all:.2f})",
+            )
+
+        if rated_mask is not None and rated_mask.sum() > 1:
+            r_rated = float(np.corrcoef(pred[rated_mask], actual[rated_mask])[0, 1])
+            rmse_rated = float(np.sqrt(np.mean((pred[rated_mask] - actual[rated_mask]) ** 2)))
+            slope_r, intercept_r = np.polyfit(pred[rated_mask], actual[rated_mask], 1)
+            ax.plot(
+                xs, slope_r * xs + intercept_r,
+                color="steelblue", linewidth=1.5, alpha=0.9,
+                label=f"fit ≥{MIN_RATINGS} (slope={slope_r:.2f})",
+            )
+            title = (
+                f"{outcome.replace('_', ' ').title()}  "
+                f"(n={n}, r={corr_all:.3f}, rmse={rmse_all:.3f})\n"
+                f"≥{MIN_RATINGS} only (n={rated_mask.sum()}, r={r_rated:.3f}, rmse={rmse_rated:.3f})"
+            )
+        else:
+            title = (
+                f"{outcome.replace('_', ' ').title()}  "
+                f"(n={n}, r={corr_all:.3f}, rmse={rmse_all:.3f})"
+            )
+
+        ax.legend(loc="lower right", fontsize=7, framealpha=0.7)
 
         ax.set_xlabel("Predicted", fontsize=10)
         ax.set_ylabel("Actual", fontsize=10)
-        ax.set_title(
-            f"{outcome.replace('_', ' ').title()}  (n={n}, r={corr:.3f}, rmse={rmse:.3f})",
-            fontsize=11, fontweight="bold",
-        )
+        ax.set_title(title, fontsize=11, fontweight="bold")
         ax.grid(True, alpha=0.3)
 
     plt.suptitle(
