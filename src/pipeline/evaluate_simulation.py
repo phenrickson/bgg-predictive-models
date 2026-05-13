@@ -231,16 +231,22 @@ def main() -> int:
             k, v = pair.split("=", 1)
             candidates[k.strip()] = v.strip()
 
+    simulation_name = args.simulation_name
+    if simulation_name is None:
+        from src.utils.config import load_config
+        cfg = load_config()
+        simulation_name = cfg.simulation.experiment_name if cfg.simulation else "default"
+
     version = evaluate_simulation(
         snapshot_version=args.snapshot_version,
         split_name=args.split,
-        simulation_name=args.simulation_name,
+        simulation_name=simulation_name,
         candidates=candidates,
         n_samples=args.n_samples,
         geek_rating_mode=args.geek_rating_mode,
         base_dir=args.base_dir,
     )
-    print(f"simulation: {args.simulation_name}/{args.split}/v{version}")
+    print(f"simulation: {simulation_name}/{args.split}/v{version}")
     return 0
 
 

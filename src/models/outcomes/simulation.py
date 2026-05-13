@@ -954,18 +954,22 @@ def simulate_geek_rating(
     else:
         raise ValueError(f"Unknown geek_rating_mode: {geek_rating_mode}")
 
-    # Point estimates
+    # Point estimates. Order: complexity → users_rated → rating so rating's
+    # predict() sees predicted_users_rated when trained with users_rated as
+    # an upstream.
     complexity_point = float(np.clip(complexity_pipeline.predict(game)[0], 1, 5))
 
     game_with_complexity = game.copy()
     game_with_complexity["predicted_complexity"] = complexity_point
 
-    rating_point = float(
-        np.clip(rating_pipeline.predict(game_with_complexity)[0], 1, 10)
-    )
     # users_rated_point stays in log scale (consistent with users_rated_samples)
     users_rated_point = float(
         users_rated_pipeline.predict(game_with_complexity)[0]
+    )
+    game_with_complexity["predicted_users_rated"] = users_rated_point
+
+    rating_point = float(
+        np.clip(rating_pipeline.predict(game_with_complexity)[0], 1, 10)
     )
     # Convert to count scale only for geek_rating calculation
     users_rated_count = max(np.expm1(users_rated_point), 25)
@@ -1129,15 +1133,19 @@ def simulate_batch(
     else:
         raise ValueError(f"Unknown geek_rating_mode: {geek_rating_mode}")
 
-    # Point estimates (vectorized)
+    # Point estimates (vectorized). Order: complexity → users_rated → rating
+    # so rating's predict() sees predicted_users_rated on the frame when
+    # rating was trained with users_rated as an upstream.
     complexity_points = np.clip(complexity_pipeline.predict(games), 1, 5)
 
     games_with_complexity = games.copy()
     games_with_complexity["predicted_complexity"] = complexity_points
 
-    rating_points = np.clip(rating_pipeline.predict(games_with_complexity), 1, 10)
     # users_rated_points stays in log scale (consistent with users_rated_samples)
     users_rated_points = users_rated_pipeline.predict(games_with_complexity)
+    games_with_complexity["predicted_users_rated"] = users_rated_points
+
+    rating_points = np.clip(rating_pipeline.predict(games_with_complexity), 1, 10)
     # Convert to count scale only for geek_rating calculation
     users_rated_counts = np.maximum(np.expm1(users_rated_points), 25)
 

@@ -52,7 +52,19 @@ def _join_upstream_predictions(
       rating       → predicted_rating
       users_rated  → predicted_users_rated  (log-scale raw output)
     """
-    for upstream_type, upstream_candidate in upstream.items():
+    # Process upstreams in cascade order so an upstream whose own predict()
+    # depends on another upstream's column sees it on the frame first.
+    # Concretely: rating's finalized pipeline reads predicted_users_rated, so
+    # users_rated must be joined before rating.
+    _CASCADE_ORDER = ["complexity", "users_rated", "rating"]
+    ordered = sorted(
+        upstream.items(),
+        key=lambda kv: (
+            _CASCADE_ORDER.index(kv[0]) if kv[0] in _CASCADE_ORDER else len(_CASCADE_ORDER),
+            kv[0],
+        ),
+    )
+    for upstream_type, upstream_candidate in ordered:
         versions = storage.list_candidate_versions(upstream_type, upstream_candidate)
         if not versions:
             raise FileNotFoundError(

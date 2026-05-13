@@ -516,7 +516,7 @@ bgg-finalize-yoy start end:
         split="yoy_$y"
         echo "===== $split ====="
         for pair in "hurdle=$HURDLE" "complexity=$COMPLEXITY" \
-                    "rating=$RATING" "users_rated=$USERS_RATED" \
+                    "users_rated=$USERS_RATED" "rating=$RATING" \
                     "geek_rating=$GEEK_RATING"; do
             model="${pair%%=*}"
             cand="${pair##*=}"

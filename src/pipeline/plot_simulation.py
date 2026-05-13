@@ -69,7 +69,7 @@ def plot_top_games(
         lambda n: f"{str(n)[:30]}..." if len(str(n)) > 30 else str(n)
     )
 
-    outcomes = ["complexity", "rating", "users_rated", "geek_rating"]
+    outcomes = ["complexity", "users_rated", "rating", "geek_rating"]
     n_games = len(df_sorted)
 
     fig, axes = plt.subplots(1, 4, figsize=(20, max(12, n_games * 0.15)), sharey=True)
@@ -154,7 +154,7 @@ def plot_predicted_vs_actual(
     eval_year = sim["registration"].get("eval_year", "unknown")
     df = sim["predictions"].to_pandas()
 
-    outcomes = ["complexity", "rating", "users_rated", "geek_rating"]
+    outcomes = ["complexity", "users_rated", "rating", "geek_rating"]
     fig, axes = plt.subplots(2, 2, figsize=(12, 12))
 
     for ax, outcome in zip(axes.ravel(), outcomes):
