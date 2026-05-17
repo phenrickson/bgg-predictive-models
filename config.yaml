@@ -101,7 +101,6 @@ models:
         use_embeddings: true
         upstream:
           complexity: ard-complexity
-          users_rated: ard-ridge-users_rated
   geek_rating:
     type: ard
     experiment_name: ard-geek_rating
@@ -124,7 +123,7 @@ models:
 # Simulation Configuration
 # Settings for simulation-based uncertainty estimation
 simulation:
-  experiment_name: ard-ridge-rating-ur # Name written under simulations/<name>/<split>/v{N}/
+  experiment_name: ard-ridge-rating # Name written under simulations/<name>/<split>/v{N}/
   n_samples: 500 # Number of posterior samples per game
   geek_rating_mode: direct # bayesian, stacking, or direct
   output_dir: "./models/simulation"

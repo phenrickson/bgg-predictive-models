@@ -312,6 +312,20 @@ class SnapshotStorage:
     def simulation_dir(self, simulation_name: str, split_name: str, version: int) -> Path:
         return self.snapshot_dir / "simulations" / simulation_name / split_name / f"v{version}"
 
+    def list_simulation_names(self) -> List[str]:
+        """All simulation experiment names that exist under this snapshot."""
+        root = self.snapshot_dir / "simulations"
+        if not root.exists():
+            return []
+        return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+    def list_simulation_splits(self, simulation_name: str) -> List[str]:
+        """All split names that have a simulation under ``simulation_name``."""
+        root = self.snapshot_dir / "simulations" / simulation_name
+        if not root.exists():
+            return []
+        return sorted(p.name for p in root.iterdir() if p.is_dir())
+
     def list_simulation_versions(self, simulation_name: str, split_name: str) -> List[int]:
         sim_dir = self.snapshot_dir / "simulations" / simulation_name / split_name
         if not sim_dir.exists():
