@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         "index.html",
         "-P",
         f"source={args.source}",
+        "-P",
+        f"output_dir={output_dir.resolve()}",
     ]
 
     env = os.environ.copy()
