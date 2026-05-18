@@ -35,6 +35,21 @@ except ImportError:
 logger = logging.getLogger("reports.render")
 
 
+# Maps --report to its qmd template. The predictions report keeps the
+# friendly top-level URL; the model report lives under model/ so the
+# two render pipelines never collide on a filename in the shared bundle.
+_REPORTS = {
+    "predictions": "predictions_report.qmd",
+    "model": "model_report.qmd",
+}
+
+
+def _output_rel_path(report: str, username: str) -> Path:
+    if report == "model":
+        return Path("model") / f"{username}.html"
+    return Path(f"{username}.html")
+
+
 def _install_offline_stubs() -> None:
     """When BGG_REPORTS_OFFLINE=1, replace BQ-backed fetchers with empty
     DataFrame returns so renders work without GCP creds."""
@@ -66,6 +81,7 @@ def _list_users(source: str) -> list[str]:
 
 def _render_one(
     username: str,
+    report: str,
     outcome: str,
     source: str,
     candidate: str | None,
@@ -75,13 +91,14 @@ def _render_one(
     """Run quarto render for one (user, outcome). Returns the process
     exit code; 0 = success."""
     project_root = Path(__file__).resolve().parents[1]
-    qmd_path = Path(__file__).parent / "collection_report.qmd"
+    qmd_path = Path(__file__).parent / _REPORTS[report]
     # Render with a fixed name; move into output_dir after. We pass a
     # relative `--output` (no --output-dir) so the html lands beside the
     # qmd alongside its `_files` support directory — Quarto's bundler
     # gets confused when --output-dir is outside the qmd directory.
     output_dir.mkdir(parents=True, exist_ok=True)
     rendered_name = f"{username}.html"
+    rel_out = _output_rel_path(report, username)
     # Quarto params are passed via -P key=value. Booleans are accepted
     # as bare lowercase strings.
     cmd = [
@@ -124,7 +141,8 @@ def _render_one(
     if not rendered.exists():
         logger.error("Quarto reported success but %s is missing", rendered)
         return 1
-    target = output_dir / rendered_name
+    target = output_dir / rel_out
+    target.parent.mkdir(parents=True, exist_ok=True)
     rendered.replace(target)
     return 0
 
@@ -137,6 +155,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outcome", default="own")
     parser.add_argument("--source", default="local")
     parser.add_argument("--candidate", default=None)
+    parser.add_argument(
+        "--report",
+        required=True,
+        choices=sorted(_REPORTS),
+        help="Which report to render: predictions or model",
+    )
     parser.add_argument(
         "--output-dir",
         default="reports/_output",
@@ -210,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
 
         rc = _render_one(
             username=username,
+            report=args.report,
             outcome=args.outcome,
             source=args.source,
             candidate=args.candidate,
