@@ -118,6 +118,9 @@ promote user=username outcome="own" candidate="lgbm_default" version="latest" de
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
         --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{user}}/{{outcome}}")"
+    @echo "Dispatching model report render for {{user}}/{{outcome}}"
+    gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}} || \
+        echo "WARN: model-report dispatch failed (promote still succeeded); rerun manually: gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}}"
 
 # Register one candidate across multiple outcomes in one shot.
 #   just promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
