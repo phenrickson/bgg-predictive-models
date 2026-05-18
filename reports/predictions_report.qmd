@@ -44,8 +44,6 @@ games before the community has weighed in.
 For the model's findings and evaluation, see the companion **Model
 Report**.
 
-{{< include _collection.qmd >}}
-
 # Predictions {#predictions}
 
 ## New and Upcoming Games
@@ -123,14 +121,28 @@ if "users_rated" in older.columns:
     older = older.filter(pl.col("users_rated") >= 5)
 older = older.sort("proba", descending=True)
 
+# Same image-rich format as New and Upcoming. Older Games is filtered
+# to games the user does not own, so every Status would be "—"; drop
+# that column. format_predictions_with_images reads `proba` when
+# `predicted_prob` is absent, which is the case here.
+older_table = format_predictions_with_images(
+    older,
+    status_lookup={},
+    top_n=200,
+    show_actual=False,
+).drop(columns=["Status"])
+
 itables_show(
-    format_eval_predictions(older, top_n=200),
+    older_table,
     paging=True,
     pageLength=15,
     classes="display compact",
     columnDefs=[
-        {"className": "dt-center", "targets": [0, 2]},
+        {"className": "dt-center", "targets": [0, 4]},
         {"width": "60px", "targets": [0]},
+        {"width": "90px", "targets": [1]},
+        {"width": "200px", "targets": [2]},
+        {"width": "80px", "targets": [4]},
     ],
     style="width: 100%",
     allow_html=True,

@@ -33,7 +33,6 @@ from src.reports.tables import (
     build_status_lookup,
     build_topn_by_year_html,
     format_collection_table,
-    format_eval_predictions,
     format_eval_table,
     format_model_details,
     format_predictions_with_images,
