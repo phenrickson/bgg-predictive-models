@@ -59,10 +59,13 @@ CANDIDATE = candidate or None
 if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
     from src.reports import collection_data as _cd
 
-    _empty = pl.DataFrame()
-    _cd._fetch_collection_snapshot = lambda username: _empty
-    _cd._fetch_games_metadata = lambda: _empty
-    _cd._fetch_upcoming_predictions = lambda u, o: _empty
+    _cd._fetch_collection_snapshot = lambda username: _cd.empty_offline_frame(
+        "collection"
+    )
+    _cd._fetch_games_metadata = lambda: _cd.empty_offline_frame("games")
+    _cd._fetch_upcoming_predictions = lambda u, o: _cd.empty_offline_frame(
+        "upcoming"
+    )
 
 candidates = {OUTCOME: CANDIDATE} if CANDIDATE else None
 

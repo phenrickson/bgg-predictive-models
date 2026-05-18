@@ -53,14 +53,17 @@ def _output_rel_path(report: str, username: str) -> Path:
 def _install_offline_stubs() -> None:
     """When BGG_REPORTS_OFFLINE=1, replace BQ-backed fetchers with empty
     DataFrame returns so renders work without GCP creds."""
-    import polars as pl
-
     from src.reports import collection_data
 
-    empty = pl.DataFrame()
-    collection_data._fetch_collection_snapshot = lambda username: empty
-    collection_data._fetch_games_metadata = lambda: empty
-    collection_data._fetch_upcoming_predictions = lambda u, o: empty
+    collection_data._fetch_collection_snapshot = (
+        lambda username: collection_data.empty_offline_frame("collection")
+    )
+    collection_data._fetch_games_metadata = (
+        lambda: collection_data.empty_offline_frame("games")
+    )
+    collection_data._fetch_upcoming_predictions = (
+        lambda u, o: collection_data.empty_offline_frame("upcoming")
+    )
 
 
 def _list_users(source: str) -> list[str]:

@@ -246,6 +246,85 @@ def _bq_client():
     return bigquery.Client()
 
 
+def empty_offline_frame(kind: str) -> "pl.DataFrame":
+    """Schema-correct empty frames for offline/test rendering.
+
+    Bare ``pl.DataFrame()`` has zero columns, so the report's
+    join/filter cells (``join(..., on="game_id")``,
+    ``filter(pl.col("year_published") ...)``) raise ColumnNotFoundError.
+    These stubs carry the columns the report actually reads so those
+    cells render empty instead of crashing. Mirrors the real fetcher
+    output schemas; not exhaustive — only the columns the offline
+    render path touches.
+
+    Columns per kind (and why each is needed):
+
+    - ``"games"``: joined into predictions in the predictions-upcoming /
+      predictions-older / top-games-training cells and read by the
+      table/viz helpers.
+        * ``game_id``  — every ``join(..., on="game_id")``.
+        * ``name``     — ``data.games.select(["game_id","name","year_published"])``
+          in top-games-training-prep; read by ``format_*`` table builders.
+        * ``year_published`` — ``filter(pl.col("year_published") >
+          finalize_through)`` (predictions-upcoming) and
+          ``build_topn_by_year_html`` casts/filters it.
+        * ``image`` / ``description`` — ``format_predictions_with_images``.
+        * ``users_rated`` — predictions-older does
+          ``if "users_rated" in older.columns: older.filter(...)``.
+    - ``"upcoming"``: mirrors ``_fetch_upcoming_predictions`` output.
+        * ``game_id`` — join key into games.
+        * ``predicted_prob`` — ``sort("predicted_prob")`` (upcoming) and
+          ``format_predictions_with_images`` reads it as Pr(Yes).
+        * ``predicted_label`` / ``score_ts`` / ``model_version`` — round
+          out the real query's SELECT list. ``score_ts`` is Datetime to
+          match ``pl.from_pandas`` of a BQ TIMESTAMP.
+    - ``"collection"``: mirrors ``_fetch_collection_snapshot`` output.
+        * ``game_id`` — ``build_status_lookup`` keys on it; the
+          by-year/by-category plots ``.select("game_id")``.
+        * ``owned`` (+ ``preordered``/``wishlist``/``want``/
+          ``want_to_buy``/``previously_owned``/``prev_owned``/
+          ``user_rating``) — ``build_status_lookup`` /
+          ``format_collection_table`` / the collection plots read these
+          (status booleans and the filter ``pl.col("owned") == True``).
+    """
+    if kind == "games":
+        return pl.DataFrame(
+            schema={
+                "game_id": pl.Int64,
+                "name": pl.Utf8,
+                "year_published": pl.Int64,
+                "image": pl.Utf8,
+                "description": pl.Utf8,
+                "users_rated": pl.Int64,
+            }
+        )
+    if kind == "upcoming":
+        return pl.DataFrame(
+            schema={
+                "game_id": pl.Int64,
+                "predicted_prob": pl.Float64,
+                "predicted_label": pl.Int64,
+                "score_ts": pl.Datetime,
+                "model_version": pl.Utf8,
+            }
+        )
+    if kind == "collection":
+        return pl.DataFrame(
+            schema={
+                "game_id": pl.Int64,
+                "owned": pl.Boolean,
+                "preordered": pl.Boolean,
+                "wishlist": pl.Boolean,
+                "want": pl.Boolean,
+                "want_to_buy": pl.Boolean,
+                "previously_owned": pl.Boolean,
+                "prev_owned": pl.Boolean,
+                "user_rating": pl.Float64,
+            }
+        )
+    raise ValueError(f"Unknown offline frame kind: {kind!r}")
+
+
 def _fetch_collection_snapshot(username: str) -> pl.DataFrame:
     """Latest BGG collection snapshot for the user."""
     storage = CollectionStorage(environment="dev")
