@@ -278,6 +278,9 @@ def empty_offline_frame(kind: str) -> "pl.DataFrame":
         * ``predicted_label`` / ``score_ts`` / ``model_version`` — round
           out the real query's SELECT list. ``score_ts`` is Datetime to
           match ``pl.from_pandas`` of a BQ TIMESTAMP.
+        * ``is_new_7d`` — Boolean; whether the game first appeared in
+          this user's predictions within the last 7 days. Drives the
+          row highlight in the New & Upcoming table.
     - ``"collection"``: mirrors ``_fetch_collection_snapshot`` output.
         * ``game_id`` — ``build_status_lookup`` keys on it; the
           by-year/by-category plots ``.select("game_id")``.
@@ -306,6 +309,7 @@ def empty_offline_frame(kind: str) -> "pl.DataFrame":
                 "predicted_label": pl.Int64,
                 "score_ts": pl.Datetime,
                 "model_version": pl.Utf8,
+                "is_new_7d": pl.Boolean,
             }
         )
     if kind == "collection":
@@ -347,6 +351,11 @@ def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
     score per (game_id) — the table is append-only.
     """
     table = load_config().get_collection_landing_table()
+    # `is_new_7d` mirrors bgg-dash-viewer's NEW signal: a game is "new"
+    # if its first appearance in this user's collection predictions was
+    # within the last 7 days. The landing table is append-only, so
+    # MIN(score_ts) per game_id is that first-seen timestamp (the local
+    # equivalent of the dash's predictions.game_first_prediction).
     sql = f"""
     WITH ranked AS (
         SELECT
@@ -355,11 +364,18 @@ def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
             predicted_label,
             score_ts,
             model_version,
+            MIN(score_ts) OVER (PARTITION BY game_id) AS first_score_ts,
             ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) AS rn
         FROM `{table}`
         WHERE username = {username!r} AND outcome = {outcome!r}
     )
-    SELECT game_id, predicted_prob, predicted_label, score_ts, model_version
+    SELECT
+        game_id,
+        predicted_prob,
+        predicted_label,
+        score_ts,
+        model_version,
+        DATE_DIFF(CURRENT_DATE(), DATE(first_score_ts), DAY) <= 7 AS is_new_7d
     FROM ranked
     WHERE rn = 1
     """

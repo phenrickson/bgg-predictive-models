@@ -222,6 +222,12 @@ def format_predictions_with_images(
     }
     if show_actual and "label" in view.columns:
         rows["Owned"] = ["yes" if bool(x) else "no" for x in view["label"].tolist()]
+    # Hidden helper column: carried through only when the caller's frame
+    # has it (New & Upcoming). The qmd hides this column and uses its
+    # value in a rowCallback to highlight rows for newly-predicted games.
+    # Older Games / model report don't pass it, so this is a no-op there.
+    if "is_new_7d" in view.columns:
+        rows["_is_new"] = [bool(x) for x in view["is_new_7d"].tolist()]
     return pd.DataFrame(rows)
 
 

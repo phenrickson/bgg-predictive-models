@@ -72,17 +72,27 @@ if finalize_through is not None:
     upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
 upcoming = upcoming.sort("predicted_prob", descending=True)
 
+from itables import JavascriptFunction
+
+_upcoming_table = format_predictions_with_images(
+    upcoming,
+    status_lookup=status_lookup,
+    top_n=100,
+    show_actual=False,
+)
+# `_is_new` is the last column (index 6): Rank0 Image1 Game2 Desc3
+# Pr(Yes)4 Status5 _is_new6. Hide it and use its value to tint the
+# row for games first predicted within the last 7 days (mirrors
+# bgg-dash-viewer's NEW signal; soft green = same family as its badge).
+_IS_NEW_COL = list(_upcoming_table.columns).index("_is_new")
+
 itables_show(
-    format_predictions_with_images(
-        upcoming,
-        status_lookup=status_lookup,
-        top_n=100,
-        show_actual=False,
-    ),
+    _upcoming_table,
     paging=True,
     pageLength=10,
     classes="display compact",
     columnDefs=[
+        {"visible": False, "searchable": False, "targets": [_IS_NEW_COL]},
         {"className": "dt-center", "targets": [0, 4, 5]},
         {"width": "60px", "targets": [0]},
         {"width": "90px", "targets": [1]},
@@ -90,6 +100,13 @@ itables_show(
         {"width": "80px", "targets": [4]},
         {"width": "100px", "targets": [5]},
     ],
+    createdRow=JavascriptFunction(
+        f"function(row, data, dataIndex) {{"
+        f"  if (data[{_IS_NEW_COL}] === true) {{"
+        f"    row.style.backgroundColor = '#d1fae5';"
+        f"  }}"
+        f"}}"
+    ),
     style="width: 100%",
     allow_html=True,
 )
@@ -136,7 +153,7 @@ older_table = format_predictions_with_images(
 itables_show(
     older_table,
     paging=True,
-    pageLength=15,
+    pageLength=10,
     classes="display compact",
     columnDefs=[
         {"className": "dt-center", "targets": [0, 4]},
