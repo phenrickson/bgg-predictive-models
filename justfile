@@ -223,21 +223,37 @@ users-sweep users outcome="own":
         exit 1
     fi
 
-# Render the collection report for a user. Reads artifacts from
-# models/collections/ locally and pulls collection/games/upcoming
-# predictions from BigQuery (set BGG_REPORTS_OFFLINE=1 in .env to
-# stub the BQ-backed sections).
-#   just render                          # default user
-#   just render GOBBluth89               # other user
+# Render report(s) for a user from local models/collections/ + BQ
+# (set BGG_REPORTS_OFFLINE=1 in .env to stub the BQ-backed sections),
+# then rebuild the index. `report` blank = both predictions + model;
+# pass `predictions` or `model` for just one.
+#   just render                          # default user, both + index
+#   just render GOBBluth89               # other user, both
 #   just render GOBBluth89 ever_owned    # other user + outcome
-render user=username outcome="own" candidate="":
-    uv run python -m reports.render \
-        --username {{user}} --outcome {{outcome}} \
-        $([ -n "{{candidate}}" ] && echo "--candidate {{candidate}}")
+#   just render rahdo own model          # just the model report
+render user=username outcome="own" report="" candidate="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    reports="$([ -n "{{report}}" ] && echo "{{report}}" || echo "predictions model")"
+    for r in $reports; do
+        uv run python -m reports.render --report "$r" \
+            --username {{user}} --outcome {{outcome}} \
+            $([ -n "{{candidate}}" ] && echo "--candidate {{candidate}}")
+    done
+    uv run python -m reports.build_index
+    echo "Open: reports/_output/index.html"
 
-# Render the collection report for every user under models/collections/.
-render-all outcome="own":
-    uv run python -m reports.render --all-users --outcome {{outcome}}
+# Render report(s) for every user under models/collections/, then index.
+# `report` blank = both predictions + model.
+render-all outcome="own" report="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    reports="$([ -n "{{report}}" ] && echo "{{report}}" || echo "predictions model")"
+    for r in $reports; do
+        uv run python -m reports.render --all-users --report "$r" --outcome {{outcome}}
+    done
+    uv run python -m reports.build_index
+    echo "Open: reports/_output/index.html"
 
 # Render the index page (reports/index.qmd) which lists all users with
 # finalized models and links to their per-user reports. Builds from the
@@ -249,8 +265,8 @@ render-index source="local":
 # Render the report against synthetic fixture data — no BQ, no artifacts.
 # Use this for fast iteration on styling/layout: edits to the qmd, css,
 # or viz code can be checked in seconds rather than waiting on real loads.
-render-sandbox:
-    uv run python -m reports.render --fixture
+render-sandbox report="predictions":
+    uv run python -m reports.render --fixture --report {{report}}
 
 # --- Artifact sync to GCS ---
 #
