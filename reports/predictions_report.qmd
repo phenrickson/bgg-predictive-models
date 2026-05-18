@@ -105,6 +105,7 @@ These are technically 'misses' by the model, but in practice they represent game
 
 ```{python}
 #| label: predictions-older
+#| column: page-right
 older = (
     pl.concat(
         [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
