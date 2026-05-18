@@ -1,0 +1,175 @@
+name: Build Model Reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: 'Comma-separated usernames to render (blank = discover all)'
+        required: false
+        default: ''
+      outcome:
+        description: 'Outcome to render the model report for'
+        required: false
+        default: 'own'
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    outputs:
+      users: ${{ steps.list.outputs.users }}
+      env_name: ${{ steps.env.outputs.env_name }}
+      image_tag: ${{ steps.env.outputs.image_tag }}
+    steps:
+      - name: Set environment name + image tag
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+            echo "image_tag=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+            echo "image_tag=dev" >> $GITHUB_OUTPUT
+          fi
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Build user list
+        id: list
+        run: |
+          set -e
+          requested='${{ inputs.users }}'
+          if [ -n "$requested" ]; then
+            users=$(echo "$requested" \
+              | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' \
+              | python3 -c "import sys, json; print(json.dumps([u.strip() for u in sys.stdin.read().split() if u.strip()]))")
+          else
+            users=$(gsutil ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
+              | sed -e 's|/$||' \
+              | xargs -n1 basename \
+              | python3 -c "import sys, json; print(json.dumps([u for u in sys.stdin.read().split() if u]))")
+          fi
+          echo "users=$users" >> $GITHUB_OUTPUT
+          echo "Resolved users: $users"
+
+  render-user:
+    needs: discover
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    if: ${{ needs.discover.outputs.users != '[]' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        user: ${{ fromJson(needs.discover.outputs.users) }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Pull reports image
+        run: |
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }}
+      - name: Render report
+        run: |
+          mkdir -p output/model
+          docker run --rm \
+            -v "$PWD/output:/out" \
+            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
+            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
+            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }} \
+            --report model \
+            --username "${{ matrix.user }}" \
+            --outcome "${{ inputs.outcome }}" \
+            --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
+            --output-dir /out
+      - name: Upload rendered HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-report-${{ matrix.user }}
+          path: output/model/${{ matrix.user }}.html
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: [discover, render-user]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Make output dir
+        run: mkdir -p reports/_output/model
+      - name: Restore previously published bundle from GCS
+        run: |
+          gsutil -m rsync -r \
+            "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/" \
+            reports/_output/ 2>&1 || echo "(no prior bundle in gs://; first run)"
+      - name: Download per-user artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: model-report-*
+          merge-multiple: true
+      - name: Move per-user model HTMLs into output dir
+        run: |
+          if [ -d artifacts ]; then
+            cp artifacts/*.html reports/_output/model/ 2>/dev/null || true
+          fi
+          ls -la reports/_output/ reports/_output/model/
+      - name: Pull reports image
+        run: |
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }}
+      - name: Render index page
+        run: |
+          docker run --rm \
+            -v "$PWD/reports/_output:/out" \
+            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
+            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
+            --entrypoint python \
+            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }} \
+            -m reports.build_index \
+            --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
+            --output-dir /out
+      - name: Mirror final bundle to GCS
+        run: |
+          gsutil -m rsync -r reports/_output/ \
+            "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/"
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/_output
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
