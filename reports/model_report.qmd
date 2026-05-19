@@ -29,174 +29,32 @@ params:
   fixture: false
 ---
 
-```{python}
-#| tags: [parameters]
-#| include: false
-
-# Default values; Quarto injects overrides from the YAML `params:` block
-# above (and from `-P key=value` on the command line) by replacing this
-# cell at render time. Don't read these from anywhere else — the whole
-# point is that Quarto controls them.
-username = "phenrickson"
-outcome = "own"
-source = "local"
-candidate = ""
-fixture = False
-```
+{{< include _setup.qmd >}}
 
 ```{python}
-#| label: setup
-#| include: false
-import os
-import sys
-
-# Ensure project root is importable regardless of Quarto's CWD.
-_project_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-import polars as pl
-import pandas as pd
-from itables import show as itables_show
-
-from src.reports.collection_data import load
-from src.reports.tables import (
-    build_status_lookup,
-    build_topn_by_year_html,
-    format_collection_table,
-    format_eval_predictions,
-    format_eval_table,
-    format_model_details,
-    format_predictions_with_images,
-)
-from src.reports.format import model_kind
-from src.collection.viz import (
-    metrics_table,
-    plot_collection_by_category_static,
-    plot_collection_by_year_static,
-    plot_feature_importance,
-    plot_separation_static,
-)
-
-# Backwards-compatible aliases for the previously-uppercased names. The
-# rest of the qmd reads USERNAME / OUTCOME / etc.
-USERNAME = username
-OUTCOME = outcome
-SOURCE = source
-CANDIDATE = candidate or None
-
-# Offline mode: stub BQ-backed fetchers with empty DataFrames so the
-# template renders without GCP credentials. Used by the smoke test.
-if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
-    from src.reports import collection_data as _cd
-
-    _empty = pl.DataFrame()
-    _cd._fetch_collection_snapshot = lambda username: _empty
-    _cd._fetch_games_metadata = lambda: _empty
-    _cd._fetch_upcoming_predictions = lambda u, o: _empty
-
-candidates = {OUTCOME: CANDIDATE} if CANDIDATE else None
-
-# Fixture mode: skip BQ + artifact reads and render against synthetic
-# data shaped like the real loader output. Used for fast styling iteration.
-if fixture:
-    from src.reports.fixtures import build_fake_report_data
-
-    data = build_fake_report_data(username=USERNAME, outcome=OUTCOME)
-else:
-    data = load(
-        username=USERNAME,
-        outcomes=OUTCOME,
-        source=SOURCE,
-        candidates=candidates,
-    )
-arts = data.outcomes[OUTCOME]
+#| output: asis
+#| echo: false
+# Quarto metadata is static YAML by default; emitting a YAML block from
+# an `output: asis` cell makes the title dynamic so it names the user
+# this model is for. Runs before the title block renders.
+print(f'---\ntitle: "{USERNAME}\'s Board Game Collection"\nsubtitle: "Model"\n---')
 ```
+
+For the model's picks for new and upcoming games, see the companion
+[Predictions Report](`{python} f"../{USERNAME}.html"`).
 
 # About
 
-This report examines a classification model trained to predict whether a
-user owns a game on BoardGameGeek. The model learns from features that
-are observable about a game at release — its publisher, mechanics,
-designers, playing time, and so on — and never reads BGG community
-information like average rating or weight, so it can score newly
-released games without leaking signal from the community after release.
+This report walks through the classification model trained to predict
+whether `{python} USERNAME` owns a game on BoardGameGeek — what the
+model learned, how the features relate to ownership, and how well it
+performs on held-out data. The model uses only features observable at
+release and never reads BGG community signals.
 
-::: {.callout-note}
-To jump to the model's predictions for new and upcoming games, see the
-[Predictions](#predictions) section.
-:::
+For the model's picks for new and upcoming games, see the companion
+[Predictions Report](`{python} f"../{USERNAME}.html"`).
 
-# Collection
-
-The data in this project comes from BoardGameGeek. The unit of
-observation is a game. We train a classification model at the user
-level to learn the relationship between game features and games a user
-owns — what predicts a user's collection?
-
-## Types of Games
-
-::: {.column-margin}
-Counts of feature values across owned games. Publishers are intentionally
-excluded — for many users the top entries are foreign-language
-re-publishers of already-popular games.
-:::
-
-What kinds of games does the user own? The plot below shows the most
-frequent designers, publishers, mechanics, categories, and so on that
-appear in their collection.
-
-```{python}
-#| label: types-of-games
-#| fig-width: 8
-#| fig-height: 9
-#| out-width: 100%
-plot_collection_by_category_static(data.collection, data.games)
-```
-
-The histogram below shows the years in which games in the user's
-collection were published. This often hints at when someone first
-entered the hobby.
-
-```{python}
-#| label: collection-by-year
-#| fig-width: 8
-#| fig-height: 3
-#| out-width: 100%
-plot_collection_by_year_static(data.collection, data.games)
-```
-
-## `{python} f"{USERNAME}'s Collection"`
-
-::: {.column-margin}
-TODO: notes about the user's collection — what stands out about their
-taste, gaps, anything worth calling out before showing the full table.
-:::
-
-Games the user has tagged on BoardGameGeek — owned, on the wishlist,
-want-to-buy, preordered, or previously owned. Sortable by status,
-rating, players, and playtime.
-
-```{python}
-#| label: collection-table
-itables_show(
-    format_collection_table(data.collection, data.games),
-    paging=True,
-    pageLength=15,
-    classes="display compact",
-    # Column order: Game | Status | Your rating | Players | Playtime | Complexity
-    columnDefs=[
-        {"className": "dt-center", "targets": [1, 2, 3, 4, 5]},
-        {"width": "100px", "targets": [1]},
-        {"width": "90px", "targets": [2]},
-        {"width": "80px", "targets": [3]},
-        {"width": "110px", "targets": [4]},
-        {"width": "100px", "targets": [5]},
-    ],
-    style="width: 100%",
-    allow_html=True,
-)
-```
+{{< include _collection.qmd >}}
 
 # Modeling
 
@@ -584,97 +442,6 @@ if html:
     print("```")
 else:
     print("No predictions in the eval splits to display.\n")
-```
-
-# Predictions {#predictions}
-
-## New and Upcoming Games
-
-::: {.column-margin}
-TODO: notes about specific upcoming games worth flagging — anything
-the model is unusually high on, anything that surprised you.
-:::
-
-Predictions for recent and upcoming releases, generated by the deployed
-model. Filtered to games published *after* the model's training window
-(`finalize_through`). The **Status** column shows whether the game is
-already in the user's collection.
-
-```{python}
-#| label: predictions-upcoming
-#| column: page-right
-status_lookup = build_status_lookup(data.collection)
-
-# The model was trained on data through `finalize_through`, so anything
-# published in or before that year is in-sample. "New and Upcoming"
-# means strictly after.
-finalize_through = arts.registration.get("finalize_through")
-upcoming = arts.upcoming_predictions.join(data.games, on="game_id", how="inner")
-if finalize_through is not None:
-    upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
-upcoming = upcoming.sort("predicted_prob", descending=True)
-
-itables_show(
-    format_predictions_with_images(
-        upcoming,
-        status_lookup=status_lookup,
-        top_n=100,
-        show_actual=False,
-    ),
-    paging=True,
-    pageLength=10,
-    classes="display compact",
-    columnDefs=[
-        {"className": "dt-center", "targets": [0, 4, 5]},
-        {"width": "60px", "targets": [0]},
-        {"width": "90px", "targets": [1]},
-        {"width": "200px", "targets": [2]},
-        {"width": "80px", "targets": [4]},
-        {"width": "100px", "targets": [5]},
-    ],
-    style="width: 100%",
-    allow_html=True,
-)
-```
-
-## Older Games
-
-Older games that the model liked for the user during training/evaluation. These are the highest scoring games that the user does not currently own; these might be good ones to check out.
-
-::: {.column-margin} 
-These are technically 'misses' by the model, but in practice they represent games that are very consistent with what is in the user's collection and can be thought of as recommendations.
-:::
-
-```{python}
-#| label: predictions-older
-older = (
-    pl.concat(
-        [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
-        how="diagonal_relaxed",
-    ).join(data.games, on="game_id", how="inner")
-    # `label` is a boolean (or 0/1) here — true = user owns it. We want
-    # not-owned games for the recommendations list, so cast and negate.
-    .filter(~pl.col("label").cast(pl.Boolean))
-    # Drop the label column so the table doesn't render an "Owned"
-    # column of all-"no" values.
-    .drop("label")
-)
-if "users_rated" in older.columns:
-    older = older.filter(pl.col("users_rated") >= 5)
-older = older.sort("proba", descending=True)
-
-itables_show(
-    format_eval_predictions(older, top_n=200),
-    paging=True,
-    pageLength=15,
-    classes="display compact",
-    columnDefs=[
-        {"className": "dt-center", "targets": [0, 2]},
-        {"width": "60px", "targets": [0]},
-    ],
-    style="width: 100%",
-    allow_html=True,
-)
 ```
 
 # Model Details

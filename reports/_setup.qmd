@@ -1,0 +1,86 @@
+```{python}
+#| tags: [parameters]
+#| include: false
+
+# Default values; Quarto injects overrides from the YAML `params:` block
+# above (and from `-P key=value` on the command line) by replacing this
+# cell at render time. Don't read these from anywhere else — the whole
+# point is that Quarto controls them.
+username = "phenrickson"
+outcome = "own"
+source = "local"
+candidate = ""
+fixture = False
+```
+
+```{python}
+#| label: setup
+#| include: false
+import os
+import sys
+
+# Ensure project root is importable regardless of Quarto's CWD.
+_project_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+import polars as pl
+import pandas as pd
+from itables import show as itables_show
+
+from src.reports.collection_data import load
+from src.reports.tables import (
+    build_status_lookup,
+    build_topn_by_year_html,
+    format_collection_table,
+    format_eval_table,
+    format_model_details,
+    format_predictions_with_images,
+)
+from src.reports.format import model_kind
+from src.collection.viz import (
+    metrics_table,
+    plot_collection_by_category_static,
+    plot_collection_by_year_static,
+    plot_feature_importance,
+    plot_separation_static,
+)
+
+# Backwards-compatible aliases for the previously-uppercased names. The
+# rest of the qmd reads USERNAME / OUTCOME / etc.
+USERNAME = username
+OUTCOME = outcome
+SOURCE = source
+CANDIDATE = candidate or None
+
+# Offline mode: stub BQ-backed fetchers with empty DataFrames so the
+# template renders without GCP credentials. Used by the smoke test.
+if os.environ.get("BGG_REPORTS_OFFLINE") == "1":
+    from src.reports import collection_data as _cd
+
+    _cd._fetch_collection_snapshot = lambda username: _cd.empty_offline_frame(
+        "collection"
+    )
+    _cd._fetch_games_metadata = lambda: _cd.empty_offline_frame("games")
+    _cd._fetch_upcoming_predictions = lambda u, o: _cd.empty_offline_frame(
+        "upcoming"
+    )
+
+candidates = {OUTCOME: CANDIDATE} if CANDIDATE else None
+
+# Fixture mode: skip BQ + artifact reads and render against synthetic
+# data shaped like the real loader output. Used for fast styling iteration.
+if fixture:
+    from src.reports.fixtures import build_fake_report_data
+
+    data = build_fake_report_data(username=USERNAME, outcome=OUTCOME)
+else:
+    data = load(
+        username=USERNAME,
+        outcomes=OUTCOME,
+        source=SOURCE,
+        candidates=candidates,
+    )
+arts = data.outcomes[OUTCOME]
+```
+

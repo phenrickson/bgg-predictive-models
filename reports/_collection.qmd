@@ -1,0 +1,70 @@
+# Collection
+
+The data in this project comes from BoardGameGeek. The unit of
+observation is a game. We train a classification model at the user
+level to learn the relationship between game features and games a user
+owns — what predicts a user's collection?
+
+## Types of Games
+
+::: {.column-margin}
+Counts of feature values across owned games. Publishers are intentionally
+excluded — for many users the top entries are foreign-language
+re-publishers of already-popular games.
+:::
+
+What kinds of games does the user own? The plot below shows the most
+frequent designers, publishers, mechanics, categories, and so on that
+appear in their collection.
+
+```{python}
+#| label: types-of-games
+#| fig-width: 8
+#| fig-height: 9
+#| out-width: 100%
+plot_collection_by_category_static(data.collection, data.games)
+```
+
+The histogram below shows the years in which games in the user's
+collection were published. This often hints at when someone first
+entered the hobby.
+
+```{python}
+#| label: collection-by-year
+#| fig-width: 8
+#| fig-height: 3
+#| out-width: 100%
+plot_collection_by_year_static(data.collection, data.games)
+```
+
+## `{python} f"{USERNAME}'s Collection"`
+
+::: {.column-margin}
+TODO: notes about the user's collection — what stands out about their
+taste, gaps, anything worth calling out before showing the full table.
+:::
+
+Games the user has tagged on BoardGameGeek — owned, on the wishlist,
+want-to-buy, preordered, or previously owned. Sortable by status,
+rating, players, and playtime.
+
+```{python}
+#| label: collection-table
+itables_show(
+    format_collection_table(data.collection, data.games),
+    paging=True,
+    pageLength=15,
+    classes="display compact",
+    # Column order: Game | Status | Your rating | Players | Playtime | Complexity
+    columnDefs=[
+        {"className": "dt-center", "targets": [1, 2, 3, 4, 5]},
+        {"width": "100px", "targets": [1]},
+        {"width": "90px", "targets": [2]},
+        {"width": "80px", "targets": [3]},
+        {"width": "110px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+    ],
+    style="width: 100%",
+    allow_html=True,
+)
+```

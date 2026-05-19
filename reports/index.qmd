@@ -19,12 +19,14 @@ execute:
   daemon: false
 params:
   source: local
+  output_dir: ""
 ---
 
 ```{python}
 #| tags: [parameters]
 #| include: false
 source = "local"
+output_dir = ""
 ```
 
 ```{python}
@@ -124,19 +126,39 @@ def _short_dt(value):
     return str(value).split("T")[0]
 
 
+# Overlay on-disk discovery: which of the two report HTMLs actually
+# exist for each user, so a card links only to reports that rendered.
+from src.reports.output_index import discover_output_reports
+
+_present = {
+    r["username"]: r
+    for r in (discover_output_reports(output_dir) if output_dir else [])
+}
+
 if not users_summary:
     print("_No reports have been generated yet._")
 else:
     print("```{=html}")
     print('<div class="user-grid">')
     for u in users_summary:
+        name = u["username"]
+        flags = _present.get(
+            name, {"has_predictions": True, "has_model": False}
+        )
+        links = []
+        if flags["has_predictions"]:
+            links.append(f'<a href="{name}.html">Predictions</a>')
+        if flags["has_model"]:
+            links.append(f'<a href="model/{name}.html">Model</a>')
+        links_html = " · ".join(links) if links else "—"
         print(
-            f'<a class="user-card" href="{u["username"]}.html">'
-            f'<div class="user-card-title">{u["username"]}</div>'
+            f'<div class="user-card">'
+            f'<div class="user-card-title">{name}</div>'
             f'<div class="user-card-sub">'
             f'{u["model_type"]} · ROC-AUC {_fmt(u["roc_auc"])}'
             f'</div>'
-            f'</a>'
+            f'<div class="user-card-links">{links_html}</div>'
+            f'</div>'
         )
     print("</div>")
     print("```")
@@ -183,3 +205,12 @@ if users_summary:
         allow_html=True,
     )
 ```
+
+<!-- ## Reports
+
+::: {.column-margin}
+Site-wide reports will appear here.
+:::
+
+_No site-wide reports yet._
+ -->

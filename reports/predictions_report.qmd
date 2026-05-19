@@ -1,0 +1,176 @@
+---
+title: "Predicting Board Game Collections"
+author: "Phil Henrickson"
+date: today
+format:
+  html:
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: true
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
+    fig-align: center
+execute:
+  echo: false
+  warning: false
+  message: false
+  daemon: false
+params:
+  username: phenrickson
+  outcome: own
+  source: local
+  candidate: ""
+  fixture: false
+---
+
+{{< include _setup.qmd >}}
+
+```{python}
+#| output: asis
+#| echo: false
+# Quarto metadata is static YAML by default; emitting a YAML block from
+# an `output: asis` cell makes the title dynamic so it names the user
+# whose predictions these are. Runs before the title block renders.
+print(
+    f'---\ntitle: "{USERNAME}\'s Board Game Collection"\nsubtitle: "Predictions"\n---'
+)
+```
+
+For the model's findings and evaluation, see the companion
+[Model Report](`{python} f"model/{USERNAME}.html"`).
+
+# About
+
+This report shows predictions for a predictive model trained on
+**`{python} USERNAME`**'s board game collection in order to identify which new and upcoming
+releases they are likely to own and which older games closely
+match their taste. The model is trained using features observable at
+release (categories, mechanics, designers, publishers, playing time, estimated complexity) in order to predict games *before* the BGG community has weighed in.
+
+For more on the model's findings and evaluation, see the companion
+[Model Report](`{python} f"model/{USERNAME}.html"`).
+
+# Predictions {#predictions}
+
+## New and Upcoming Games
+
+::: {.column-margin}
+Games are ranked and sorted based on the model's predicted probability; the top games might have a relatively low probability if the user has a relatively small collection.
+:::
+
+Predictions for recent and upcoming releases for **`{python} USERNAME`**. Filtered to games published *after* the model's training window
+(`finalize_through`). The **Status** column shows whether the game is
+already in the user's collection.
+
+```{python}
+#| label: predictions-upcoming
+#| column: page-right
+status_lookup = build_status_lookup(data.collection)
+
+# The model was trained on data through `finalize_through`, so anything
+# published in or before that year is in-sample. "New and Upcoming"
+# means strictly after.
+finalize_through = arts.registration.get("finalize_through")
+upcoming = arts.upcoming_predictions.join(data.games, on="game_id", how="inner")
+if finalize_through is not None:
+    upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
+upcoming = upcoming.sort("predicted_prob", descending=True)
+
+from itables import JavascriptFunction
+
+_upcoming_table = format_predictions_with_images(
+    upcoming,
+    status_lookup=status_lookup,
+    top_n=100,
+    show_actual=False,
+)
+# `_is_new` is the last column (index 6): Rank0 Image1 Game2 Desc3
+# Pr(Yes)4 Status5 _is_new6. Hide it and use its value to tint the
+# row for games first predicted within the last 7 days (mirrors
+# bgg-dash-viewer's NEW signal; soft green = same family as its badge).
+_IS_NEW_COL = list(_upcoming_table.columns).index("_is_new")
+
+itables_show(
+    _upcoming_table,
+    paging=True,
+    pageLength=10,
+    classes="display compact",
+    columnDefs=[
+        {"visible": False, "searchable": False, "targets": [_IS_NEW_COL]},
+        {"className": "dt-center", "targets": [0, 4, 5]},
+        {"width": "60px", "targets": [0]},
+        {"width": "90px", "targets": [1]},
+        {"width": "200px", "targets": [2]},
+        {"width": "80px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+    ],
+    createdRow=JavascriptFunction(
+        f"function(row, data, dataIndex) {{"
+        f"  if (data[{_IS_NEW_COL}] === true) {{"
+        f"    row.style.backgroundColor = '#d1fae5';"
+        f"  }}"
+        f"}}"
+    ),
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
+## Older Games to Check Out
+
+Older games that the model predicted for the user during training and evaluation. These were the highest scoring games that the model identified during training that *were not currently* in the user's collection. 
+
+Note: these are technically 'misses' by the model, but in practice they represent games that are consistent with what is in the user's collection and can be thought of as 'games the model thinks they should check out'.
+
+```{python}
+#| label: predictions-older
+#| column: page-right
+older = (
+    pl.concat(
+        [arts.oof_predictions, arts.val_predictions, arts.test_predictions],
+        how="diagonal_relaxed",
+    ).join(data.games, on="game_id", how="inner")
+    # `label` is a boolean (or 0/1) here — true = user owns it. We want
+    # not-owned games for the recommendations list, so cast and negate.
+    .filter(~pl.col("label").cast(pl.Boolean))
+    # Drop the label column so the table doesn't render an "Owned"
+    # column of all-"no" values.
+    .drop("label")
+)
+if "users_rated" in older.columns:
+    older = older.filter(pl.col("users_rated") >= 5)
+older = older.sort("proba", descending=True)
+
+# Same image-rich format and Status column as New and Upcoming.
+# format_predictions_with_images reads `proba` when `predicted_prob`
+# is absent, which is the case here.
+older_table = format_predictions_with_images(
+    older,
+    status_lookup=status_lookup,
+    top_n=200,
+    show_actual=False,
+)
+
+itables_show(
+    older_table,
+    paging=True,
+    pageLength=10,
+    classes="display compact",
+    columnDefs=[
+        {"className": "dt-center", "targets": [0, 4, 5]},
+        {"width": "60px", "targets": [0]},
+        {"width": "90px", "targets": [1]},
+        {"width": "200px", "targets": [2]},
+        {"width": "80px", "targets": [4]},
+        {"width": "100px", "targets": [5]},
+    ],
+    style="width: 100%",
+    allow_html=True,
+)
+```
