@@ -43,6 +43,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--local-root", args.local_root,
     ]
 
+    # split does not accept --candidate (it persists splits for the
+    # whole outcome, not per candidate), so it gets only the common args.
     split_argv = list(common)
     train_argv = common + ["--candidate", args.candidate]
     finalize_argv = common + ["--candidate", args.candidate]
