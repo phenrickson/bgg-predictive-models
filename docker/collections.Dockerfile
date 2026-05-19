@@ -32,6 +32,8 @@ COPY services/scoring/auth.py /app/services/scoring/auth.py
 
 # Shared project source
 COPY src/ /app/src/
+COPY docker/collection-training-entrypoint.sh /app/collection-training-entrypoint.sh
+RUN chmod +x /app/collection-training-entrypoint.sh
 
 # Copy config files
 COPY config/ /app/config/

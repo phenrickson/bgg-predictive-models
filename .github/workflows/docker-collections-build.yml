@@ -8,7 +8,9 @@ on:
     paths:
       - 'services/collections/**'
       - 'services/scoring/auth.py'
+      - 'src/collection/**'
       - 'docker/collections.Dockerfile'
+      - 'docker/collection-training-entrypoint.sh'
       - '.github/workflows/docker-collections-build.yml'
   workflow_dispatch:
 
