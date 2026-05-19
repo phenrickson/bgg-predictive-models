@@ -1,0 +1,75 @@
+name: Train Collection Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'BGG username to train a collection model for'
+        required: true
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+jobs:
+  train:
+    name: Train + register collection model
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        run: |
+          mkdir -p credentials
+          echo '${{ secrets.GCP_SA_KEY_BGG_ML }}' > credentials/service-account-key.json
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set environment name
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Ensure collection-training job exists
+        run: |
+          IMAGE="us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env.outputs.env_name }}"
+          SA="bgg-predictive-models@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com"
+          COMMON="--image $IMAGE \
+            --region us-central1 \
+            --service-account $SA \
+            --command /app/collection-training-entrypoint.sh \
+            --memory 4Gi --cpu 2 --task-timeout 1800 --max-retries 0 \
+            --set-env-vars ENVIRONMENT=${{ steps.env.outputs.env_name }},GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json"
+          gcloud run jobs describe collection-training --region us-central1 >/dev/null 2>&1 \
+            && gcloud run jobs update collection-training $COMMON \
+            || gcloud run jobs create collection-training $COMMON
+
+      - name: Execute training job for user
+        run: |
+          gcloud run jobs execute collection-training \
+            --region us-central1 \
+            --wait \
+            --update-env-vars TRAIN_USERNAME=${{ inputs.username }},TRAIN_OUTCOME=own,TRAIN_CANDIDATE=logistic_row_norm
+
+      - name: Dispatch model report render
+        run: |
+          gh workflow run build-model-reports.yml \
+            -f users=${{ inputs.username }} -f outcome=own \
+            || echo "WARN: report dispatch failed; rerun manually: gh workflow run build-model-reports.yml -f users=${{ inputs.username }} -f outcome=own"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
