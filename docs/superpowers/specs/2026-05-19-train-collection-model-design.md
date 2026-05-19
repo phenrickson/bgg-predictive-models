@@ -46,11 +46,16 @@ Concretely, after running for `Gyges`:
     to GCS + inserts the `raw.collection_models_registry` row. CLI:
     `--username --outcome --candidate --description --version
     --environment --local-root`.
-- **GCS artifact sync is `gsutil rsync`** between
+- **GCS artifact sync is a prefix mirror** between
   `models/collections/<user>/` and
-  `gs://<bucket>/<env>/collections/<user>/`. There is no GCS-native
-  storage class; this is the same pattern the reports pipeline uses
-  (restore bundle → work locally → mirror back) and is proven in CI.
+  `gs://<bucket>/<env>/collections/<user>/` (restore → work locally →
+  mirror back). The reports pipeline does this with `gsutil` *on the
+  GitHub runner*, but this job runs the sync *inside the `collections`
+  image*, which has `google-cloud-storage` but no `gsutil`. So this
+  job uses a Python `google-cloud-storage` prefix sync
+  (`src/collection/gcs_sync.py`: `download_prefix` / `upload_prefix`,
+  unit-tested with a mocked storage client) instead of `gsutil rsync`.
+  Same restore→work→mirror shape, different (in-image) mechanism.
 - **Cloud Run is gcloud-provisioned in workflows.**
   `docker-collections-build.yml` builds the `collections` image and
   `gcloud run deploy bgg-collection-scoring` with: image tag
@@ -152,14 +157,18 @@ gcloud-in-workflow pattern as the scoring service; not terraform).
   `GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json`
   (same convention as the scoring deploy).
 - The job's container command runs a small wrapper that:
-  1. `gsutil -m rsync -r gs://<project>/<env>/collections/<user>/
-     /app/models/collections/<user>/` (pull prior state for the user;
-     tolerate "first run / nothing there")
+  1. `uv run python -m src.collection.gcs_sync download --bucket
+     <project> --prefix <env>/collections/<user> --local-dir
+     /app/models/collections/<user>` (pull prior state for the user;
+     an empty/absent prefix returns 0 = first run, real client errors
+     propagate and abort the job under `set -e`)
   2. `uv run python -m src.collection.train_model --username <user>
      --outcome <outcome> --candidate <candidate> --environment <env>
      --local-root /app/models/collections`
-  3. `gsutil -m rsync -r /app/models/collections/<user>/
-     gs://<project>/<env>/collections/<user>/` (push results)
+  3. `uv run python -m src.collection.gcs_sync up --bucket <project>
+     --prefix <env>/collections/<user> --local-dir
+     /app/models/collections/<user>` (push results; hard-fails on
+     error so a trained model that can't reach GCS aborts the job)
 - Per-execution args (`<user>`, `<outcome>`, `<candidate>`) supplied as
   Cloud Run job execution overrides.
 - `--timeout` and resources sized for training (start from the scoring
