@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -146,7 +147,14 @@ def _render_one(
         return 1
     target = output_dir / rel_out
     target.parent.mkdir(parents=True, exist_ok=True)
-    rendered.replace(target)
+    # shutil.move (not Path.replace/os.rename): in the container the
+    # qmd renders onto the image FS (/app/reports) but output_dir is a
+    # bind-mounted volume — a different device — so rename() raises
+    # EXDEV. shutil.move falls back to copy+unlink across filesystems
+    # and still does a fast rename when same-FS (local runs).
+    if target.exists():
+        target.unlink()
+    shutil.move(str(rendered), str(target))
     return 0
 
 
