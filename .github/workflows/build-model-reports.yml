@@ -92,6 +92,7 @@ jobs:
           docker run --rm \
             -v "$PWD/output:/out" \
             -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
+            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
             -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
             us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
             --report model \
@@ -151,6 +152,7 @@ jobs:
           docker run --rm \
             -v "$PWD/reports/_output:/out" \
             -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
+            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
             -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
             --entrypoint python \
             us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
