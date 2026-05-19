@@ -31,17 +31,14 @@ jobs:
     outputs:
       users: ${{ steps.list.outputs.users }}
       env_name: ${{ steps.env.outputs.env_name }}
-      image_tag: ${{ steps.env.outputs.image_tag }}
     steps:
-      - name: Set environment name + image tag
+      - name: Set environment name
         id: env
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "env_name=prod" >> $GITHUB_OUTPUT
-            echo "image_tag=prod" >> $GITHUB_OUTPUT
           else
             echo "env_name=dev" >> $GITHUB_OUTPUT
-            echo "image_tag=dev" >> $GITHUB_OUTPUT
           fi
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -88,7 +85,7 @@ jobs:
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
       - name: Pull reports image
         run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }}
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
       - name: Render report
         run: |
           mkdir -p output/model
@@ -96,7 +93,7 @@ jobs:
             -v "$PWD/output:/out" \
             -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
             -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }} \
+            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
             --report model \
             --username "${{ matrix.user }}" \
             --outcome "${{ inputs.outcome }}" \
@@ -148,7 +145,7 @@ jobs:
           ls -la reports/_output/ reports/_output/model/
       - name: Pull reports image
         run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }}
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
       - name: Render index page
         run: |
           docker run --rm \
@@ -156,7 +153,7 @@ jobs:
             -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
             -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
             --entrypoint python \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ needs.discover.outputs.image_tag }} \
+            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
             -m reports.build_index \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
             --output-dir /out

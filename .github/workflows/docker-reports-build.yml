@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - develop
     paths:
       - 'reports/**'
       - 'src/reports/**'
@@ -22,7 +21,7 @@ jobs:
   build:
     name: Build and push reports image
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+    environment: PROD
 
     permissions:
       contents: read
@@ -47,38 +46,30 @@ jobs:
 
       - name: Configure Docker
         run: |
-          gcloud auth configure-docker us-central1-docker.pkg.dev
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
           gcloud artifacts repositories create bgg-predictive-models \
             --repository-format=docker --location=us-central1 --quiet || true
 
-      - name: Set Environment Tag
-        id: env-tag
-        run: |
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "env_tag=prod" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
-            echo "env_tag=dev" >> $GITHUB_OUTPUT
-          else
-            echo "env_tag=test" >> $GITHUB_OUTPUT
-          fi
-
-      # Pull the base collections image first so the FROM step in the
-      # Dockerfile resolves quickly and we have it cached for layer reuse.
+      # The reports image is a stateless batch renderer (not a
+      # prod/dev service), so it carries no environment tag — the
+      # dev/prod data split happens at `docker run` time via the
+      # --source gs://.../<env>/collections argument. Build FROM the
+      # always-current collections:prod base; tag :latest (what the
+      # render workflows pull) plus the commit sha (traceability /
+      # rollback).
       - name: Pull base image
         run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env-tag.outputs.env_tag }}
+          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:prod
 
       - name: Build Docker image
         run: |
           docker build -f docker/reports.Dockerfile \
-            --build-arg BASE_IMAGE=us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env-tag.outputs.env_tag }} \
+            --build-arg BASE_IMAGE=us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:prod \
+            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
             -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ github.sha }} \
-            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }} \
-            -t us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
             .
 
       - name: Push Docker image
         run: |
+          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
           docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ github.sha }}
-          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}
-          docker push us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }}
