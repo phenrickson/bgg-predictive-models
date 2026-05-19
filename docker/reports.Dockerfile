@@ -24,7 +24,9 @@ RUN curl -L -o /tmp/quarto.deb \
 # Overlay the current project source fresh from the building commit
 # (mirrors collections.Dockerfile's copy set). Do not rely on the base
 # for these — see the header comment.
-COPY pyproject.toml uv.lock /app/
+# README.md is required: pyproject.toml has `readme = "README.md"`, so
+# `uv sync` (which builds this project) fails without it.
+COPY pyproject.toml uv.lock README.md /app/
 COPY src/ /app/src/
 COPY config/ /app/config/
 COPY config.yaml /app/config.yaml
