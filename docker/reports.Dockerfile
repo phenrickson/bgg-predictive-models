@@ -1,11 +1,11 @@
-# Reports image: layered on top of the collections image, which already
-# carries Python 3.12 + uv + project deps + src/ + config/. We add Quarto
-# and the reports/ tree, then point the entrypoint at the renderer.
-#
-# The base tag uses :prod so this image is always in sync with whatever
-# was last deployed for collections — the small consistency lag (when
-# collections rebuilds first, this image picks up the new base on its
-# next build) is acceptable.
+# Reports image: uses the collections image only for its OS / Python /
+# uv / installed-dependency layers, then overlays the CURRENT project
+# source. We do NOT inherit src/ from the base: docker-collections-build
+# only triggers on services/collections paths, so collections:prod is
+# frozen w.r.t. src/reports/** changes — relying on it for src/ silently
+# ships stale code (caused a `ModuleNotFoundError: No module named
+# 'src.reports'` at render time). This image therefore copies src/,
+# config/, and the dependency lock fresh from the building commit.
 
 ARG BASE_IMAGE=us-central1-docker.pkg.dev/bgg-predictive-models/bgg-predictive-models/collections:prod
 FROM ${BASE_IMAGE}
@@ -21,12 +21,18 @@ RUN curl -L -o /tmp/quarto.deb \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# The reports source. Everything else (src/, config/, pyproject.toml,
-# uv.lock) is already in the base image.
+# Overlay the current project source fresh from the building commit
+# (mirrors collections.Dockerfile's copy set). Do not rely on the base
+# for these — see the header comment.
+COPY pyproject.toml uv.lock /app/
+COPY src/ /app/src/
+COPY config/ /app/config/
+COPY config.yaml /app/config.yaml
 COPY reports/ /app/reports/
 
-# Re-sync deps in case the reports build adds anything not already in
-# the base — uv is incremental, so this is a no-op when nothing changed.
+# Reconcile deps against the (possibly newer) lock copied above. The
+# base image's venv supplies the heavy wheels; this is incremental and
+# a near-no-op when nothing changed.
 RUN uv sync
 
 # QUARTO_PYTHON points the Quarto kernel at the same venv we use for
