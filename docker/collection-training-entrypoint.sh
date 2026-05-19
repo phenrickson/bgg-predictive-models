@@ -13,13 +13,17 @@ TRAIN_CANDIDATE="${TRAIN_CANDIDATE:-logistic_row_norm}"
 
 LOCAL_ROOT="/app/models/collections"
 USER_LOCAL="${LOCAL_ROOT}/${TRAIN_USERNAME}"
+# Bucket name == project id by convention in this project.
 USER_GS="gs://${GCP_PROJECT_ID}/${ENVIRONMENT}/collections/${TRAIN_USERNAME}"
 
 mkdir -p "${USER_LOCAL}"
 
 echo "Pulling ${USER_GS} -> ${USER_LOCAL}"
-gsutil -m rsync -r "${USER_GS}" "${USER_LOCAL}" 2>&1 \
-  || echo "(no prior artifacts for ${TRAIN_USERNAME}; first run)"
+if gsutil -q ls "${USER_GS}/" >/dev/null 2>&1; then
+  gsutil -m rsync -r "${USER_GS}" "${USER_LOCAL}"
+else
+  echo "(no prior artifacts for ${TRAIN_USERNAME}; first run)"
+fi
 
 echo "Running train_model for ${TRAIN_USERNAME}/${TRAIN_OUTCOME}/${TRAIN_CANDIDATE}"
 uv run python -m src.collection.train_model \

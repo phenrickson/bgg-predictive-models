@@ -1,8 +1,10 @@
 from pathlib import Path
 import stat
+import os
+import subprocess
 
 
-SCRIPT = Path("docker/collection-training-entrypoint.sh")
+SCRIPT = Path(__file__).parent.parent / "docker" / "collection-training-entrypoint.sh"
 
 
 def test_entrypoint_exists_and_executable():
@@ -22,3 +24,12 @@ def test_entrypoint_has_required_shape():
     for var in ("TRAIN_USERNAME", "ENVIRONMENT", "GCP_PROJECT_ID"):
         assert var in text
     assert "uv run python -m src.collection.train_model" in text
+
+
+def test_missing_required_var_exits_nonzero():
+    env = {k: v for k, v in os.environ.items() if k != "TRAIN_USERNAME"}
+    result = subprocess.run(
+        ["bash", str(SCRIPT)], env=env, capture_output=True
+    )
+    assert result.returncode != 0
+    assert b"TRAIN_USERNAME" in result.stderr
