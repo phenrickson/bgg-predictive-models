@@ -10,6 +10,12 @@ on:
         description: 'Comma-separated usernames to render (blank = discover all)'
         required: false
         default: ''
+  # Auto-refresh when the reports image is rebuilt (a template / shared
+  # code change). The discover job gates on conclusion == success so a
+  # failed image build never renders against a half-built image.
+  workflow_run:
+    workflows: ["Build Collection Reports Image"]
+    types: [completed]
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -30,6 +36,9 @@ jobs:
   # under gs://<bucket>/<env>/collections/.
   # ---------------------------------------------------------------------------
   discover:
+    # Cron / manual dispatch always proceed. A workflow_run trigger only
+    # proceeds when the upstream image build concluded successfully.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     outputs:

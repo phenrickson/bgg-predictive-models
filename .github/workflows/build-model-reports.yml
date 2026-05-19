@@ -11,6 +11,13 @@ on:
         description: 'Outcome to render the model report for'
         required: false
         default: 'own'
+  # Auto-refresh when the reports image is rebuilt (a template / shared
+  # code change). On this trigger there are no dispatch inputs, so it
+  # renders all users for the default outcome. Promotion still dispatches
+  # this workflow per-user via `just promote` — both triggers coexist.
+  workflow_run:
+    workflows: ["Build Collection Reports Image"]
+    types: [completed]
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -26,6 +33,9 @@ concurrency:
 
 jobs:
   discover:
+    # Manual dispatch always proceeds. A workflow_run trigger only
+    # proceeds when the upstream image build concluded successfully.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     outputs:
@@ -97,7 +107,7 @@ jobs:
             us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
             --report model \
             --username "${{ matrix.user }}" \
-            --outcome "${{ inputs.outcome }}" \
+            --outcome "${{ inputs.outcome || 'own' }}" \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
             --output-dir /out
       - name: Upload rendered HTML
