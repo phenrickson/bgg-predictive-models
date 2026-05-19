@@ -206,11 +206,11 @@ if users_summary:
     )
 ```
 
-## Reports
+<!-- ## Reports
 
 ::: {.column-margin}
 Site-wide reports will appear here.
 :::
 
 _No site-wide reports yet._
-
+ -->

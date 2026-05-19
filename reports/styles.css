@@ -226,3 +226,4 @@ table.topn-by-year tbody tr:hover td:not(.owned) {
 table.topn-by-year tbody tr:hover td.owned {
     background-color: #2196f3 !important;  /* slightly brighter on hover */
 }
+

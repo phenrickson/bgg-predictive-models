@@ -31,6 +31,18 @@ params:
 
 {{< include _setup.qmd >}}
 
+```{python}
+#| output: asis
+#| echo: false
+# Quarto metadata is static YAML by default; emitting a YAML block from
+# an `output: asis` cell makes the title dynamic so it names the user
+# this model is for. Runs before the title block renders.
+print(f'---\ntitle: "{USERNAME}\'s Board Game Collection"\nsubtitle: "Model"\n---')
+```
+
+For the model's picks for new and upcoming games, see the companion
+[Predictions Report](`{python} f"../{USERNAME}.html"`).
+
 # About
 
 This report walks through the classification model trained to predict
@@ -40,7 +52,7 @@ performs on held-out data. The model uses only features observable at
 release and never reads BGG community signals.
 
 For the model's picks for new and upcoming games, see the companion
-**Predictions Report**.
+[Predictions Report](`{python} f"../{USERNAME}.html"`).
 
 {{< include _collection.qmd >}}
 
