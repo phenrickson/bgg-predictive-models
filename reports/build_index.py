@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -79,7 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Quarto reported success but %s is missing", rendered)
         return 1
     target = output_dir / "index.html"
-    rendered.replace(target)
+    # shutil.move (not Path.replace/os.rename): output_dir is a
+    # bind-mounted volume in the container, a different device from the
+    # image FS where Quarto writes — rename() raises EXDEV. Same fix as
+    # reports/render.py.
+    if target.exists():
+        target.unlink()
+    shutil.move(str(rendered), str(target))
     logger.info("Wrote %s", target)
     return 0
 
