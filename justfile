@@ -36,7 +36,7 @@ split user=username outcome="own":
 
 # Train one candidate (named in config.collections.candidates) against
 # the latest canonical splits.
-train user=username outcome="own" candidate="lgbm_default" splits_version="":
+train user=username outcome="own" candidate="logistic_row_norm" splits_version="":
     uv run python -m src.collection.train \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
@@ -77,7 +77,7 @@ compare user=username outcome="own" out="" candidates="":
 # Refit a trained candidate on train+val+test through finalize_through.
 # Defaults to collections.finalize_through from config.yaml; override with
 # finalize_through=2025 if you need a different cutoff.
-finalize user=username outcome="own" candidate="lgbm_default" version="latest" finalize_through="":
+finalize user=username outcome="own" candidate="logistic_row_norm" version="latest" finalize_through="":
     uv run python -m src.collection.finalize \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
@@ -112,7 +112,7 @@ finalize-all user=username outcome="own" finalize_through="":
 # Register a finalized collection model to GCS for the standalone scoring
 # service AND insert a row in the BQ registry. Strict-finalized: requires
 # finalized.pkl (run `finalize` first).
-promote user=username outcome="own" candidate="lgbm_default" version="latest" description="":
+promote user=username outcome="own" candidate="logistic_row_norm" version="latest" description="":
     uv run python -m services.collections.register_model \
         --username {{user}} --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} --version {{version}} \
@@ -122,9 +122,27 @@ promote user=username outcome="own" candidate="lgbm_default" version="latest" de
     gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}} || \
         echo "WARN: model-report dispatch failed (promote still succeeded); rerun manually: gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}}"
 
+# Full pipeline for one user/outcome/candidate:
+# load → split → train → finalize → sync-artifacts → promote.
+# sync-artifacts mirrors the candidate tree (splits, predictions, finalized.pkl)
+# to gs://.../collections/<user>/ so the model-report workflow dispatched by
+# `promote` can render from cloud storage. Stops on first failure.
+#   just ship                       # default user, outcome=own, candidate=logistic_row_norm
+#   just ship rahdo                 # rahdo, defaults for the rest
+#   just ship rahdo own lgbm_default
+ship user=username outcome="own" candidate="logistic_row_norm":
+    #!/usr/bin/env bash
+    set -e
+    just load {{user}}
+    just split {{user}} {{outcome}}
+    just train {{user}} {{outcome}} {{candidate}}
+    just finalize {{user}} {{outcome}} {{candidate}}
+    just sync-artifacts {{user}}
+    just promote {{user}} {{outcome}} {{candidate}}
+
 # Register one candidate across multiple outcomes in one shot.
 #   just promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
-promote-many user=username outcomes="own" candidate="lgbm_default" version="latest" description="":
+promote-many user=username outcomes="own" candidate="logistic_row_norm" version="latest" description="":
     uv run python -m services.collections.register_all \
         --username {{user}} --environment {{environment}} \
         --outcomes "{{outcomes}}" \
