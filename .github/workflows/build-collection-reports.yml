@@ -10,12 +10,6 @@ on:
         description: 'Comma-separated usernames to render (blank = discover all)'
         required: false
         default: ''
-  # Auto-refresh when the reports image is rebuilt (a template / shared
-  # code change). The discover job gates on conclusion == success so a
-  # failed image build never renders against a half-built image.
-  workflow_run:
-    workflows: ["Build Collection Reports Image"]
-    types: [completed]
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -36,9 +30,6 @@ jobs:
   # under gs://<bucket>/<env>/collections/.
   # ---------------------------------------------------------------------------
   discover:
-    # Cron / manual dispatch always proceed. A workflow_run trigger only
-    # proceeds when the upstream image build concluded successfully.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     outputs:
@@ -84,9 +75,9 @@ jobs:
           echo "Resolved users: $users"
 
   # ---------------------------------------------------------------------------
-  # Render one user per matrix runner. Each runner pulls the prebuilt
-  # reports image and invokes the renderer; output HTML is uploaded as
-  # a per-user artifact for the deploy job to collect.
+  # Render one user per matrix runner. Each runner installs uv + Quarto
+  # and invokes the renderer directly; output HTML is uploaded as a
+  # per-user artifact for the deploy job to collect.
   # ---------------------------------------------------------------------------
   render-user:
     needs: discover
@@ -100,6 +91,9 @@ jobs:
         user: ${{ fromJson(needs.discover.outputs.users) }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -108,26 +102,28 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Pull reports image
-        run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.6.42
 
       - name: Render report
         run: |
           mkdir -p output
-          docker run --rm \
-            -v "$PWD/output:/out" \
-            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
-            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
-            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
+          uv run python -m reports.render \
             --report predictions \
             --username "${{ matrix.user }}" \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
-            --output-dir /out
+            --output-dir output
 
       - name: Upload rendered HTML
         uses: actions/upload-artifact@v4
@@ -162,8 +158,19 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.6.42
 
       - name: Make output dir
         run: mkdir -p reports/_output
@@ -190,22 +197,11 @@ jobs:
           fi
           ls -la reports/_output/
 
-      - name: Pull reports image
-        run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
-
       - name: Render index page
         run: |
-          docker run --rm \
-            -v "$PWD/reports/_output:/out" \
-            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
-            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
-            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-            --entrypoint python \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
-            -m reports.build_index \
+          uv run python -m reports.build_index \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
-            --output-dir /out
+            --output-dir reports/_output
 
       # Push the final bundle back to gs:// so the next run can seed
       # from it. This is what makes partial renders safe.

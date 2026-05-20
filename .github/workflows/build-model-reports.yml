@@ -11,13 +11,6 @@ on:
         description: 'Outcome to render the model report for'
         required: false
         default: 'own'
-  # Auto-refresh when the reports image is rebuilt (a template / shared
-  # code change). On this trigger there are no dispatch inputs, so it
-  # renders all users for the default outcome. Promotion still dispatches
-  # this workflow per-user via `just promote` — both triggers coexist.
-  workflow_run:
-    workflows: ["Build Collection Reports Image"]
-    types: [completed]
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -33,9 +26,6 @@ concurrency:
 
 jobs:
   discover:
-    # Manual dispatch always proceeds. A workflow_run trigger only
-    # proceeds when the upstream image build concluded successfully.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
     outputs:
@@ -85,31 +75,34 @@ jobs:
       matrix:
         user: ${{ fromJson(needs.discover.outputs.users) }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-      - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-      - name: Pull reports image
-        run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install dependencies
+        run: uv sync
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.6.42
       - name: Render report
         run: |
           mkdir -p output/model
-          docker run --rm \
-            -v "$PWD/output:/out" \
-            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
-            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
-            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
+          uv run python -m reports.render \
             --report model \
             --username "${{ matrix.user }}" \
             --outcome "${{ inputs.outcome || 'own' }}" \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
-            --output-dir /out
+            --output-dir output
       - name: Upload rendered HTML
         uses: actions/upload-artifact@v4
         with:
@@ -133,8 +126,17 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
-      - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install dependencies
+        run: uv sync
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.6.42
       - name: Make output dir
         run: mkdir -p reports/_output/model
       - name: Restore previously published bundle from GCS
@@ -154,21 +156,11 @@ jobs:
             cp artifacts/*.html reports/_output/model/ 2>/dev/null || true
           fi
           ls -la reports/_output/ reports/_output/model/
-      - name: Pull reports image
-        run: |
-          docker pull us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest
       - name: Render index page
         run: |
-          docker run --rm \
-            -v "$PWD/reports/_output:/out" \
-            -v "$GOOGLE_APPLICATION_CREDENTIALS:/app/credentials/service-account-key.json:ro" \
-            -e GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }} \
-            -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account-key.json \
-            --entrypoint python \
-            us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/reports:latest \
-            -m reports.build_index \
+          uv run python -m reports.build_index \
             --source "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/collections" \
-            --output-dir /out
+            --output-dir reports/_output
       - name: Mirror final bundle to GCS
         run: |
           gsutil -m rsync -r reports/_output/ \
