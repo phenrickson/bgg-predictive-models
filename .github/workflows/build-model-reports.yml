@@ -54,12 +54,12 @@ jobs:
           if [ -n "$requested" ]; then
             users=$(echo "$requested" \
               | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' \
-              | python3 -c "import sys, json; print(json.dumps([u.strip() for u in sys.stdin.read().split() if u.strip()]))")
+              | python3 -c "import sys, json; print(json.dumps([u.strip() for u in sys.stdin.read().splitlines() if u.strip()]))")
           else
             users=$(gsutil ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
               | sed -e 's|/$||' \
               | xargs -n1 basename \
-              | python3 -c "import sys, json; print(json.dumps([u for u in sys.stdin.read().split() if u]))")
+              | python3 -c "import sys, json; print(json.dumps([u for u in sys.stdin.read().splitlines() if u]))")
           fi
           echo "users=$users" >> $GITHUB_OUTPUT
           echo "Resolved users: $users"
