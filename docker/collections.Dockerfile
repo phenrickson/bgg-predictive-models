@@ -19,9 +19,14 @@ RUN apt-get update --allow-releaseinfo-change && \
 # Install UV
 RUN pip install uv
 
-# Copy dependency files first for layer caching
+# Copy dependency files first for layer caching. README.md is required
+# by pyproject.toml's `readme = "README.md"` — hatchling (the build
+# backend, added 2026-05-05) validates the file exists during the
+# editable install in `uv sync` below. Missing → build fails with
+# `OSError: Readme file does not exist: README.md`.
 COPY pyproject.toml .
 COPY uv.lock .
+COPY README.md .
 
 # Collection service source
 COPY services/collections/ /app/services/collections/
