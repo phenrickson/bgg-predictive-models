@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from services.collections.registered_model import RegisteredCollectionModel
+from src.collection.collection_artifact_storage import slugify_username
 from services.collections.registry_writer import RegistryWriter
 from src.utils.config import load_config
 
@@ -41,9 +42,11 @@ def register_collection(
     local_root: str = "models/collections",
 ) -> dict:
     # Local layout matches src/collection/collection_artifact_storage.py:
-    # {local_root}/{username}/{outcome}/{candidate}/v{N}/. The `environment`
-    # arg controls the GCS prefix and registry context, not the local path.
-    cand_root = Path(local_root) / username / outcome / candidate
+    # {local_root}/{slugify(username)}/{outcome}/{candidate}/v{N}/.
+    # The `environment` arg controls the GCS prefix and registry context,
+    # not the local path. Real ``username`` is preserved for the registry
+    # row and GCS upload key (see RegisteredCollectionModel).
+    cand_root = Path(local_root) / slugify_username(username) / outcome / candidate
     if not cand_root.is_dir():
         raise FileNotFoundError(f"Candidate dir not found: {cand_root}")
 

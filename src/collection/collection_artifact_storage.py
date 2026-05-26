@@ -33,6 +33,7 @@ Path layout per user::
 import json
 import logging
 import pickle
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -42,6 +43,24 @@ import polars as pl
 from src.utils.config import load_config
 
 logger = logging.getLogger(__name__)
+
+
+def slugify_username(username: str) -> str:
+    """Turn a BGG username into a filesystem-safe directory name.
+
+    BGG usernames may contain spaces and other characters that are awkward
+    in paths (e.g. ``"Watch It Played"``). Collapse whitespace and other
+    unsafe runs to single underscores. **Case is preserved** — existing
+    collections are stored under their literal (case-sensitive) username,
+    so lowercasing here would orphan them. The original username is still
+    kept verbatim by callers for the API and display; this only affects
+    the on-disk directory.
+
+    For usernames already safe (no spaces/punctuation — the common case),
+    this is the identity function, so existing directories keep resolving.
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", username.strip()).strip("_")
+    return slug or "_unknown"
 
 
 class CollectionArtifactStorage:
@@ -81,6 +100,7 @@ class CollectionArtifactStorage:
                 via ``Config.get_environment_prefix()``.
         """
         self.username = username
+        self.username_slug = slugify_username(username)
 
         if environment is None:
             project_config = load_config()
@@ -88,7 +108,7 @@ class CollectionArtifactStorage:
         self.environment = environment
 
         self.local_root = Path(local_root)
-        self.base_dir: Path = self.local_root / username
+        self.base_dir: Path = self.local_root / self.username_slug
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initialized artifact storage for user '{username}'")

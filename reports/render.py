@@ -68,7 +68,15 @@ def _install_offline_stubs() -> None:
 
 
 def _list_users(source: str) -> list[str]:
-    """Discover users by listing the artifact root."""
+    """Discover users by listing the artifact root.
+
+    Directory names on disk are *slugified* (e.g. ``Watch_It_Played``); the
+    real BGG username may differ (``"Watch It Played"``) and is recorded in
+    each user's ``metadata.json``. Prefer that real username; fall back to
+    the directory name when metadata is missing (older artifacts).
+    """
+    import json
+
     if source == "local":
         source = "models/collections"
     if source.startswith("gs://"):
@@ -76,11 +84,36 @@ def _list_users(source: str) -> list[str]:
 
         fs = fsspec.filesystem("gs")
         prefix = source.rstrip("/").removeprefix("gs://")
-        return [Path(p).name for p in fs.ls(prefix) if fs.isdir(p)]
+        names: list[str] = []
+        for p in fs.ls(prefix):
+            if not fs.isdir(p):
+                continue
+            dir_name = Path(p).name
+            meta_path = f"{p.rstrip('/')}/metadata.json"
+            try:
+                with fs.open(meta_path) as f:
+                    real = json.load(f).get("username")
+                names.append(real or dir_name)
+            except (FileNotFoundError, OSError):
+                names.append(dir_name)
+        return sorted(names)
     root = Path(source)
     if not root.exists():
         return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir())
+    names = []
+    for p in sorted(root.iterdir()):
+        if not p.is_dir():
+            continue
+        meta = p / "metadata.json"
+        if meta.exists():
+            try:
+                real = json.loads(meta.read_text()).get("username")
+                names.append(real or p.name)
+                continue
+            except (json.JSONDecodeError, OSError):
+                pass
+        names.append(p.name)
+    return names
 
 
 def _render_one(

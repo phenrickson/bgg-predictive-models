@@ -26,19 +26,19 @@ default:
 # loaded yet.
 load user=username:
     uv run python -m src.collection.load \
-        --username {{user}} --environment {{environment}}
+        --username "{{user}}" --environment {{environment}}
 
 # Persist canonical train/val/test splits for an outcome.
 split user=username outcome="own":
     uv run python -m src.collection.split \
-        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+        --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}}
 
 # Train one candidate (named in config.collections.candidates) against
 # the latest canonical splits.
 train user=username outcome="own" candidate="logistic_row_norm" splits_version="":
     uv run python -m src.collection.train \
-        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+        --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
         --local-root {{local_root}} \
         $([ -n "{{splits_version}}" ] && echo "--splits-version {{splits_version}}")
@@ -56,7 +56,7 @@ train-all user=username outcome="own":
     for c in $candidates; do
         echo "--- $c ---"
         if ! uv run python -m src.collection.train \
-            --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+            --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
             --candidate "$c" --local-root {{local_root}}; then
             failed+=("$c")
         fi
@@ -69,7 +69,7 @@ train-all user=username outcome="own":
 # Print or write a comparison table for an outcome.
 compare user=username outcome="own" out="" candidates="":
     uv run python -m src.collection.compare \
-        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+        --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
         --local-root {{local_root}} \
         $([ -n "{{out}}" ] && echo "--out {{out}}") \
         $([ -n "{{candidates}}" ] && echo "--candidates {{candidates}}")
@@ -79,7 +79,7 @@ compare user=username outcome="own" out="" candidates="":
 # finalize_through=2025 if you need a different cutoff.
 finalize user=username outcome="own" candidate="logistic_row_norm" version="latest" finalize_through="":
     uv run python -m src.collection.finalize \
-        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+        --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} \
         $([ "{{version}}" != "latest" ] && echo "--version {{version}}") \
         $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}") \
@@ -98,7 +98,7 @@ finalize-all user=username outcome="own" finalize_through="":
     for c in $candidates; do
         echo "--- $c ---"
         if ! uv run python -m src.collection.finalize \
-            --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+            --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
             --candidate "$c" --local-root {{local_root}} \
             $([ -n "{{finalize_through}}" ] && echo "--finalize-through {{finalize_through}}"); then
             failed+=("$c")
@@ -114,13 +114,13 @@ finalize-all user=username outcome="own" finalize_through="":
 # finalized.pkl (run `finalize` first).
 promote user=username outcome="own" candidate="logistic_row_norm" version="latest" description="":
     uv run python -m services.collections.register_model \
-        --username {{user}} --environment {{environment}} --outcome {{outcome}} \
+        --username "{{user}}" --environment {{environment}} --outcome {{outcome}} \
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
         --description "$([ -n "{{description}}" ] && echo "{{description}}" || echo "{{candidate}} for {{user}}/{{outcome}}")"
     @echo "Dispatching model report render for {{user}}/{{outcome}}"
-    gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}} || \
-        echo "WARN: model-report dispatch failed (promote still succeeded); rerun manually: gh workflow run build-model-reports.yml -f users={{user}} -f outcome={{outcome}}"
+    gh workflow run build-model-reports.yml -f users="{{user}}" -f outcome={{outcome}} || \
+        echo "WARN: model-report dispatch failed (promote still succeeded); rerun manually: gh workflow run build-model-reports.yml -f users='{{user}}' -f outcome={{outcome}}"
 
 # Full pipeline for one user/outcome/candidate:
 # load → split → train → finalize → sync-artifacts → promote.
@@ -133,18 +133,18 @@ promote user=username outcome="own" candidate="logistic_row_norm" version="lates
 ship user=username outcome="own" candidate="logistic_row_norm":
     #!/usr/bin/env bash
     set -e
-    just load {{user}}
-    just split {{user}} {{outcome}}
-    just train {{user}} {{outcome}} {{candidate}}
-    just finalize {{user}} {{outcome}} {{candidate}}
-    just sync-artifacts {{user}}
-    just promote {{user}} {{outcome}} {{candidate}}
+    just load "{{user}}"
+    just split "{{user}}" {{outcome}}
+    just train "{{user}}" {{outcome}} {{candidate}}
+    just finalize "{{user}}" {{outcome}} {{candidate}}
+    just sync-artifacts "{{user}}"
+    just promote "{{user}}" {{outcome}} {{candidate}}
 
 # Register one candidate across multiple outcomes in one shot.
 #   just promote-many rahdo "own,ever_owned,rated" lgbm_row_norm
 promote-many user=username outcomes="own" candidate="logistic_row_norm" version="latest" description="":
     uv run python -m services.collections.register_all \
-        --username {{user}} --environment {{environment}} \
+        --username "{{user}}" --environment {{environment}} \
         --outcomes "{{outcomes}}" \
         --candidate {{candidate}} --version {{version}} \
         --local-root {{local_root}} \
@@ -167,14 +167,15 @@ promote-all outcome="own":
     deployed=0; skipped=0; failed=0; \
     while IFS= read -r u; do \
         [ -z "$u" ] && continue; \
-        path="{{local_root}}/$u/{{outcome}}/$cand"; \
+        slug=$(uv run python -c 'import sys; from src.collection.collection_artifact_storage import slugify_username; print(slugify_username(sys.argv[1]))' "$u"); \
+        path="{{local_root}}/$slug/{{outcome}}/$cand"; \
         if ! ls $path/v*/finalized.pkl 2>/dev/null | grep -q .; then \
             echo "skip $u: no finalized.pkl under $path"; \
             skipped=$((skipped + 1)); \
             continue; \
         fi; \
         echo "=== promote $u {{outcome}} $cand ==="; \
-        if just promote $u {{outcome}} $cand; then \
+        if just promote "$u" {{outcome}} $cand; then \
             deployed=$((deployed + 1)); \
         else \
             echo "FAIL: $u"; \
@@ -190,7 +191,7 @@ promote-all outcome="own":
 #   just verify rahdo own
 verify user=username outcome="":
     uv run python -m services.collections.verify_models \
-        --username {{user}} \
+        --username "{{user}}" \
         $([ -n "{{outcome}}" ] && echo "--outcome {{outcome}}")
 
 # End-to-end experiment cycle: split → train all → compare.
@@ -199,11 +200,11 @@ verify user=username outcome="":
 sweep user=username outcome="own":
     #!/usr/bin/env bash
     set -e
-    just split {{user}} {{outcome}}
+    just split "{{user}}" {{outcome}}
     set +e
-    just train-all {{user}} {{outcome}}
+    just train-all "{{user}}" {{outcome}}
     train_status=$?
-    just compare {{user}} {{outcome}}
+    just compare "{{user}}" {{outcome}}
     exit $train_status
 
 # Train all candidates and compare against the most recent existing split.
@@ -212,9 +213,9 @@ sweep user=username outcome="own":
 train-compare user=username outcome="own":
     #!/usr/bin/env bash
     set +e
-    just train-all {{user}} {{outcome}}
+    just train-all "{{user}}" {{outcome}}
     train_status=$?
-    just compare {{user}} {{outcome}}
+    just compare "{{user}}" {{outcome}}
     exit $train_status
 
 # Sweep across a list of users. Skips users who already have at least
@@ -226,13 +227,14 @@ users-sweep users outcome="own":
     shopt -s nullglob
     failed=()
     for u in {{users}}; do
-        candidate_dirs=({{local_root}}/{{environment}}/$u/{{outcome}}/*/v*)
+        slug=$(uv run python -c 'import sys; from src.collection.collection_artifact_storage import slugify_username; print(slugify_username(sys.argv[1]))' "$u")
+        candidate_dirs=({{local_root}}/$slug/{{outcome}}/*/v*)
         if [ ${#candidate_dirs[@]} -gt 0 ]; then
             echo "skip $u (already processed)"
             continue
         fi
         echo "===== $u ====="
-        if ! just sweep $u {{outcome}}; then
+        if ! just sweep "$u" {{outcome}}; then
             failed+=("$u")
         fi
     done
@@ -255,7 +257,7 @@ render user=username outcome="own" report="" candidate="":
     reports="$([ -n "{{report}}" ] && echo "{{report}}" || echo "predictions model")"
     for r in $reports; do
         uv run python -m reports.render --report "$r" \
-            --username {{user}} --outcome {{outcome}} \
+            --username "{{user}}" --outcome {{outcome}} \
             $([ -n "{{candidate}}" ] && echo "--candidate {{candidate}}")
     done
     uv run python -m reports.build_index
@@ -301,8 +303,9 @@ gcs_artifacts_root := "gs://bgg-predictive-models/" + environment + "/collection
 sync-artifacts user=username prune="":
     #!/usr/bin/env bash
     set -e
-    src="{{local_root}}/{{user}}"
-    dst="{{gcs_artifacts_root}}/{{user}}"
+    slug=$(uv run python -c 'import sys; from src.collection.collection_artifact_storage import slugify_username; print(slugify_username(sys.argv[1]))' "{{user}}")
+    src="{{local_root}}/$slug"
+    dst="{{gcs_artifacts_root}}/$slug"
     if [ ! -d "$src" ]; then
         echo "No local artifacts for user '{{user}}' at $src" >&2
         exit 1
@@ -322,7 +325,7 @@ sync-artifacts-all prune="":
     for user_dir in {{local_root}}/*/; do
         u=$(basename "$user_dir")
         echo "===== $u ====="
-        if ! just sync-artifacts "$u" {{prune}}; then
+        if ! just sync-artifacts "$u" "{{prune}}"; then
             failed+=("$u")
         fi
     done
@@ -340,8 +343,9 @@ sync-artifacts-all prune="":
 pull-artifacts user=username prune="":
     #!/usr/bin/env bash
     set -e
-    src="{{gcs_artifacts_root}}/{{user}}"
-    dst="{{local_root}}/{{user}}"
+    slug=$(uv run python -c 'import sys; from src.collection.collection_artifact_storage import slugify_username; print(slugify_username(sys.argv[1]))' "{{user}}")
+    src="{{gcs_artifacts_root}}/$slug"
+    dst="{{local_root}}/$slug"
     mkdir -p "$dst"
     echo "pulling $src -> $dst"
     if [ -n "{{prune}}" ]; then
@@ -363,7 +367,7 @@ pull-artifacts-all prune="":
     fi
     for u in $users; do
         echo "===== $u ====="
-        if ! just pull-artifacts "$u" {{prune}}; then
+        if ! just pull-artifacts "$u" "{{prune}}"; then
             failed+=("$u")
         fi
     done
