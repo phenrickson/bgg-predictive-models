@@ -43,7 +43,7 @@ print(
 ```
 
 For the model's findings and evaluation, see the companion
-[Model Report](`{python} f"model/{USERNAME}.html"`).
+[Model Report](`{python} f"model/{USERNAME_SLUG}.html"`).
 
 # About
 
@@ -54,7 +54,7 @@ match their taste. The model is trained using features observable at
 release (categories, mechanics, designers, publishers, playing time, estimated complexity) in order to predict games *before* the BGG community has weighed in.
 
 For more on the model's findings and evaluation, see the companion
-[Model Report](`{python} f"model/{USERNAME}.html"`).
+[Model Report](`{python} f"model/{USERNAME_SLUG}.html"`).
 
 # Predictions {#predictions}
 

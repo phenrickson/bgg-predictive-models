@@ -28,6 +28,7 @@ import polars as pl
 import pandas as pd
 from itables import show as itables_show
 
+from src.collection.collection_artifact_storage import slugify_username
 from src.reports.collection_data import load
 from src.reports.tables import (
     build_status_lookup,
@@ -49,6 +50,7 @@ from src.collection.viz import (
 # Backwards-compatible aliases for the previously-uppercased names. The
 # rest of the qmd reads USERNAME / OUTCOME / etc.
 USERNAME = username
+USERNAME_SLUG = slugify_username(username)
 OUTCOME = outcome
 SOURCE = source
 CANDIDATE = candidate or None

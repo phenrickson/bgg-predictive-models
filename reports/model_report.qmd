@@ -41,7 +41,7 @@ print(f'---\ntitle: "{USERNAME}\'s Board Game Collection"\nsubtitle: "Model"\n--
 ```
 
 For the model's picks for new and upcoming games, see the companion
-[Predictions Report](`{python} f"../{USERNAME}.html"`).
+[Predictions Report](`{python} f"../{USERNAME_SLUG}.html"`).
 
 # About
 
@@ -52,7 +52,7 @@ performs on held-out data. The model uses only features observable at
 release and never reads BGG community signals.
 
 For the model's picks for new and upcoming games, see the companion
-[Predictions Report](`{python} f"../{USERNAME}.html"`).
+[Predictions Report](`{python} f"../{USERNAME_SLUG}.html"`).
 
 {{< include _collection.qmd >}}
 
