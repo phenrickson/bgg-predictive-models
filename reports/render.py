@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.collection.collection_artifact_storage import slugify_username
+
 # Load .env at import time so envvars (including BGG_REPORTS_OFFLINE,
 # GOOGLE_APPLICATION_CREDENTIALS, etc.) are available to both this
 # driver and the Quarto kernel it spawns.
@@ -46,9 +48,14 @@ _REPORTS = {
 
 
 def _output_rel_path(report: str, username: str) -> Path:
+    # Filenames are always the slug so they're filesystem/URL-safe and
+    # match the slug-named keys in the user grid (which the index.qmd
+    # composes from on-disk dir names). The real username flows through
+    # to the qmd via the `username` Quarto param for display.
+    slug = slugify_username(username)
     if report == "model":
-        return Path("model") / f"{username}.html"
-    return Path(f"{username}.html")
+        return Path("model") / f"{slug}.html"
+    return Path(f"{slug}.html")
 
 
 def _install_offline_stubs() -> None:
@@ -134,7 +141,11 @@ def _render_one(
     # qmd alongside its `_files` support directory — Quarto's bundler
     # gets confused when --output-dir is outside the qmd directory.
     output_dir.mkdir(parents=True, exist_ok=True)
-    rendered_name = f"{username}.html"
+    # Quarto writes the html alongside the qmd with this name; we then
+    # move it into output_dir at rel_out. Both must be slug-named so a
+    # username with spaces (e.g. "Watch It Played") produces a clean
+    # `Watch_It_Played.html` in the bundle.
+    rendered_name = f"{slugify_username(username)}.html"
     rel_out = _output_rel_path(report, username)
     # Quarto params are passed via -P key=value. Booleans are accepted
     # as bare lowercase strings.
