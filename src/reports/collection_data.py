@@ -142,7 +142,9 @@ def select_candidate(
         4. Raise MissingArtifactsError if nothing is finalized.
     """
     root_str = str(root).rstrip("/")
-    user_dir = f"{root_str}/{username}"
+    # The on-disk/GCS directory uses the slugified username; the real
+    # username is still what callers pass in and what we report back.
+    user_dir = f"{root_str}/{slugify_username(username)}"
     user_outcome_dir = f"{user_dir}/{outcome}"
 
     if not _file_exists(user_dir):
@@ -216,13 +218,18 @@ def _read_parquet(uri: str) -> pl.DataFrame:
     return pl.read_parquet(uri)
 
 
+from src.collection.collection_artifact_storage import slugify_username
 from src.collection.viz import extract_finalized_importance
 
 
 def _outcome_root(source: str, username: str, outcome: str) -> str:
-    """Compose the outcome-level URI/path. Trailing slash safe."""
+    """Compose the outcome-level URI/path. Trailing slash safe.
+
+    The dir name on disk is the slugified username; ``username`` here is
+    the real BGG username and is slugified before path composition.
+    """
     base = source.rstrip("/")
-    return f"{base}/{username}/{outcome}"
+    return f"{base}/{slugify_username(username)}/{outcome}"
 
 
 def _candidate_root(

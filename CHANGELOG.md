@@ -2,6 +2,53 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.2] - 2026-05-26
+
+### Fixed
+
+- **Usernames with spaces (e.g. `Watch It Played`) now flow end-to-end.**
+  Previously `just load "Watch It Played"` failed at argparse because
+  `{{user}}` was interpolated unquoted in the justfile, and downstream
+  readers built filesystem paths from the raw username — fragile
+  against any unquoted shell expansion.
+
+### Added
+
+- **`slugify_username()`** in
+  `src/collection/collection_artifact_storage.py`: case-preserving,
+  collapses non-`[A-Za-z0-9._-]` runs to underscores. Identity for the
+  six existing users (`phenrickson`, `GOBBluth89`, `Gyges`,
+  `TomBrewstErr`, `VWValker`, `rahdo`) — so their on-disk and GCS
+  directories continue to resolve unchanged.
+  `CollectionArtifactStorage.base_dir` now uses the slug.
+- **`metadata.json` written automatically** by
+  `CollectionPipeline.run_full_pipeline` after `save_collection`, so
+  the slug → real-username mapping is recoverable from the artifact
+  tree itself.
+- **Backfilled `metadata.json`** for all seven existing user
+  directories.
+
+### Changed
+
+- **`reports/render.py:_list_users`** reads each user's `metadata.json`
+  to return the real BGG username; falls back to the directory name
+  when metadata is missing.
+- **`src/reports/collection_data.py`** (`_load_outcome`,
+  `_outcome_root`) and **`services/collections/register_model.py`**
+  slugify usernames when composing local artifact paths. Identity
+  transform for usernames already filesystem-safe.
+- **`justfile`**: every `{{user}}` interpolation is now quoted, so
+  recipes accept usernames with spaces (`just load "Watch It Played"`,
+  `just ship "Watch It Played"`, etc.). Path-building recipes
+  (`sync-artifacts`, `pull-artifacts`, `promote-all`, `users-sweep`)
+  derive the slug via `slugify_username()` so local + GCS paths agree
+  with the python layer.
+
+No production effect: the scoring Cloud Run service does not import
+`register_model.py`; the daily `build-collection-reports` and
+`run-collection-scoring` workflows resolve all six production users
+through the identity slug.
+
 ## [0.6.1] - 2026-05-07
 
 ### Added

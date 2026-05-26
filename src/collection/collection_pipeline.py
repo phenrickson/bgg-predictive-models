@@ -191,8 +191,11 @@ class CollectionPipeline:
         processed = self._process_collection()
         logger.info(f"Processed collection: {processed.height} rows")
 
-        # Step 2: save the processed snapshot (outcome-agnostic)
+        # Step 2: save the processed snapshot (outcome-agnostic). Also
+        # persist the real username in metadata.json so downstream readers
+        # (reports, user pickers) can recover it from the on-disk slug dir.
         self.storage.save_collection(processed)
+        self.storage.save_user_metadata({"username": self.username})
 
         # Step 3: load the game universe (features for every game).
         universe_df = self._load_game_universe()
