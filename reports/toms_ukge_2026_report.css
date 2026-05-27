@@ -1,0 +1,483 @@
+:root {
+  --ink: #1a1a2e;
+  --paper: #faf6ee;
+  --card: #ffffff;
+  --accent: #c2410c;
+  --accent-soft: #fed7aa;
+  --muted: #6b6b7a;
+  --row-alt: #f5efe2;
+  --row-hover: #fed7aa;
+  --text: #1a1a2e;
+}
+
+body {
+  background: var(--paper);
+  color: var(--text);
+}
+
+h1, h2, h3, h4, .title, .subtitle {
+  font-family: Georgia, "Times New Roman", serif !important;
+  letter-spacing: -0.01em;
+}
+
+h1.title {
+  font-weight: 900;
+  font-size: 2.4rem !important;
+  line-height: 1.1;
+}
+
+.subtitle {
+  font-weight: 400;
+  font-size: 1.05rem !important;
+  opacity: 0.85;
+}
+
+h2 {
+  font-weight: 800;
+  font-size: 1.65rem;
+  margin-top: 2.5rem;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 0.4rem;
+}
+
+h3 {
+  font-weight: 700;
+  font-size: 1.15rem;
+  margin-top: 1.5rem;
+  color: var(--accent);
+}
+
+.quarto-title-block {
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%) !important;
+  color: var(--paper) !important;
+  padding: 2rem 2rem !important;
+  border-radius: 4px !important;
+}
+
+.quarto-title-block h1,
+.quarto-title-block .subtitle,
+.quarto-title-block .date,
+.quarto-title-block .quarto-title-meta-heading,
+.quarto-title-block .quarto-title-meta-contents {
+  color: var(--paper) !important;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+.stat-card {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 2px;
+  padding: 1rem 0.8rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--accent);
+}
+
+.stat-card .num {
+  font-family: Georgia, serif;
+  font-size: 2rem;
+  font-weight: 900;
+  color: var(--accent-soft);
+  line-height: 1;
+}
+
+.stat-card .label {
+  color: var(--paper);
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  opacity: 0.8;
+  margin-top: 0.5rem;
+}
+
+/* Tables */
+table {
+  font-size: 0.92rem;
+  border-collapse: collapse;
+  margin: 1rem 0 !important;
+  background: var(--card);
+  width: 100%;
+}
+
+table thead th,
+table th {
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+  font-family: ui-monospace, monospace !important;
+  font-size: 0.7rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.55rem 0.7rem !important;
+  border: none !important;
+  text-align: left;
+  position: relative;
+}
+
+/* DataTables injects the sort triangles as a background-image at the
+   right edge of each th. Default padding shoves them on top of the next
+   column. Reserve space on the right for the arrow and bind it to this
+   cell's right edge. */
+table thead th.sorting,
+table thead th.sorting_asc,
+table thead th.sorting_desc {
+  padding-right: 1.6rem !important;
+  background-position: right 0.55rem center !important;
+  cursor: pointer;
+}
+
+table tbody tr {
+  background: var(--card) !important;
+}
+
+table tbody tr:nth-child(even) {
+  background: var(--row-alt) !important;
+}
+
+table tbody tr:hover {
+  background: var(--row-hover) !important;
+}
+
+table td {
+  color: var(--text) !important;
+  padding: 0.5rem 0.7rem !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-bottom: none !important;
+  vertical-align: top;
+}
+
+table strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+a {
+  color: var(--accent);
+}
+
+#TOC, .sidebar-navigation {
+  font-family: ui-monospace, monospace !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.03em;
+}
+
+#TOC a {
+  color: var(--text);
+}
+
+/* Card-style list — used by Dark horses, Skip, and Disagreement sections */
+.fight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.fight-row {
+  background: var(--card);
+  border-left: 4px solid var(--accent);
+  padding: 0.7rem 0.9rem;
+  border-radius: 2px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name meta";
+  gap: 0.3rem 1rem;
+  align-items: baseline;
+}
+
+.fight-name {
+  grid-area: name;
+  font-weight: 600;
+  font-size: 1.02rem;
+}
+
+.fight-name a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.fight-name a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.fight-year {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+  margin-left: 0.4rem;
+}
+
+.fight-meta {
+  grid-area: meta;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rank-pill {
+  background: var(--row-alt);
+  color: var(--ink);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.rank-pill strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Top Games table — rank / thumb / score-badge column treatments
+   ────────────────────────────────────────────────────────────────── */
+
+table.top-games-table td {
+  vertical-align: middle;
+}
+
+/* Rank number — big and quiet, no boxed badge */
+.rank-num {
+  font-family: Georgia, serif;
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+/* Cover thumbnail. Fixed footprint so rows don't jitter when an image
+   is missing or slow to load. */
+.col-thumb { width: 110px; }
+
+.thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.thumb-empty {
+  width: 80px;
+  height: 80px;
+  background: var(--row-alt);
+  border-radius: 4px;
+  display: block;
+}
+
+.col-game { font-weight: 600; }
+.col-desc { color: var(--muted); font-size: 0.88rem; line-height: 1.4; }
+
+.col-score { text-align: center; }
+
+/* Tom Score badge — color-graded pill. --t is a 0..1 value the qmd
+   sets inline; we mix from a near-white (low) to the accent (high). */
+.score-badge {
+  --t: 0;
+  display: inline-block;
+  min-width: 3.2rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) calc(var(--t) * 100%), #fff7ed);
+  border: 1px solid color-mix(in srgb, var(--accent) calc(var(--t) * 60%), rgba(0,0,0,0.08));
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+/* When the badge gets dark enough, flip text to paper for contrast. */
+.score-badge[style*="--t:0.7"],
+.score-badge[style*="--t:0.8"],
+.score-badge[style*="--t:0.9"],
+.score-badge[style*="--t:1"] {
+  color: var(--paper);
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Game card list — used by Model agreement / Model disagreement
+   ────────────────────────────────────────────────────────────────── */
+
+/* CSS multi-column flows top-to-bottom, then over to the next column —
+   so a rank-ordered list reads naturally (1..5 down col 1, 6..10 down
+   col 2). column-width + responsive: browser picks the column count
+   based on the viewport. break-inside: avoid keeps each card whole. */
+.game-card-list {
+  column-width: 380px;
+  column-gap: 0.7rem;
+  margin: 1rem 0;
+}
+
+.game-card-list > .game-card {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 0.7rem;
+  /* multi-column needs explicit display so grid layout inside still works */
+  display: grid;
+}
+
+.game-card {
+  background: var(--card);
+  border-radius: 2px;
+  padding: 0.7rem 0.9rem 0.7rem 0;
+  display: grid;
+  grid-template-columns: 36px 80px 1fr;
+  gap: 0.7rem;
+  align-items: center;
+  border-left: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Numbered rank chip replaces the old accent bar. Same visual weight,
+   more information — reader sees the ordering even when cards are laid
+   out as a multi-column grid. */
+.card-rank {
+  font-family: Georgia, serif;
+  font-size: 1.6rem;
+  font-weight: 800;
+  font-style: italic;
+  color: var(--accent);
+  text-align: center;
+  line-height: 1;
+  padding-left: 0.4rem;
+}
+
+/* Card without an explicit rank (none currently, but keep this safe) */
+.game-card:not(:has(.card-rank)) {
+  grid-template-columns: 80px 1fr;
+  padding-left: 0.9rem;
+}
+
+.card-thumb .thumb,
+.card-thumb .thumb-empty {
+  width: 80px;
+  height: 80px;
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: 1.02rem;
+}
+
+.card-title a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.card-title a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.card-desc {
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.card-scores {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.15rem;
+}
+
+/* Each label+badge is a single non-breaking unit so the badge can never
+   wrap onto a line by itself (which looked broken in narrow cards). */
+.score-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.score-label {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  body { font-size: 0.95rem; }
+  h1.title { font-size: 1.8rem !important; }
+  .subtitle { font-size: 0.95rem !important; }
+  h2 { font-size: 1.3rem; margin-top: 2rem; }
+  h3 { font-size: 1.05rem; }
+  .quarto-title-block { padding: 1.5rem 1rem !important; }
+  .stat-card { padding: 0.75rem 0.5rem; }
+  .stat-card .num { font-size: 1.5rem; }
+  .stat-card .label { font-size: 0.55rem; }
+
+  table { font-size: 0.82rem; }
+  table th { font-size: 0.6rem !important; padding: 0.4rem 0.45rem !important; }
+  table td { padding: 0.4rem 0.45rem !important; }
+
+  .fight-row {
+    grid-template-columns: 1fr;
+    grid-template-areas: "name" "meta";
+    padding: 0.65rem 0.75rem;
+  }
+  .fight-meta {
+    justify-content: flex-start;
+  }
+
+  /* Top Games — drop the description column on phones to keep width sane */
+  table.top-games-table th:nth-child(4),
+  table.top-games-table td:nth-child(4) {
+    display: none;
+  }
+
+  .thumb, .thumb-empty,
+  .card-thumb .thumb, .card-thumb .thumb-empty {
+    width: 64px;
+    height: 64px;
+  }
+  .col-thumb { width: 70px; }
+  .rank-num { font-size: 1.15rem; }
+
+  .game-card {
+    grid-template-columns: 28px 64px 1fr;
+    gap: 0.5rem;
+    padding: 0.6rem 0.7rem 0.6rem 0;
+  }
+  .card-rank { font-size: 1.2rem; padding-left: 0.3rem; }
+  .game-card:not(:has(.card-rank)) {
+    grid-template-columns: 64px 1fr;
+    padding-left: 0.7rem;
+  }
+
+  .score-badge {
+    min-width: 2.8rem;
+    font-size: 0.82rem;
+    padding: 0.25rem 0.5rem;
+  }
+}

@@ -1,0 +1,310 @@
+---
+title: "Tom's 2026 UK Games Expo Briefing"
+subtitle: "Or, What Games Tom Is Statistically Most Likely to Own"
+date: today
+format:
+  html:
+    output-file: toms_ukge_2026_report.html
+    theme:
+      light: flatly
+      dark: darkly
+    toc: true
+    toc-location: right
+    toc-depth: 3
+    toc-expand: true
+    code-fold: true
+    code-tools: false
+    embed-resources: true
+    page-layout: full
+    fontsize: 1.05em
+    mainfont: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    monofont: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+    css: toms_ukge_2026_report.css
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{python}
+#| label: load
+from pathlib import Path
+
+import pandas as pd
+import polars as pl
+import openpyxl  # noqa: F401
+
+xlsx = (
+    Path(__file__).resolve().parents[1] / "scratch" / "uk_games_expo_2026_TomBrewstErr_own.xlsx"
+    if "__file__" in globals()
+    else Path("../scratch/uk_games_expo_2026_TomBrewstErr_own.xlsx")
+)
+df = pl.from_pandas(pd.read_excel(xlsx, engine="openpyxl"))
+df = df.with_columns(pl.col("year_published").cast(pl.Int64, strict=False))
+n_games = df.height
+
+# Pre-compute the score range once so all badges across the report
+# share the same color scale.
+SCORE_MIN = float(df["mean_score"].min())
+SCORE_MAX = float(df["mean_score"].max())
+GEEK_MIN = float(df["predicted_geek_rating"].min()) if "predicted_geek_rating" in df.columns else 0.0
+GEEK_MAX = float(df["predicted_geek_rating"].max()) if "predicted_geek_rating" in df.columns else 10.0
+
+
+def bgg_link(game_id, name, year=None):
+    yr_part = f" ({int(year)})" if year is not None and not pd.isna(year) else ""
+    return (
+        f'<a href="https://boardgamegeek.com/boardgame/{int(game_id)}" '
+        f'target="_blank" rel="noopener">{name}{yr_part}</a>'
+    )
+
+
+def truncate(text, max_len=200):
+    if not text or (isinstance(text, float) and pd.isna(text)):
+        return ""
+    text = str(text).replace("&#10;", " ").replace("\n", " ").strip()
+    return text if len(text) <= max_len else text[: max_len - 3].rstrip() + "..."
+
+
+def img_tag(url):
+    if not url or (isinstance(url, float) and pd.isna(url)):
+        return '<div class="thumb-empty"></div>'
+    return f'<img src="{url}" class="thumb" />'
+
+
+def score_badge(score, lo=SCORE_MIN, hi=SCORE_MAX, fmt="{:.3f}"):
+    """Pill whose background blends from soft (lo) to accent (hi)."""
+    s = float(score)
+    rng = max(hi - lo, 1e-9)
+    t = max(0.0, min(1.0, (s - lo) / rng))
+    return f'<span class="score-badge" style="--t:{t:.3f};">{fmt.format(s)}</span>'
+
+
+def card_row(image_url, game_id, name, year, badges, description=None, rank=None):
+    """Unified card used by every Predictions subsection.
+
+    badges: list of (label, html_badge) tuples. The caller picks which
+    scores to surface — LGBM/Logistic for Agreement/Disagreement,
+    Tom Score/Geek Rating for Dark Horses/Skip.
+    rank: optional 1-based position; rendered as a numbered chip on the
+    left of the card.
+    """
+    yr = int(year) if year is not None and not pd.isna(year) else None
+    link = bgg_link(game_id, name, yr)
+    desc_html = (
+        f'<div class="card-desc">{truncate(description)}</div>' if description else ""
+    )
+    badges_html = "".join(
+        f'<span class="score-pair"><span class="score-label">{lbl}</span>{b}</span>'
+        for lbl, b in badges
+    )
+    rank_html = f'<div class="card-rank">{rank}</div>' if rank is not None else ""
+    return (
+        '<div class="game-card">'
+        f'{rank_html}'
+        f'<div class="card-thumb">{img_tag(image_url)}</div>'
+        '<div class="card-body">'
+        f'<div class="card-title">{link}</div>'
+        f'{desc_html}'
+        f'<div class="card-scores">{badges_html}</div>'
+        '</div></div>'
+    )
+```
+
+::: {.stat-row}
+::: {.stat-card}
+<div class="num">`{python} n_games`</div>
+<div class="label">Games scored</div>
+:::
+::: {.stat-card}
+<div class="num">2026</div>
+<div class="label">UK Games Expo</div>
+:::
+:::
+
+Predictions come from two models trained on Tom's collection (LGBM and Logistic). The combined score below is the average of both. Higher = more likely Tom would own it.
+
+## Top Games
+
+Top 25 games most likely (average of both collection models) to fit Tom's collection.
+
+```{python}
+#| label: top25
+from itables import show
+import itables.options as opt
+opt.lengthMenu = [10, 25]
+opt.classes = "compact stripe hover"
+opt.allow_html = True
+
+top = df.head(25).to_pandas()
+top25 = pd.DataFrame({
+    "Rank": [f'<span class="rank-num">{i}</span>' for i in range(1, len(top) + 1)],
+    "Image": [img_tag(u) for u in top.get("thumbnail", [None] * len(top))],
+    "Game": [bgg_link(g, n, y) for g, n, y in zip(top["game_id"], top["name"], top["year_published"])],
+    "Description": [truncate(d) for d in top.get("description", [""] * len(top))],
+    "Tom Score": [score_badge(s) for s in top["mean_score"]],
+})
+show(
+    top25,
+    paging=True,
+    pageLength=10,
+    searching=False,
+    ordering=False,
+    scrollX=False,
+    responsive=True,
+    classes="compact stripe hover top-games-table",
+    columnDefs=[
+        {"targets": 0, "width": "60px", "className": "col-rank"},
+        {"targets": 1, "width": "110px", "className": "col-thumb"},
+        {"targets": 2, "width": "20%", "className": "col-game"},
+        {"targets": 3, "className": "col-desc"},
+        {"targets": 4, "width": "100px", "className": "col-score"},
+    ],
+)
+```
+
+## Predictions
+
+Different views into how Tom's collection models and the BGG-universe models score these games.
+
+### Model agreement
+
+Top 10 games where both collection models agree most strongly. When the two models converge, the signal is stronger.
+
+```{python}
+#| label: agree
+#| output: asis
+m1, m2 = "lgbm_row_norm_v2", "logistic_row_norm_v2"
+ranked = df.with_columns([
+    pl.col(m1).rank(descending=True).alias("rk_lgbm"),
+    pl.col(m2).rank(descending=True).alias("rk_logit"),
+])
+ranked = ranked.with_columns([
+    ((pl.col("rk_lgbm") + pl.col("rk_logit")) / 2).alias("rk_avg"),
+    (pl.col("rk_lgbm") - pl.col("rk_logit")).abs().alias("rk_disagreement"),
+])
+agree = ranked.sort("rk_avg").head(10)
+print('<div class="game-card-list">')
+for i, row in enumerate(agree.to_dicts(), 1):
+    print(card_row(
+        image_url=row.get("thumbnail"),
+        game_id=row["game_id"],
+        name=row["name"],
+        year=row["year_published"],
+        rank=i,
+        badges=[
+            ("LGBM", score_badge(row[m1])),
+            ("Logistic", score_badge(row[m2])),
+        ],
+    ))
+print('</div>')
+```
+
+### Model disagreement
+
+Games in the top half overall where the two models disagree most about how to rank them. The most informative cases to look at — one model thinks they fit Tom's collection, the other doesn't.
+
+```{python}
+#| label: disagree
+#| output: asis
+fights = ranked.filter(pl.col("rk_avg") <= df.height * 0.5).sort("rk_disagreement", descending=True).head(8)
+print('<div class="game-card-list">')
+for i, row in enumerate(fights.to_dicts(), 1):
+    print(card_row(
+        image_url=row.get("thumbnail"),
+        game_id=row["game_id"],
+        name=row["name"],
+        year=row["year_published"],
+        rank=i,
+        badges=[
+            ("LGBM", score_badge(row[m1])),
+            ("Logistic", score_badge(row[m2])),
+        ],
+    ))
+print('</div>')
+```
+
+### Dark horses
+
+Games Tom's collection model rates highly but the BGG-universe model expects to be poorly-received. Predicted as a fit for Tom even though the wider BGG audience isn't expected to rate them well.
+
+```{python}
+#| label: darkhorses
+#| output: asis
+score_col = "mean_score"
+scored = df.with_columns([
+    ((pl.col(score_col).rank() / df.height) - (pl.col("predicted_geek_rating").rank() / df.height)).alias("delta")
+]).sort("delta", descending=True).head(8)
+print('<div class="game-card-list">')
+for i, row in enumerate(scored.to_dicts(), 1):
+    s = row.get(score_col) or 0
+    g = row.get("predicted_geek_rating") or 0
+    print(card_row(
+        image_url=row.get("thumbnail"),
+        game_id=row["game_id"],
+        name=row["name"],
+        year=row["year_published"],
+        rank=i,
+        badges=[
+            ("Tom Score", score_badge(s)),
+            ("Geek Rating", score_badge(g, lo=GEEK_MIN, hi=GEEK_MAX, fmt="{:.2f}")),
+        ],
+    ))
+print('</div>')
+```
+
+### Skip
+
+Games the BGG-universe model expects to be well-received but Tom's collection model rates low. Likely hits with the wider audience that aren't predicted to fit Tom's collection.
+
+```{python}
+#| label: skip
+#| output: asis
+skipped = df.with_columns([
+    ((pl.col("predicted_geek_rating").rank() / df.height) - (pl.col(score_col).rank() / df.height)).alias("delta")
+]).sort("delta", descending=True).head(8)
+print('<div class="game-card-list">')
+for i, row in enumerate(skipped.to_dicts(), 1):
+    s = row.get(score_col) or 0
+    g = row.get("predicted_geek_rating") or 0
+    print(card_row(
+        image_url=row.get("thumbnail"),
+        game_id=row["game_id"],
+        name=row["name"],
+        year=row["year_published"],
+        rank=i,
+        badges=[
+            ("Tom Score", score_badge(s)),
+            ("Geek Rating", score_badge(g, lo=GEEK_MIN, hi=GEEK_MAX, fmt="{:.2f}")),
+        ],
+    ))
+print('</div>')
+```
+
+## All Games
+
+Every scored game. **Tom: LGBM / Logistic** are P(Tom would own) from each collection model. **Predicted: Avg rating / Complexity / Geek rating** are from the production BGG-universe models — what the wider BGG audience is expected to say about each game.
+
+```{python}
+#| label: table
+opt.lengthMenu = [10, 25, 50, 100]
+opt.classes = "compact stripe hover"
+opt.allow_html = True
+
+full = df.to_pandas().copy()
+full["Game"] = [bgg_link(g, n) for g, n in zip(full["game_id"], full["name"])]
+full = full.rename(columns={
+    "year_published": "Year",
+    "lgbm_row_norm_v2": "Tom: LGBM",
+    "logistic_row_norm_v2": "Tom: Logistic",
+    "predicted_rating": "Predicted: Avg rating",
+    "predicted_complexity": "Predicted: Complexity",
+    "predicted_geek_rating": "Predicted: Geek rating",
+})
+full = full[[
+    "Game", "Year",
+    "Tom: LGBM", "Tom: Logistic",
+    "Predicted: Avg rating", "Predicted: Complexity", "Predicted: Geek rating",
+]]
+show(full, paging=True, searching=True, scrollX=True, responsive=True)
+```

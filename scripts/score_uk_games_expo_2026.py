@@ -220,7 +220,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         score_cols[col_name] = scores
         print(f"  {col_name}: min={scores.min():.4f} max={scores.max():.4f} mean={scores.mean():.4f}")
 
-    scored = universe.select(["game_id", "name", "year_published"]).with_columns(
+    meta_cols = ["game_id", "name", "year_published"]
+    for c in ("image", "thumbnail", "description"):
+        if c in universe.columns:
+            meta_cols.append(c)
+    scored = universe.select(meta_cols).with_columns(
         [s.alias(name) for name, s in score_cols.items()]
     )
     if scored["year_published"].dtype != pl.Int64:

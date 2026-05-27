@@ -101,3 +101,6 @@ terraform-admin-key.json.githooks/sync.log
 reports/_output/
 reports/.quarto/
 reports/*.quarto_ipynb
+# Rendered toms_ukge HTML; the published copy lives in docs/.
+reports/toms_ukge_2026_report.html
+reports/toms_ukge_2026_report_files/
