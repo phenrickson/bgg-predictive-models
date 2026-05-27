@@ -1,0 +1,92 @@
+name: Publish Static Reports
+
+# Publishes any pre-rendered HTML in `reports/static/` to GitHub Pages.
+#
+# Pages serves whatever artifact was most recently deployed by *any* of
+# this repo's publishing workflows. To avoid clobbering files published
+# by build-collection-reports / build-model-reports, this workflow uses
+# the same rsync-from-GCS / rsync-back-to-GCS pattern: GCS is the
+# source of truth for the published bundle; the workflow merges our
+# static files in and republishes the full bundle.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'reports/static/**'
+      - '.github/workflows/publish-static-reports.yml'
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: bgg-predictive-models
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Same group as the other publishing workflows so Pages deploys never
+# race. concurrent runs queue rather than collide.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'PROD' || 'DEV' }}
+
+    steps:
+      - name: Resolve env name
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env_name=prod" >> $GITHUB_OUTPUT
+          else
+            echo "env_name=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_BGG_ML }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Stage current published bundle from GCS
+        run: |
+          mkdir -p reports/_output
+          gsutil -m rsync -r \
+            "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/reports/" \
+            reports/_output/ 2>&1 || echo "(no prior bundle in gs://; first run)"
+
+      - name: Copy static reports into bundle
+        run: |
+          if compgen -G "reports/static/*" > /dev/null; then
+            cp -r reports/static/. reports/_output/
+            echo "Copied static files:"
+            ls -la reports/static/
+          else
+            echo "No files in reports/static/ — nothing to do."
+            exit 0
+          fi
+
+      - name: Mirror updated bundle back to GCS
+        run: |
+          gsutil -m rsync -r reports/_output/ \
+            "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/reports/"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/_output
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
