@@ -337,10 +337,29 @@ def empty_offline_frame(kind: str) -> "pl.DataFrame":
 
 
 def _fetch_collection_snapshot(username: str) -> pl.DataFrame:
-    """Latest BGG collection snapshot for the user."""
-    storage = CollectionStorage(environment="dev")
-    df = storage.get_latest_collection(username)
-    return df if df is not None else pl.DataFrame()
+    """Latest BGG collection snapshot for the user.
+
+    Same slug-vs-real-username concern as `_fetch_upcoming_predictions`:
+    the report is typically invoked with the slugified GCS folder name
+    (``Watch_It_Played``) while the BQ table stores the real BGG name
+    (``Watch It Played``). Match on the slugified form of the stored
+    username so both resolve to the same user.
+    """
+    bq_config = load_config().get_bigquery_config()
+    fq_table = (
+        f"{load_config().ml_project_id}.{bq_config.collections_dataset}.user_collections"
+    )
+    username_slug = slugify_username(username)
+    sql = f"""
+    SELECT *
+    FROM `{fq_table}`
+    WHERE REGEXP_REPLACE(TRIM(username), r'[^A-Za-z0-9._-]+', '_') = {username_slug!r}
+      AND removed_at IS NULL
+    """
+    pdf = _bq_client().query(sql).to_dataframe()
+    if len(pdf) == 0:
+        return pl.DataFrame()
+    return pl.from_pandas(pdf)
 
 
 def _fetch_games_metadata() -> pl.DataFrame:
@@ -358,6 +377,12 @@ def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
     score per (game_id) — the table is append-only.
     """
     table = load_config().get_collection_landing_table()
+    # The report's `username` is whatever the renderer was invoked with —
+    # typically the slugified GCS folder name (e.g. ``Watch_It_Played``).
+    # The landing table stores the real BGG username from the registry
+    # (e.g. ``Watch It Played``). Match on the slugified form of the
+    # stored username so both spellings resolve to the same user.
+    username_slug = slugify_username(username)
     # `is_new_7d` mirrors bgg-dash-viewer's NEW signal: a game is "new"
     # if its first appearance in this user's collection predictions was
     # within the last 7 days. The landing table is append-only, so
@@ -374,7 +399,8 @@ def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:
             MIN(score_ts) OVER (PARTITION BY game_id) AS first_score_ts,
             ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) AS rn
         FROM `{table}`
-        WHERE username = {username!r} AND outcome = {outcome!r}
+        WHERE REGEXP_REPLACE(TRIM(username), r'[^A-Za-z0-9._-]+', '_') = {username_slug!r}
+          AND outcome = {outcome!r}
     )
     SELECT
         game_id,
