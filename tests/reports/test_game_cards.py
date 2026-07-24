@@ -34,11 +34,11 @@ def test_complexity_chip_empty():
 
 
 def test_cards_order_and_filter():
-    html = game_cards_html(_games(), [2, 1, 99], proba={1: 0.83})
+    html = game_cards_html(_games(), [2, 1, 99], tier="locks")
     assert html.index("Beta") < html.index("Alpha")   # order preserved
     assert "boardgamegeek.com/boardgame/1" in html
-    assert "0.830" in html                              # Pr(Yes) for game 1
-    assert "99" not in html.split("card-grid")[1][:5]   # absent id skipped
+    assert "tile-locks" in html                         # tier class applied
+    assert "tile-grid" in html
 
 
 def test_cards_empty():

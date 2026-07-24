@@ -1,14 +1,79 @@
 name: rocky_bilbao_2026
 username: phenrickson
 criteria:
-  players: [5]
-  note: sample fixture — replace via the Selections app
+  recommended_at: 5
+  supports: any
+  complexity:
+  - 1.0
+  - 5.0
+  max_playtime: null
 games:
-  447305: {selection: lock, status: "yes"}
-  139976: {selection: lock, status: "yes"}
-  102794: {selection: lock, status: "yes"}
-  432527: {selection: maybe, status: "yes"}
-  446497: {selection: maybe, status: "no"}
-  338960: {selection: maybe, status: "no"}
-  387866: {selection: "no", status: "no"}
-  381248: {selection: "no", status: "no"}
+  12:
+    selection: maybe
+    status: 'no'
+  118:
+    selection: maybe
+    status: 'yes'
+  11971:
+    selection: lock
+    status: 'yes'
+  98778:
+    selection: maybe
+    status: 'no'
+  124361:
+    selection: maybe
+    status: 'no'
+  167355:
+    selection: maybe
+    status: 'no'
+  181279:
+    selection: maybe
+    status: 'no'
+  223770:
+    selection: lock
+    status: 'yes'
+  228372:
+    selection: lock
+    status: 'yes'
+  286749:
+    selection: lock
+    status: 'yes'
+  296345:
+    selection: lock
+    status: 'yes'
+  340466:
+    selection: maybe
+    status: 'yes'
+  350689:
+    selection: maybe
+    status: 'no'
+  370444:
+    selection: lock
+    status: 'yes'
+  375769:
+    selection: maybe
+    status: 'no'
+  411033:
+    selection: lock
+    status: 'yes'
+  411567:
+    selection: lock
+    status: 'yes'
+  427866:
+    selection: lock
+    status: 'yes'
+  432527:
+    selection: lock
+    status: 'yes'
+  436217:
+    selection: maybe
+    status: 'no'
+  446497:
+    selection: maybe
+    status: 'no'
+  447305:
+    selection: lock
+    status: 'yes'
+  453740:
+    selection: lock
+    status: 'yes'

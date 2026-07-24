@@ -41,6 +41,38 @@ def complexity_chip(weight) -> str:
     )
 
 
+# Community-convention complexity tiers (no official BGG standard; these
+# cutoffs are a chosen mapping for readability).
+_WEIGHT_TIERS = [
+    (1.9, "Light"),
+    (2.4, "Light-Medium"),
+    (3.0, "Medium"),
+    (3.9, "Medium-Heavy"),
+    (5.0, "Heavy"),
+]
+
+
+def complexity_label(weight) -> str:
+    if weight is None or (isinstance(weight, float) and pd.isna(weight)) or weight == 0:
+        return ""
+    w = float(weight)
+    for hi, label in _WEIGHT_TIERS:
+        if w <= hi:
+            return label
+    return "Heavy"
+
+
+def complexity_chip_labeled(weight) -> str:
+    """Heat chip showing the tier label instead of the number."""
+    label = complexity_label(weight)
+    if not label:
+        return '<span class="badge-none">—</span>'
+    base = complexity_chip(weight)  # carries the --wc/--wi gradient vars
+    # swap the numeric text for the label, keep the styling span
+    import re
+    return re.sub(r">[\d.]+<", f">{label}<", base)
+
+
 def _counts(raw) -> list[int]:
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
         return []
@@ -108,37 +140,51 @@ def _truncate(text, n=240) -> str:
     return html.escape(t)
 
 
-def game_cards_html(games: pl.DataFrame, game_ids: list[int], proba: dict | None = None) -> str:
-    """Card grid for `game_ids`, in order, skipping ids absent from `games`.
+def _name_year(gid, name, year) -> str:
+    yr = ""
+    if year is not None and not (isinstance(year, float) and pd.isna(year)):
+        yr = f'<span class="tile-year">{int(year)}</span>'
+    return f'{html.escape(str(name or f"Game {gid}"))}{yr}'
 
-    `proba` maps game_id -> float for the Pr(Yes) badge (optional).
+
+def game_cards_html(games: pl.DataFrame, game_ids: list[int], tier: str = "") -> str:
+    """Cover-forward tile grid for the Spain menu report.
+
+    Each tile is a link to the game's BGG page (new tab): cover image, name +
+    year, a meta strip (recommended-player badges · complexity tier · playtime),
+    and a truncated description. `tier` (locks/maybes/others) adds a class so
+    the stylesheet can weight the sections differently. Order preserved;
+    ids absent from `games` are skipped.
     """
     if not game_ids or games is None or games.height == 0:
         return ""
-    proba = proba or {}
     by_id = {int(r["game_id"]): r for r in games.iter_rows(named=True)}
+    tier_cls = f" tile-{tier}" if tier else ""
     cards = []
     for gid in game_ids:
         row = by_id.get(int(gid))
         if row is None:
             continue
-        title = _bgg_link(gid, row.get("name") or row.get("game_name"), row.get("year_published"))
-        badges = player_badges(row.get("best_player_counts"), row.get("recommended_player_counts"))
-        pr = proba.get(int(gid))
-        pr_html = f'<span class="card-meta-val">{float(pr):.3f}</span>' if pr is not None else ""
+        img = row.get("image") or row.get("thumbnail")
+        img_html = (
+            f'<img src="{html.escape(str(img))}" loading="lazy" alt=""/>'
+            if img and not (isinstance(img, float) and pd.isna(img))
+            else ""
+        )
         cards.append(
-            '<div class="game-card">'
-            + _img(row.get("image") or row.get("thumbnail"))
-            + '<div class="card-body">'
-            + f'<div class="card-title">{title}</div>'
-            + f'<div class="card-desc">{_truncate(row.get("description"))}</div>'
-            + '<div class="card-meta">'
-            + f'<span class="card-meta-item"><span class="card-meta-label">Players</span>{badges}</span>'
-            + f'<span class="card-meta-item"><span class="card-meta-label">Complexity</span>{complexity_chip(row.get("average_weight"))}</span>'
-            + f'<span class="card-meta-item"><span class="card-meta-label">Playtime</span>{_playtime(row)}</span>'
-            + (f'<span class="card-meta-item"><span class="card-meta-label">Pr(Yes)</span>{pr_html}</span>' if pr_html else "")
-            + "</div></div></div>"
+            f'<a class="tile{tier_cls}" '
+            f'href="https://boardgamegeek.com/boardgame/{int(gid)}" '
+            f'target="_blank" rel="noopener">'
+            f'<div class="tile-cover">{img_html}</div>'
+            f'<div class="tile-body">'
+            f'<div class="tile-name">{_name_year(gid, row.get("name") or row.get("game_name"), row.get("year_published"))}</div>'
+            f'<div class="tile-desc">{_truncate(row.get("description"), 160)}</div>'
+            f'<div class="tile-meta">'
+            f'<span class="tile-meta-item"><span class="tile-meta-k">Players</span>{player_badges(row.get("best_player_counts"), row.get("recommended_player_counts"))}</span>'
+            f'<span class="tile-meta-item"><span class="tile-meta-k">Complexity</span>{complexity_chip_labeled(row.get("average_weight"))}</span>'
+            f'<span class="tile-meta-item"><span class="tile-meta-k">Playtime</span><span class="tile-time">{_playtime(row)}</span></span>'
+            f'</div></div></a>'
         )
     if not cards:
         return ""
-    return '<div class="card-grid">' + "".join(cards) + "</div>"
+    return '<div class="tile-grid">' + "".join(cards) + "</div>"

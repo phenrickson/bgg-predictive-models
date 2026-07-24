@@ -5,16 +5,11 @@ date: today
 format:
   html:
     output-file: rocky_bilbao_2026_menu_report.html
-    toc: true
-    toc-location: right
-    toc-depth: 2
+    toc: false
     embed-resources: true
     page-layout: full
-    theme:
-      - cosmo
-      - theme.scss
-    css: styles.css
-    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
+    theme: flatly
+    css: rocky_bilbao_2026.css
 execute:
   echo: false
   warning: false
@@ -59,7 +54,7 @@ from itables import show as itables_show
 
 from src.reports.collection_data import _fetch_collection_snapshot, _fetch_games_metadata
 from src.reports.selections import load_selections
-from src.reports.tables import format_selection_table
+from src.reports.game_cards import game_cards_html
 
 USERNAME = "phenrickson"
 SEL_PATH = "selections/rocky_bilbao_2026.yaml"
@@ -80,21 +75,28 @@ sel = load_selections(Path(selections))
 collection = _fetch_collection_snapshot(sel.username or USERNAME)
 games = _fetch_games_metadata()
 
-def section_table(ids):
-    itables_show(
-        format_selection_table(games, ids),
-        paging=True,
-        pageLength=10,
-        classes="display compact",
-        columnDefs=[{"className": "dt-center", "targets": [3, 4, 5]}],
-        style="width: 100%",
-        allow_html=True,
-    )
+def cards(ids, tier):
+    return game_cards_html(games, ids, tier=tier)
 ```
 
 # About
 
 This document lists the board games Phil is proposing to bring to Spain.
+
+```{python}
+#| output: asis
+_kpis = [
+    ("On the menu", len(sel.menu())),
+    ("Locks", len(sel.locks())),
+    ("Maybes", len(sel.maybes())),
+]
+_cards = "".join(
+    f'<div class="kpi"><div class="kpi-num">{v}</div>'
+    f'<div class="kpi-label">{k}</div></div>'
+    for k, v in _kpis
+)
+print(f'<div class="kpi-row">{_cards}</div>')
+```
 
 ```{python}
 #| output: asis
@@ -110,8 +112,8 @@ print("\n".join(lines) if crit else "_No criteria recorded._")
 Games I am 100% bringing — you will have to fight me otherwise.
 
 ```{python}
-#| label: locks-table
-section_table(sel.locks())
+#| output: asis
+print(cards(sel.locks(), "locks") or "_No locks selected._")
 ```
 
 # The "Maybes"
@@ -119,8 +121,8 @@ section_table(sel.locks())
 Games under consideration — can't bring 'em all.
 
 ```{python}
-#| label: maybes-table
-section_table(sel.maybes())
+#| output: asis
+print(cards(sel.maybes(), "maybes") or "_No maybes selected._")
 ```
 
 # The "Others"
@@ -128,8 +130,8 @@ section_table(sel.maybes())
 Other games that fit the criteria but aren't currently being considered.
 
 ```{python}
-#| label: others-table
-section_table(sel.others())
+#| output: asis
+print(cards(sel.others(), "others") or "_No other games._")
 ```
 
 # The Menu

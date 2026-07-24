@@ -1,0 +1,176 @@
+/* Rocky Bilbao 2026 — a warm, sun-baked Iberian identity for the trip menu.
+   Deliberately its own visual world (single light theme), not the dark
+   collection-report look. */
+
+:root {
+  --ground:   #fbf6ec;  /* warm paper */
+  --surface:  #fffdf8;  /* card face */
+  --ink:      #2a1e14;  /* deep espresso, not black */
+  --ink-soft: #6f5f4e;  /* warm muted */
+  --line:     #e6dcc8;  /* hairline on paper */
+  --sol:      #e2571f;  /* sun-baked orange — the accent, used sparingly */
+  --rioja:    #8c2f2a;  /* deep red — locks */
+  --olive:    #6b7238;  /* muted olive — maybes */
+  --sky:      #3b6b7a;  /* dusty teal — others */
+}
+
+body {
+  background:
+    radial-gradient(circle at 12% -10%, #fdeede 0%, transparent 42%),
+    radial-gradient(circle at 92% 0%, #f3ecd8 0%, transparent 38%),
+    var(--ground);
+  color: var(--ink);
+  font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 1.55;
+}
+
+/* Widen the content well past Quarto's default narrow column, but keep a
+   comfortable max width and side gutters so it doesn't sprawl edge-to-edge. */
+#quarto-content, main.content, .page-columns, #quarto-document-content {
+  max-width: 1180px !important;
+  margin-inline: auto !important;
+  padding-inline: 2rem !important;
+}
+main.content { width: 100% !important; }
+/* No sidebar/TOC column — reclaim the full width for content. */
+#quarto-margin-sidebar, .margin-sidebar, #TOC { display: none !important; }
+
+.quarto-title-block .quarto-title .title,
+h1.title { font-size: 3rem !important; line-height: 1.02; letter-spacing: -0.02em; }
+h1, h2, h3, .title, .subtitle {
+  font-family: "Georgia", "Iowan Old Style", "Palatino", serif !important;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.subtitle { color: var(--ink-soft); font-style: italic; font-weight: 400; }
+
+/* Section headers get a warm rule + a small sun mark */
+h1 {
+  font-weight: 800;
+  margin-top: 2.6rem;
+  padding-bottom: .35rem;
+  border-bottom: 2px solid var(--line);
+  display: flex; align-items: baseline; gap: .6rem;
+}
+h1::before {
+  content: "";
+  width: .55rem; height: .55rem; border-radius: 50%;
+  background: var(--sol);
+  flex: 0 0 auto;
+  transform: translateY(-.15em);
+}
+
+p { max-width: 68ch; }
+a { color: var(--rioja); }
+
+/* Constraint list in the intro reads like a packing list */
+#about ul, .about ul { list-style: none; padding-left: 0; }
+#about li, .about li { padding-left: 1.4rem; position: relative; }
+#about li::before { content: "✦"; position: absolute; left: 0; color: var(--sol); }
+
+/* ---- KPI stat row ---- */
+.kpi-row {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  margin: 1.25rem 0 1.75rem;
+}
+.kpi {
+  flex: 1 1 140px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--sol);
+  border-radius: .6rem;
+  padding: 1rem 1.15rem;
+}
+.kpi-num {
+  font-family: "Georgia", serif;
+  font-size: 2.4rem; font-weight: 800; line-height: 1;
+  color: var(--rioja);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-label {
+  margin-top: .35rem;
+  font-size: .72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-soft);
+}
+
+/* ---- Tile grid ---- */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 2.25rem;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  overflow: hidden;
+  text-decoration: none !important;
+  color: var(--ink) !important;
+  box-shadow: 0 1px 2px rgba(42,30,20,.05);
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+.tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(42,30,20,.14);
+  border-color: var(--sol);
+}
+
+.tile-cover {
+  aspect-ratio: 16 / 7;
+  background: #efe7d6;
+  overflow: hidden;
+}
+.tile-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.tile-body { padding: .65rem .8rem .75rem; display: flex; flex-direction: column; gap: .4rem; flex: 1; }
+.tile-name {
+  font-family: "Georgia", serif;
+  font-weight: 700; font-size: 1.02rem; line-height: 1.2;
+}
+.tile-year { color: var(--ink-soft); font-weight: 400; margin-left: .35rem; font-size: .85em; }
+.tile-desc { font-size: .8rem; color: var(--ink-soft); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.tile-meta { margin-top: auto; display: flex; flex-direction: column; gap: .3rem; padding-top: .45rem; border-top: 1px solid var(--line); }
+.tile-meta-item { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.tile-meta-k {
+  font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-soft); min-width: 5.2rem;
+}
+.tile-time { font-variant-numeric: tabular-nums; font-size: .84rem; }
+
+/* Player-count badges (reused component, restyled for paper) */
+.pc-badge { display:inline-block; min-width:1.4rem; text-align:center; font-size:.76rem;
+  line-height:1.4rem; height:1.4rem; padding:0 .32rem; margin:0 .1rem 0 0; border-radius:.35rem; }
+.pc-best { background:var(--rioja); color:#fff; border:1px solid var(--rioja); font-weight:700; }
+.pc-rec  { background:transparent; color:var(--ink-soft); border:1px solid var(--line); }
+.badge-none { color: var(--ink-soft); opacity:.6; }
+
+/* Complexity tier chip: gradient carried via --wc from Python, dark ink for
+   the pale middle, light for the saturated ends (set via --wi). */
+.weight-badge { display:inline-block; padding:.15rem .5rem; border-radius:.35rem;
+  font-size:.76rem; font-weight:700; color:var(--wi,#fff); background:var(--wc,var(--sol)); }
+
+/* Tier weighting: locks are the headline, others recede. */
+.tile-locks  { border-left: 4px solid var(--rioja); }
+.tile-maybes { border-left: 4px solid var(--olive); }
+.tile-others { opacity: .9; }
+.tile-others .tile-cover { filter: saturate(.9); }
+
+/* ---- The Menu table (kept static; warmed to match) ---- */
+table.dataTable { font-size: .88rem; }
+.dataTables_wrapper { margin-top: .5rem; }
+table.dataTable thead th {
+  background: var(--ink) !important; color: var(--ground) !important;
+  font-family: "Georgia", serif; text-transform: uppercase; letter-spacing: .04em; font-size: .72rem;
+}
+table.dataTable tbody tr:hover td { background: #f6efdd !important; }
+table.dataTable a { color: var(--rioja); text-decoration: none; }
+table.dataTable a:hover { text-decoration: underline; }
+
+/* TOC + chrome warmed */
+#TOC, .sidebar { color: var(--ink-soft); }

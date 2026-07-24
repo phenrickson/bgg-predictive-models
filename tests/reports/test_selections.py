@@ -10,7 +10,7 @@ games:
   1: {selection: lock, status: yes}
   2: {selection: maybe, status: yes}
   3: {selection: maybe, status: no}
-  4: {selection: no, status: no}
+  4: {selection: other, status: no}
 """
 
 

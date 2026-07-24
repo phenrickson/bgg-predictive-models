@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-_SELECTIONS = {"lock", "maybe", "no"}
+_SELECTIONS = {"lock", "maybe", "other", "no"}
 _STATUSES = {"yes", "no"}
 
 
@@ -48,8 +48,8 @@ class Selections:
         return self._ids_where(selection="maybe")
 
     def others(self) -> list[int]:
-        """Games present in the file but neither lock nor maybe."""
-        return self._ids_where(selection="no")
+        """Games explicitly tagged 'other' (not lock/maybe, but still shown)."""
+        return self._ids_where(selection="other")
 
     def menu(self) -> list[int]:
         """The final list: everything marked status: yes."""
