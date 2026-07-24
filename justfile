@@ -306,8 +306,7 @@ render-menu name="rocky_bilbao_2026":
     cd reports
     BGG_PROJECT_ROOT="$(cd .. && pwd)" uv run quarto render \
         rocky_bilbao_2026_menu_report.qmd \
-        -P selections="selections/{{name}}.yaml" \
-        --output-dir static
+        -P selections="selections/{{name}}.yaml"
 
 # --- Artifact sync to GCS ---
 #

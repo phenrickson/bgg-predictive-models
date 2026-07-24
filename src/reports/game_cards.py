@@ -165,7 +165,10 @@ def game_cards_html(games: pl.DataFrame, game_ids: list[int], tier: str = "") ->
         row = by_id.get(int(gid))
         if row is None:
             continue
-        img = row.get("image") or row.get("thumbnail")
+        # Prefer the small thumbnail — tiles render ~280px, and embed-resources
+        # inlines each image as base64, so full-res covers bloat the file to
+        # tens of MB. thumbnail is BGG's fit-in/200x150 variant.
+        img = row.get("thumbnail") or row.get("image")
         img_html = (
             f'<img src="{html.escape(str(img))}" loading="lazy" alt=""/>'
             if img and not (isinstance(img, float) and pd.isna(img))
