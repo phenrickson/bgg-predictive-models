@@ -66,7 +66,7 @@ jobs:
               | python3 -c "import sys, json; print(json.dumps([u.strip() for u in sys.stdin.read().splitlines() if u.strip()]))")
           else
             # Discover by listing the gs:// prefix.
-            users=$(gsutil ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
+            users=$(gcloud storage ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
               | sed -e 's|/$||' \
               | xargs -n1 basename \
               | python3 -c "import sys, json; print(json.dumps([u for u in sys.stdin.read().splitlines() if u]))")
@@ -185,7 +185,7 @@ jobs:
       # part of this run keep their last-published HTML.
       - name: Restore previously published HTMLs from GCS
         run: |
-          gsutil -m rsync -r \
+          gcloud storage rsync -r \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/" \
             reports/_output/ 2>&1 || echo "(no prior bundle in gs://; first run)"
 
@@ -213,7 +213,7 @@ jobs:
       # from it. This is what makes partial renders safe.
       - name: Mirror final bundle to GCS
         run: |
-          gsutil -m rsync -r reports/_output/ \
+          gcloud storage rsync -r reports/_output/ \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/"
 
       - name: Configure GitHub Pages

@@ -880,10 +880,8 @@ class CollectionArtifactStorage:
         registration["finalized_at"] = datetime.now().isoformat()
         self._upload_json(reg_path, registration)
 
-        logger.info(
-            f"Saved finalized pipeline to {self.base_dir / finalized_path}"
-        )
-        return f"{self.base_dir / finalized_path}"
+        logger.info(f"Saved finalized pipeline to {finalized_path}")
+        return finalized_path
 
     def load_finalized_pipeline(
         self,
