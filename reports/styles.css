@@ -230,7 +230,7 @@ table.topn-by-year tbody tr:hover td.owned {
 
 /* Collection explorer: faceted-filter table
    Tokens (fall back to the cosmo dark theme values). */
-.explorer-controls, .explorer-filters, #explorer-mount, .explorer-topbar, .explorer-pager {
+.explorer-controls, .explorer-filters, #explorer-mount, .explorer-topbar, .explorer-pager, .explorer-controls-footer {
   --exp-accent:#4c7ef3;
   --exp-line:color-mix(in srgb, currentColor 16%, transparent);
   --exp-line-soft:color-mix(in srgb, currentColor 9%, transparent);
@@ -258,11 +258,15 @@ table.topn-by-year tbody tr:hover td.owned {
 .facet-label { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; opacity:.6; }
 .facet .chips { display:flex; flex-wrap:wrap; gap:.3rem; max-width:24rem; }
 
+/* Shared control height so chips, range inputs, and toggles line up */
+.chip, .explorer-range input, .basis-btn, .pagesize-select { height:1.9rem; box-sizing:border-box; }
+
 /* Chips — one consistent rounded-rect shape for every facet */
-.chip { font:inherit; font-size:.8rem; line-height:1; min-width:1.9rem; text-align:center; padding:.35rem .6rem; border:1px solid var(--exp-line); border-radius:.4rem; background:transparent; color:inherit; cursor:pointer; transition:background .12s, border-color .12s; }
+.chip { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:.8rem; line-height:1; min-width:1.9rem; text-align:center; padding:0 .55rem; border:1px solid var(--exp-line); border-radius:.4rem; background:transparent; color:inherit; cursor:pointer; transition:background .12s, border-color .12s; }
 .chip:hover { border-color:var(--exp-accent); }
 .chip.active { background:var(--exp-accent); border-color:var(--exp-accent); color:#fff; font-weight:600; }
-.chip.reset { opacity:.8; align-self:flex-end; }
+.explorer-controls-footer { display:flex; justify-content:flex-end; margin-top:.85rem; padding-top:.75rem; border-top:1px solid var(--exp-line-soft); }
+.chip.reset { opacity:.85; }
 .chip[disabled] { opacity:.35; cursor:default; border-color:var(--exp-line-soft); }
 
 /* Range inputs — match chip height/rounding */
@@ -271,7 +275,7 @@ table.topn-by-year tbody tr:hover td.owned {
 .explorer-range input:focus, .pagesize-select:focus { outline:none; border-color:var(--exp-accent); }
 
 /* Best|Recommended basis toggle (segmented) */
-.basis-toggle { display:inline-flex; border:1px solid var(--exp-line); border-radius:.4rem; overflow:hidden; margin-bottom:.1rem; }
+.basis-toggle { display:inline-flex; align-self:flex-start; width:fit-content; border:1px solid var(--exp-line); border-radius:.4rem; overflow:hidden; margin-bottom:.1rem; }
 .basis-btn { font:inherit; font-size:.72rem; padding:.28rem .55rem; border:none; background:transparent; color:inherit; cursor:pointer; opacity:.7; }
 .basis-btn:not(:last-child) { border-right:1px solid var(--exp-line); }
 .basis-btn.active { background:var(--exp-accent); color:#fff; opacity:1; font-weight:600; }
@@ -279,9 +283,11 @@ table.topn-by-year tbody tr:hover td.owned {
 /* Player-count badges: best = filled accent, recommended-only = outlined */
 .pc-cell { white-space:nowrap; }
 .pc-badge { display:inline-block; min-width:1.35rem; text-align:center; font-size:.76rem; line-height:1.35rem; height:1.35rem; padding:0 .3rem; margin:0 .12rem; border-radius:.35rem; box-sizing:border-box; }
-.pc-best { background:var(--exp-accent,#4c7ef3); color:#fff; border:1px solid var(--exp-accent,#4c7ef3); font-weight:600; }
-.pc-rec { background:transparent; color:inherit; border:1px solid var(--exp-line); opacity:.8; }
+.pc-best { background:rgb(241 243 246); color:#1e222b; border:1px solid rgb(241 243 246); font-weight:700; }
+.pc-rec { background:transparent; color:inherit; border:1px solid var(--exp-line); opacity:.7; }
 .badge-none { opacity:.4; }
+/* Complexity heat chip */
+.weight-badge { display:inline-block; min-width:2.6rem; padding:.15rem .4rem; border-radius:.35rem; font-size:.78rem; font-weight:600; color:var(--wi,#fff); background:var(--wc,#4c7ef3); }
 .pc-key { display:inline-flex; align-items:center; gap:.3rem; font-size:.8rem; opacity:.75; }
 .pc-key .pc-badge { margin-left:.5rem; }
 

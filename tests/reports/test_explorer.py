@@ -37,9 +37,9 @@ def test_payload_columns_have_kinds():
     assert kinds["Status"] == "discrete"
     # Players (supported range) is kept and distinct from the suggestions column
     assert kinds["Players"] == "range-contains"
-    # Best + Recommended merged into one badges column
-    assert kinds["Player Counts"] == "badges"
-    assert "Best" not in kinds and "Recommended" not in kinds
+    # Best + Recommended merged into one badges column named "Recommended"
+    assert kinds["Recommended"] == "badges"
+    assert "Best" not in kinds
     assert kinds["Complexity"] == "range"
     assert kinds["Game"] == "none"
 
@@ -56,7 +56,7 @@ def test_players_column_preserved():
 def test_badges_cell_shape():
     p = build_explorer_payload(_coll(), _games())
     labels = [c["label"] for c in p["columns"]]
-    pc = labels.index("Player Counts")
+    pc = labels.index("Recommended")
     # Alpha: best "4, 3" -> [3,4]; rec "2, 3, 4" -> union [2,3,4]
     assert p["rows"][0][pc] == {"best": [3, 4], "rec": [2, 3, 4]}
     # Beta: best "2" -> [2]; rec "1, 2" -> [1,2]

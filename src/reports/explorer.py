@@ -27,7 +27,7 @@ _COLUMN_KINDS = {
     "Status": "discrete",
     "Your rating": "range",
     "Players": "range-contains",
-    "Player Counts": "badges",
+    "Recommended": "badges",
     "Playtime": "range",
     "Complexity": "range",
 }
@@ -62,7 +62,7 @@ def build_explorer_payload(collection: pl.DataFrame, games: pl.DataFrame) -> dic
     out_labels = []
     for l in src_labels:
         if l == "Best":
-            out_labels.append("Player Counts")
+            out_labels.append("Recommended")
         elif l == "Recommended":
             continue
         else:

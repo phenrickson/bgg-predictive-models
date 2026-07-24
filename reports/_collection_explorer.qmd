@@ -19,8 +19,9 @@ print(
 ```{=html}
 <div class="explorer-controls">
   <div class="explorer-controls-title">Filters</div>
-  <p class="explorer-controls-help">Click values to filter. Chips within a group combine with <strong>or</strong>; groups combine with <strong>and</strong>. Numeric filters keep games with unknown values.</p>
+  <!-- <p class="explorer-controls-help">Click values to filter. Chips within a group combine with <strong>or</strong>; groups combine with <strong>and</strong>. Numeric filters keep games with unknown values.</p> -->
   <div id="explorer-filters" class="explorer-filters"></div>
+  <div id="explorer-controls-footer" class="explorer-controls-footer"></div>
 </div>
 ```
 
@@ -80,7 +81,7 @@ print(
     // discrete/multi: Set of active values per column index; range: {min,max}
     function initState(c){
       if(c.kind==='discrete'||c.kind==='multi'||c.kind==='range-contains') return {active:new Set()};
-      if(c.kind==='badges') return {active:new Set(), basis:'rec'};
+      if(c.kind==='badges') return {active:new Set(), basis:'best'};
       if(c.kind==='range') return {min:'', max:''};
       return null;
     }
@@ -125,7 +126,8 @@ print(
             if(r){
               var lo = st.min===''? -Infinity : parseFloat(st.min);
               var hi = st.max===''?  Infinity : parseFloat(st.max);
-              if(!(r.hi>=lo && r.lo<=hi)) return false;
+              // containment: the game's whole range must fit within [lo,hi]
+              if(!(r.lo>=lo && r.hi<=hi)) return false;
             } // unknown -> keep
           }
         }
@@ -207,13 +209,17 @@ print(
         }
         filtersEl.appendChild(group);
       });
-      var reset = document.createElement('button');
-      reset.type='button'; reset.className='chip reset'; reset.textContent='Reset';
-      reset.addEventListener('click', function(){
-        state = COLS.map(initState);
-        page=0; buildFilters(); render();
-      });
-      filtersEl.appendChild(reset);
+      var footer = document.getElementById('explorer-controls-footer');
+      if(footer){
+        footer.innerHTML = '';
+        var reset = document.createElement('button');
+        reset.type='button'; reset.className='chip reset'; reset.textContent='Reset';
+        reset.addEventListener('click', function(){
+          state = COLS.map(initState);
+          page=0; buildFilters(); render();
+        });
+        footer.appendChild(reset);
+      }
     }
 
     // ---- page-size selector ----
@@ -242,6 +248,23 @@ print(
         return '<span class="pc-badge'+(isBest?' pc-best':' pc-rec')+'" title="'
           + (isBest?'Best at '+n:'Recommended at '+n)+'">'+n+'</span>';
       }).join('');
+    }
+    // complexity diverging blue→white→orange, anchored to the range that
+    // actually occurs for games with >=25 ratings (~1.0 .. 4.5, mid 2.75).
+    var WMIN=1.0, WMID=2.75, WMAX=4.5;
+    var W_LOW=[59,130,246], W_MIDC=[241,243,246], W_HIGH=[234,120,40]; // blue, near-white, orange
+    function mix(a,b,t){ return [Math.round(a[0]+(b[0]-a[0])*t),Math.round(a[1]+(b[1]-a[1])*t),Math.round(a[2]+(b[2]-a[2])*t)]; }
+    function weightBadge(val){
+      var w = parseFloat(val);
+      if(isNaN(w)) return '<span class="badge-none">—</span>';
+      var wc, ink;
+      if(w<=WMID){ var t=Math.max(0,(w-WMIN)/(WMID-WMIN)); wc=mix(W_LOW,W_MIDC,t); }
+      else { var t2=Math.min(1,(w-WMID)/(WMAX-WMID)); wc=mix(W_MIDC,W_HIGH,t2); }
+      // dark ink on the pale middle, white ink on the saturated ends
+      var lum=(wc[0]*0.299+wc[1]*0.587+wc[2]*0.114);
+      ink = lum>170 ? '#1e222b' : '#fff';
+      return '<span class="weight-badge" style="--wc:rgb('+wc[0]+' '+wc[1]+' '+wc[2]+');--wi:'+ink+';">'
+        + w.toFixed(2) + '</span>';
     }
     function sortKey(cell){
       // badges object -> sort by lowest best (then lowest rec)
@@ -282,6 +305,8 @@ print(
         COLS.forEach(function(c, i){
           if(c.kind==='badges'){
             html += '<td class="dt-center pc-cell">'+badgeHtml(r[i])+'</td>';
+          } else if(c.label==='Complexity'){
+            html += '<td class="dt-center">'+weightBadge(r[i])+'</td>';
           } else {
             var cls = (c.label==='Game') ? '' : ' class="dt-center"';
             html += '<td'+cls+'>'+(r[i]==null?'':r[i])+'</td>';
