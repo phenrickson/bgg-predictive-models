@@ -21,9 +21,11 @@ local_root := "models/collections"
 default:
     @just --list
 
-# Fetch a user's collection from BGG and upsert into BigQuery.
-# Run this before `sweep` for a user whose collection has not been
-# loaded yet.
+# Refresh a user's collection: fetch their latest collection from BGG and
+# upsert it into BigQuery. Run this to pull in new/changed games for an
+# existing user, or before `sweep` for a user not yet loaded.
+#   just load                  # default username
+#   just load alice            # a specific user
 load user=username:
     uv run python -m src.collection.load \
         --username "{{user}}" --environment {{environment}}
@@ -312,9 +314,9 @@ sync-artifacts user=username prune="":
     fi
     echo "syncing $src -> $dst"
     if [ -n "{{prune}}" ]; then
-        gsutil -m rsync -r -d "$src" "$dst"
+        gcloud storage rsync -r --delete-unmatched-destination-objects "$src" "$dst"
     else
-        gsutil -m rsync -r "$src" "$dst"
+        gcloud storage rsync -r "$src" "$dst"
     fi
 
 # Sync every local user's collection artifacts to GCS. Skips users with
@@ -349,9 +351,9 @@ pull-artifacts user=username prune="":
     mkdir -p "$dst"
     echo "pulling $src -> $dst"
     if [ -n "{{prune}}" ]; then
-        gsutil -m rsync -r -d "$src" "$dst"
+        gcloud storage rsync -r --delete-unmatched-destination-objects "$src" "$dst"
     else
-        gsutil -m rsync -r "$src" "$dst"
+        gcloud storage rsync -r "$src" "$dst"
     fi
 
 # Pull every user under gs://.../collections/ into the local tree.
@@ -359,7 +361,7 @@ pull-artifacts user=username prune="":
 pull-artifacts-all prune="":
     #!/usr/bin/env bash
     failed=()
-    users=$(gsutil ls "{{gcs_artifacts_root}}/" 2>/dev/null \
+    users=$(gcloud storage ls "{{gcs_artifacts_root}}/" 2>/dev/null \
         | sed -e 's|/$||' -e "s|^{{gcs_artifacts_root}}/||")
     if [ -z "$users" ]; then
         echo "No users found at {{gcs_artifacts_root}}/" >&2
