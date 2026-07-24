@@ -1,3 +1,93 @@
-# Collection
+## Overview
 
-_Explorer fragment — filters and table added in Task 2._
+```{python}
+#| label: explorer-by-category
+#| fig-width: 8
+#| fig-height: 9
+#| out-width: 100%
+plot_collection_by_category_static(data.collection, data.games)
+```
+
+```{python}
+#| label: explorer-by-year
+#| fig-width: 8
+#| fig-height: 3
+#| out-width: 100%
+plot_collection_by_year_static(data.collection, data.games)
+```
+
+## Games {#explorer-table}
+
+Filter by player count, complexity, and playing time. Games with unknown
+values are kept when a filter is applied.
+
+::: {#collection-filters .filter-bar}
+:::
+
+```{python}
+#| label: explorer-table
+itables_show(
+    format_collection_table(data.collection, data.games),
+    table_id="collection-table",
+    paging=True,
+    pageLength=25,
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
+)
+```
+
+```{=html}
+<script>
+(function () {
+  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
+  ready(function () {
+    if (!(window.jQuery && jQuery.fn.dataTable)) { return; }
+    var $ = window.jQuery;
+    // parse "2–4", "2-4", "90", "" -> {lo, hi}
+    function parseRange(txt){
+      if(!txt) return null;
+      var m = String(txt).replace(/[^0-9.\-–]/g,'').split(/[–-]/).filter(function(s){return s!=='';});
+      if(!m.length) return null;
+      var lo = parseFloat(m[0]); var hi = m.length>1 ? parseFloat(m[1]) : lo;
+      if(isNaN(lo)) return null;
+      return {lo: lo, hi: isNaN(hi)?lo:hi};
+    }
+    var COLS = { players: 3, playtime: 4, complexity: 5 };
+    var state = { players:{min:'',max:''}, playtime:{min:'',max:''}, complexity:{min:'',max:''} };
+    $.fn.dataTable.ext.search.push(function(settings, data){
+      function ok(key){
+        var f = state[key]; if(f.min===''&&f.max==='') return true;
+        var r = parseRange(data[COLS[key]]); if(!r) return true; // keep unknowns
+        var lo = f.min===''? -Infinity : parseFloat(f.min);
+        var hi = f.max===''?  Infinity : parseFloat(f.max);
+        // overlap test: game's [r.lo,r.hi] intersects [lo,hi]
+        return r.hi >= lo && r.lo <= hi;
+      }
+      return ok('players') && ok('playtime') && ok('complexity');
+    });
+    function control(label, key){
+      return '<label class="filt"><span>'+label+'</span>'
+        + '<span class="filt-inputs">'
+        + '<input type="number" step="any" data-k="'+key+'" data-b="min" placeholder="min">'
+        + '<input type="number" step="any" data-k="'+key+'" data-b="max" placeholder="max">'
+        + '</span></label>';
+    }
+    var bar = document.getElementById('collection-filters');
+    if(bar){
+      bar.innerHTML = control('Players','players') + control('Playtime (min)','playtime')
+        + control('Complexity','complexity')
+        + '<button id="filt-reset" type="button">Reset</button>';
+    }
+    function redraw(){ $('#collection-table').DataTable().draw(); }
+    $(document).on('input change', '#collection-filters input', function(){
+      state[this.dataset.k][this.dataset.b] = this.value; redraw();
+    });
+    $(document).on('click', '#filt-reset', function(){
+      $('#collection-filters input').val('');
+      state = { players:{min:'',max:''}, playtime:{min:'',max:''}, complexity:{min:'',max:''} };
+      redraw();
+    });
+  });
+})();
+</script>
+```
