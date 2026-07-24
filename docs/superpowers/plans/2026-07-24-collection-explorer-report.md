@@ -137,135 +137,182 @@ git commit -m "feat: register collection report module"
 
 ---
 
-### Task 2: Build the shared explorer fragment with range filters
+### Task 2: Custom faceted-filter collection table (replaces itables)
+
+**Status note (already landed in earlier commits, keep):** the `collection`
+report renders to `collection/<slug>.html`; `_fetch_games_metadata` left-joins
+`bgg-data-warehouse.<dataset>.best_player_counts` to add `best_player_counts` /
+`recommended_player_counts`; `format_collection_table` adds **Best** and
+**Recommended** columns (numeric-sorted via `_sort_player_counts`); the
+Overview charts are removed.
+
+**Design change:** itables/DataTables is dropped for this report. Instead we
+render a **custom self-contained HTML table** with **faceted filters** driven by
+a per-column config. Each column declares a filter `kind`:
+
+- `discrete` — one chip per distinct value; click to toggle (OR within column).
+  Used by: Status.
+- `multi` — cell is a comma-separated string (`"2, 3, 4"`); tokenize into
+  individual chips; a row matches a chip if the token is in its set.
+  Used by: Best, Recommended.
+- `range` — numeric min/max inputs; row matches if its value (or its range,
+  for `"a–b"` cells) overlaps [min,max]; unknown/blank values are kept.
+  Used by: Your rating, Playtime, Complexity.
+- (no filter) — Game, Players.
+
+Filtering is **AND across columns, OR within a column**. Column-header click
+sorts (asc/desc toggle). No pagination needed initially (≈160 rows); a simple
+"showing N of M" count suffices. All vanilla JS embedded in the fragment; the
+table data is emitted as a JSON blob the JS reads (so no DOM scraping).
 
 **Files:**
-- Create: `reports/_collection_explorer.qmd`
-- Modify: `reports/styles.css` (append filter-bar styles)
+- Modify: `reports/_collection_explorer.qmd` (replace itables block with the
+  custom table + config + JS)
+- Modify: `reports/styles.css` (replace `.filter-bar` block with chip + table styles)
+- Create: `src/reports/explorer.py` — builds the JSON payload the JS consumes
+- Test: `tests/reports/test_explorer.py`
 
 **Interfaces:**
-- Consumes (from `_setup.qmd`, already imported there): `data` (`CollectionReportData` with `.collection`, `.games`), `USERNAME`, `format_collection_table`, `itables_show`, `plot_collection_by_category_static`, `plot_collection_by_year_static`.
-- Produces: an HTML fragment. No Python API surface.
+- Consumes: `data.collection`, `data.games`, `format_collection_table` (already
+  produces the exact display columns/HTML).
+- Produces: `src.reports.explorer.build_explorer_payload(collection, games) -> dict`
+  with shape:
+  `{"columns": [{"label": str, "kind": "discrete"|"multi"|"range"|"none"}],
+    "rows": [[cell_html_or_value, ...], ...]}`
+  Row cell values are the same strings `format_collection_table` produces (Game
+  is HTML; Best/Recommended are `"2, 3"`; Playtime is `"60–120 min"`, etc.).
 
-- [ ] **Step 1: Write the fragment — summary plots + table**
+- [ ] **Step 1: Failing test for the payload builder**
 
-Create `reports/_collection_explorer.qmd`. Start with the plots and the itables table (reuse the exact calls from `_collection.qmd:collection-table`):
-```markdown
-## Overview
+Create `tests/reports/test_explorer.py`:
+```python
+import polars as pl
+from src.reports.explorer import build_explorer_payload
 
+
+def _coll():
+    return pl.DataFrame({"game_id": [1, 2], "owned": [True, False],
+                         "wishlist": [False, True], "user_rating": [9.0, None]})
+
+
+def _games():
+    return pl.DataFrame({
+        "game_id": [1, 2], "name": ["Alpha", "Beta"],
+        "year_published": [2020, 2021], "min_players": [2, 1], "max_players": [4, 5],
+        "min_playtime": [60, 30], "max_playtime": [120, 30], "average_weight": [3.1, 1.5],
+        "best_player_counts": ["4, 3", "2"], "recommended_player_counts": ["2, 3, 4", "1, 2"],
+    })
+
+
+def test_payload_columns_have_kinds():
+    p = build_explorer_payload(_coll(), _games())
+    kinds = {c["label"]: c["kind"] for c in p["columns"]}
+    assert kinds["Status"] == "discrete"
+    assert kinds["Best"] == "multi"
+    assert kinds["Recommended"] == "multi"
+    assert kinds["Complexity"] == "range"
+    assert kinds["Game"] == "none"
+
+
+def test_payload_rows_match_table():
+    p = build_explorer_payload(_coll(), _games())
+    assert len(p["rows"]) == 2
+    # Best column numeric-sorted: "4, 3" -> "3, 4"
+    best_idx = [c["label"] for c in p["columns"]].index("Best")
+    assert p["rows"][0][best_idx] in ("3, 4", "2")
+```
+
+- [ ] **Step 2: Run it, expect failure**
+
+Run: `uv run pytest tests/reports/test_explorer.py -v`
+Expected: FAIL — `ModuleNotFoundError: src.reports.explorer`.
+
+- [ ] **Step 3: Implement `src/reports/explorer.py`**
+
+```python
+"""Build the JSON payload for the custom faceted-filter collection table.
+
+Reuses format_collection_table for the exact display cells, then attaches a
+per-column filter `kind` the client JS uses to render controls."""
+from __future__ import annotations
+
+import polars as pl
+
+from src.reports.tables import format_collection_table
+
+# label -> filter kind. Columns absent here default to "none".
+_COLUMN_KINDS = {
+    "Status": "discrete",
+    "Your rating": "range",
+    "Best": "multi",
+    "Recommended": "multi",
+    "Playtime": "range",
+    "Complexity": "range",
+}
+
+
+def build_explorer_payload(collection: pl.DataFrame, games: pl.DataFrame) -> dict:
+    table = format_collection_table(collection, games)
+    labels = list(table.columns)
+    columns = [{"label": l, "kind": _COLUMN_KINDS.get(l, "none")} for l in labels]
+    rows = table.astype(object).where(table.notna(), "").values.tolist()
+    return {"columns": columns, "rows": rows}
+```
+
+- [ ] **Step 4: Run tests, expect pass**
+
+Run: `uv run pytest tests/reports/test_explorer.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Rewrite the fragment — custom table + config + JS**
+
+Replace the entire body of `reports/_collection_explorer.qmd` with: a heading,
+a `#explorer-filters` container, a `#explorer-mount` table container, a Python
+cell that emits `build_explorer_payload(...)` as a JSON script tag, and a
+`{=html}` `<script>` that:
+- reads the JSON payload;
+- builds controls per column kind (`discrete`/`multi` → chip set of distinct or
+  tokenized values, sorted numerically when all-numeric; `range` → min/max
+  number inputs), plus a Reset button and a "showing N of M" counter;
+- renders `<table>` rows, re-rendering on every filter change (AND across
+  columns, OR within a column; `range` overlap keeps unknowns);
+- sorts on header click (numeric when the column parses as numeric, else
+  lexical), toggling asc/desc.
+Emit the payload cell as:
 ```{python}
-#| label: explorer-by-category
-#| fig-width: 8
-#| fig-height: 9
-#| out-width: 100%
-plot_collection_by_category_static(data.collection, data.games)
+#| output: asis
+import json
+from src.reports.explorer import build_explorer_payload
+_payload = build_explorer_payload(data.collection, data.games)
+print('<script id="explorer-data" type="application/json">'
+      + json.dumps(_payload) + '</script>')
 ```
+Keep the JS defensive: run on DOMContentLoaded; if `#explorer-data` is missing
+or has no rows, render an empty-state line instead of throwing.
 
-## Games {#explorer-table}
+- [ ] **Step 6: Replace filter styles**
 
-::: {#collection-filters .filter-bar}
-:::
+In `reports/styles.css`, replace the `.filter-bar` block (added in the prior
+commit) with styles for `.explorer-filters`, `.facet` (a labeled group),
+`.chip` / `.chip.active`, `.explorer-range input`, the `#explorer-table`
+(borders, sticky header, hover, `dt-center` centering for numeric cols), and
+`.explorer-count`. Keep it theme-aware (works on the dark cosmo theme).
 
-```{python}
-#| label: explorer-table
-itables_show(
-    format_collection_table(data.collection, data.games),
-    table_id="collection-table",
-    paging=True,
-    pageLength=25,
-    classes="display compact",
-    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
-)
-```
-```
-
-- [ ] **Step 2: Add the range-filter JS**
-
-The table columns are: 0 Game, 1 Status, 2 Your rating, 3 Players, 4 Playtime, 5 Complexity (per `format_collection_table`). Players/Playtime are rendered as ranges like "2–4"; parse the *max* for the upper bound and *min* for the lower. Append a raw-HTML cell to the fragment:
-````markdown
-```{=html}
-<script>
-(function () {
-  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
-  ready(function () {
-    if (!(window.jQuery && jQuery.fn.dataTable)) { return; }
-    var $ = window.jQuery;
-    // parse "2–4", "2-4", "90", "" -> {lo, hi}
-    function parseRange(txt){
-      if(!txt) return null;
-      var m = String(txt).replace(/[^0-9.\-–]/g,'').split(/[–-]/).filter(function(s){return s!=='';});
-      if(!m.length) return null;
-      var lo = parseFloat(m[0]); var hi = m.length>1 ? parseFloat(m[1]) : lo;
-      if(isNaN(lo)) return null;
-      return {lo: lo, hi: isNaN(hi)?lo:hi};
-    }
-    var COLS = { players: 3, playtime: 4, complexity: 5 };
-    var state = { players:{min:'',max:''}, playtime:{min:'',max:''}, complexity:{min:'',max:''} };
-    $.fn.dataTable.ext.search.push(function(settings, data){
-      function ok(key){
-        var f = state[key]; if(f.min===''&&f.max==='') return true;
-        var r = parseRange(data[COLS[key]]); if(!r) return true; // keep unknowns
-        var lo = f.min===''? -Infinity : parseFloat(f.min);
-        var hi = f.max===''?  Infinity : parseFloat(f.max);
-        // overlap test: game's [r.lo,r.hi] intersects [lo,hi]
-        return r.hi >= lo && r.lo <= hi;
-      }
-      return ok('players') && ok('playtime') && ok('complexity');
-    });
-    function control(label, key){
-      return '<label class="filt"><span>'+label+'</span>'
-        + '<input type="number" step="any" data-k="'+key+'" data-b="min" placeholder="min">'
-        + '<input type="number" step="any" data-k="'+key+'" data-b="max" placeholder="max">'
-        + '</label>';
-    }
-    var bar = document.getElementById('collection-filters');
-    if(bar){
-      bar.innerHTML = control('Players','players') + control('Playtime (min)','playtime')
-        + control('Complexity','complexity')
-        + '<button id="filt-reset" type="button">Reset</button>';
-    }
-    function redraw(){ $('#collection-table').DataTable().draw(); }
-    $(document).on('input change', '#collection-filters input', function(){
-      state[this.dataset.k][this.dataset.b] = this.value; redraw();
-    });
-    $(document).on('click', '#filt-reset', function(){
-      $('#collection-filters input').val('');
-      state = { players:{min:'',max:''}, playtime:{min:'',max:''}, complexity:{min:'',max:''} };
-      redraw();
-    });
-  });
-})();
-</script>
-```
-````
-NOTE: replace the fullwidth `（` `!` above with an ASCII `(!` when writing — it is shown here only to avoid a markdown fence issue. The condition is `if (!(window.jQuery && jQuery.fn.dataTable))`.
-
-- [ ] **Step 3: Style the filter bar**
-
-Append to `reports/styles.css`:
-```css
-.filter-bar { display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; margin:1rem 0; padding:.75rem 1rem; border:1px solid var(--bs-border-color,#dee2e6); border-radius:.5rem; }
-.filter-bar .filt { display:flex; flex-direction:column; font-size:.8rem; gap:.25rem; }
-.filter-bar .filt span { font-weight:600; }
-.filter-bar .filt input { width:5rem; }
-.filter-bar #filt-reset { align-self:flex-end; }
-```
-
-- [ ] **Step 4: Render and eyeball the filters**
-
-Run: `uv run python -m reports.render --report collection --username phenrickson --outcome own --fixture --output-dir /tmp/collexp`
-Expected: exits 0. Open `/tmp/collexp/fixture_user.html`; confirm the filter bar renders above the table. (Fixture data may be sparse — real verification is Step 5.)
-
-- [ ] **Step 5: Render with REAL data and eyeball**
+- [ ] **Step 7: Render with REAL data and eyeball**
 
 Run: `uv run python -m reports.render --report collection --username phenrickson --outcome own --output-dir /tmp/collexp`
-Expected: exits 0. Open `/tmp/collexp/phenrickson.html`. Verify: typing "2"/"4" in Players min/max narrows rows; complexity/playtime ranges work; Reset clears. **Stop here and get user feedback on filter UX before proceeding.**
+Expected: exits 0; open `/tmp/collexp/collection/phenrickson.html`. Verify:
+Status chips, Best/Recommended player-count chips (2,3,4,…), and rating/
+playtime/complexity ranges all filter; clicking "2" under Recommended narrows
+to games recommended at 2 players; multiple chips OR within a facet; ranges AND
+across facets; header-click sorts; Reset clears; "showing N of M" updates.
+**Stop here and get user feedback before proceeding.**
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add reports/_collection_explorer.qmd reports/styles.css
-git commit -m "feat: add filterable collection explorer fragment"
+git add reports/_collection_explorer.qmd reports/styles.css src/reports/explorer.py tests/reports/test_explorer.py
+git commit -m "feat: custom faceted-filter collection explorer table"
 ```
 
 ---
