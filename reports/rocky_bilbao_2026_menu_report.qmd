@@ -1,7 +1,8 @@
 ---
 title: "Rocky Bilbao 2026"
-subtitle: "The games Phil is proposing to bring to Spain"
+subtitle: "The games Phil is proposing to bring to Spain that we are 100% going to play"
 date: today
+author: Who else?
 format:
   html:
     output-file: rocky_bilbao_2026_menu_report.html
@@ -79,9 +80,10 @@ def cards(ids, tier):
     return game_cards_html(games, ids, tier=tier)
 ```
 
-# About
+# WTF Is This
 
-This document lists the board games Phil is proposing to bring to Spain.
+This report contains the list of games Phil is proposing to bring to Spain for Florida Bros Trip 2026. 
+The current numbers:
 
 ```{python}
 #| output: asis
@@ -89,6 +91,7 @@ _kpis = [
     ("On the menu", len(sel.menu())),
     ("Locks", len(sel.locks())),
     ("Maybes", len(sel.maybes())),
+    ("The Year of Our Lord", 2026),
 ]
 _cards = "".join(
     f'<div class="kpi"><div class="kpi-num">{v}</div>'
@@ -98,18 +101,27 @@ _cards = "".join(
 print(f'<div class="kpi-row">{_cards}</div>')
 ```
 
-```{python}
-#| output: asis
-crit = sel.criteria or {}
-lines = ["**The constraints:**", ""]
-for k, v in crit.items():
-    lines.append(f"- {k}: {v}")
-print("\n".join(lines) if crit else "_No criteria recorded._")
-```
+The "locks" are the games that are **100% in the bag no question about it** I will fight any of you who try to argue with me.
+ 
+The "maybes" are games I'm considering but have to be careful; picking from these will require dropping something else.
+
+Games in the "other" category are games that technically fit my proposed criteria but I'm not actively considering, so feel free to argue with me.
+
+**Criteria:**
+
+- Support 5 players (assuming Pat Scott has bought his plane ticket)
+- Petty player interaction
+- Small boxes preferred
+- Small table footprint preferred
+- Novelty preferred over nostalgia
+
+**Constraints:**
+
+- Everything must fit into my [board game carrying bag](https://www.allplay.com/board-game-bags/premium)
 
 # The "Locks"
 
-Games I am 100% bringing — you will have to fight me otherwise.
+Games I am 100% bringing no arguments about it I will fight all of you at once.
 
 ```{python}
 #| output: asis
@@ -118,7 +130,7 @@ print(cards(sel.locks(), "locks") or "_No locks selected._")
 
 # The "Maybes"
 
-Games under consideration — can't bring 'em all.
+Games under consideration because they have big boxes and I can't fit all of these into my bag.
 
 ```{python}
 #| output: asis
@@ -136,7 +148,7 @@ print(cards(sel.others(), "others") or "_No other games._")
 
 # The Menu
 
-The list of games I'm planning to bring, derived from the selections.
+The games that are currently in the bag.
 
 ```{python}
 #| label: menu-table

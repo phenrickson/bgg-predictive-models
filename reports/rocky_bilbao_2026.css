@@ -60,7 +60,7 @@ h1::before {
   transform: translateY(-.15em);
 }
 
-p { max-width: 68ch; }
+/* Body text spans the full content well (matches the cards/tile grid). */
 a { color: var(--rioja); }
 
 /* Constraint list in the intro reads like a packing list */

@@ -7,10 +7,49 @@ JS explorer so the two reports read the same.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
+import io
+import urllib.request
+from pathlib import Path
 
 import pandas as pd
 import polars as pl
+
+# Downscaled cover images are embedded as data URIs so the report stays
+# self-contained without inlining full-res originals (which bloat it to tens of
+# MB). Fetched originals are resized to COVER_PX and cached on disk so repeat
+# renders don't re-download.
+COVER_PX = 400
+_COVER_CACHE = Path("/tmp/bgg_cover_cache")
+
+
+def _cover_data_uri(url) -> str:
+    """Fetch `url`, downscale to <=COVER_PX, return a base64 JPEG data URI.
+    Falls back to the raw URL on any failure (network, decode, no Pillow)."""
+    if not url or (isinstance(url, float) and pd.isna(url)):
+        return ""
+    url = str(url)
+    key = hashlib.sha1(f"{url}@{COVER_PX}".encode()).hexdigest()[:16]
+    cached = _COVER_CACHE / f"{key}.txt"
+    if cached.exists():
+        return cached.read_text()
+    try:
+        from PIL import Image
+
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        raw = urllib.request.urlopen(req, timeout=20).read()
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im.thumbnail((COVER_PX, COVER_PX))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82)
+        uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        _COVER_CACHE.mkdir(parents=True, exist_ok=True)
+        cached.write_text(uri)
+        return uri
+    except Exception:
+        return url  # graceful fallback: link the remote image
 
 # Complexity heat anchors — same range the explorer uses (>=25-rating games).
 _WMIN, _WMID, _WMAX = 1.0, 2.75, 4.5
@@ -165,15 +204,11 @@ def game_cards_html(games: pl.DataFrame, game_ids: list[int], tier: str = "") ->
         row = by_id.get(int(gid))
         if row is None:
             continue
-        # Prefer the small thumbnail — tiles render ~280px, and embed-resources
-        # inlines each image as base64, so full-res covers bloat the file to
-        # tens of MB. thumbnail is BGG's fit-in/200x150 variant.
-        img = row.get("thumbnail") or row.get("image")
-        img_html = (
-            f'<img src="{html.escape(str(img))}" loading="lazy" alt=""/>'
-            if img and not (isinstance(img, float) and pd.isna(img))
-            else ""
-        )
+        # Downscale the full-res cover to ~400px and embed it (crisp at tile
+        # size, ~35KB each) rather than inlining the multi-MB original or the
+        # soft 200px thumbnail.
+        src = _cover_data_uri(row.get("image") or row.get("thumbnail"))
+        img_html = f'<img src="{src}" loading="lazy" alt=""/>' if src else ""
         cards.append(
             f'<a class="tile{tier_cls}" '
             f'href="https://boardgamegeek.com/boardgame/{int(gid)}" '
