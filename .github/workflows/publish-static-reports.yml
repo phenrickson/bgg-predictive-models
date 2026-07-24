@@ -59,7 +59,7 @@ jobs:
       - name: Stage current published bundle from GCS
         run: |
           mkdir -p reports/_output
-          gsutil -m rsync -r \
+          gcloud storage rsync -r \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/reports/" \
             reports/_output/ 2>&1 || echo "(no prior bundle in gs://; first run)"
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Mirror updated bundle back to GCS
         run: |
-          gsutil -m rsync -r reports/_output/ \
+          gcloud storage rsync -r reports/_output/ \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/reports/"
 
       - name: Configure GitHub Pages

@@ -56,7 +56,7 @@ jobs:
               | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' \
               | python3 -c "import sys, json; print(json.dumps([u.strip() for u in sys.stdin.read().splitlines() if u.strip()]))")
           else
-            users=$(gsutil ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
+            users=$(gcloud storage ls "gs://${{ env.GCP_PROJECT_ID }}/${{ steps.env.outputs.env_name }}/collections/" 2>/dev/null \
               | sed -e 's|/$||' \
               | xargs -n1 basename \
               | python3 -c "import sys, json; print(json.dumps([u for u in sys.stdin.read().splitlines() if u]))")
@@ -146,7 +146,7 @@ jobs:
         run: mkdir -p reports/_output/model
       - name: Restore previously published bundle from GCS
         run: |
-          gsutil -m rsync -r \
+          gcloud storage rsync -r \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/" \
             reports/_output/ 2>&1 || echo "(no prior bundle in gs://; first run)"
       - name: Download per-user artifacts
@@ -168,7 +168,7 @@ jobs:
             --output-dir reports/_output
       - name: Mirror final bundle to GCS
         run: |
-          gsutil -m rsync -r reports/_output/ \
+          gcloud storage rsync -r reports/_output/ \
             "gs://${{ env.GCP_PROJECT_ID }}/${{ needs.discover.outputs.env_name }}/reports/"
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
