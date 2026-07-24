@@ -306,6 +306,8 @@ def empty_offline_frame(kind: str) -> "pl.DataFrame":
                 "image": pl.Utf8,
                 "description": pl.Utf8,
                 "users_rated": pl.Int64,
+                "best_player_counts": pl.Utf8,
+                "recommended_player_counts": pl.Utf8,
             }
         )
     if kind == "upcoming":
@@ -363,12 +365,30 @@ def _fetch_collection_snapshot(username: str) -> pl.DataFrame:
 
 
 def _fetch_games_metadata() -> pl.DataFrame:
-    """Game metadata for joining into predictions tables."""
+    """Game metadata for joining into predictions tables.
+
+    Also left-joins the community best/recommended player counts from
+    ``best_player_counts`` (per game) so collection tables can show them.
+    """
     from src.data.loader import BGGDataLoader
 
     bq_config = load_config().get_bigquery_config()
     loader = BGGDataLoader(bq_config)
-    return loader.load_features(use_predicted_complexity=True, use_embeddings=False)
+    games = loader.load_features(
+        use_predicted_complexity=True, use_embeddings=False
+    )
+    return games.join(_fetch_best_player_counts(bq_config), on="game_id", how="left")
+
+
+def _fetch_best_player_counts(bq_config) -> pl.DataFrame:
+    """Per-game community player-count votes: the vote-ordered `best` and
+    `recommended` strings (e.g. "3, 4"). One row per game_id."""
+    client = bq_config.get_client()
+    sql = f"""
+    SELECT game_id, best_player_counts, recommended_player_counts
+    FROM `{bq_config.project_id}.{bq_config.dataset}.best_player_counts`
+    """
+    return pl.from_arrow(client.query(sql).to_arrow())
 
 
 def _fetch_upcoming_predictions(username: str, outcome: str) -> pl.DataFrame:

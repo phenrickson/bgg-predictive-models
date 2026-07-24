@@ -56,6 +56,8 @@ def _output_rel_path(report: str, username: str) -> Path:
     slug = slugify_username(username)
     if report == "model":
         return Path("model") / f"{slug}.html"
+    if report == "collection":
+        return Path("collection") / f"{slug}.html"
     return Path(f"{slug}.html")
 
 

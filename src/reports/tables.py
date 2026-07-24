@@ -29,6 +29,18 @@ def _safe_col(pdf: pd.DataFrame, col: str, default=None) -> list:
 _STATUS_PRIORITY = ["Own", "Preordered", "Wishlist", "Want", "Prev. Owned"]
 
 
+def _sort_player_counts(raw) -> str:
+    """Render a comma-separated player-count string in ascending numeric
+    order. The warehouse stores them vote-ordered (e.g. "4, 3"); we want
+    "3, 4". Non-numeric buckets like "4+" sort to the end, order kept."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return ""
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    numeric = sorted((p for p in parts if p.isdigit()), key=int)
+    other = [p for p in parts if not p.isdigit()]
+    return ", ".join(numeric + other)
+
+
 def format_collection_table(
     collection: pl.DataFrame, games: pl.DataFrame
 ) -> pd.DataFrame:
@@ -65,6 +77,8 @@ def format_collection_table(
     min_t = _safe_col(pdf, "min_playtime", None)
     max_t = _safe_col(pdf, "max_playtime", None)
     weights = _safe_col(pdf, "average_weight", None)
+    best_pc = _safe_col(pdf, "best_player_counts", "")
+    rec_pc = _safe_col(pdf, "recommended_player_counts", "")
 
     def _row_status(r: pd.Series) -> str:
         if bool(r.get("owned", False)):
@@ -108,6 +122,8 @@ def format_collection_table(
                 format_range(_fmt_int(lo), _fmt_int(hi))
                 for lo, hi in zip(min_p, max_p)
             ],
+            "Best": [_sort_player_counts(c) for c in best_pc],
+            "Recommended": [_sort_player_counts(c) for c in rec_pc],
             "Playtime": [
                 format_range(_fmt_int(lo), _fmt_int(hi), " min")
                 for lo, hi in zip(min_t, max_t)
