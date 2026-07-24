@@ -1,0 +1,142 @@
+name: rocky_bilbao_2026
+username: phenrickson
+criteria:
+  recommended_at: any
+  supports: 5
+  complexity:
+  - 1.0
+  - 5.0
+  max_playtime: null
+games:
+  12:
+    selection: maybe
+    status: 'no'
+  93:
+    selection: other
+    status: 'no'
+  118:
+    selection: maybe
+    status: 'yes'
+  503:
+    selection: other
+    status: 'no'
+  11971:
+    selection: lock
+    status: 'yes'
+  39463:
+    selection: other
+    status: 'no'
+  54998:
+    selection: other
+    status: 'no'
+  82222:
+    selection: other
+    status: 'no'
+  92415:
+    selection: lock
+    status: 'yes'
+  98778:
+    selection: maybe
+    status: 'no'
+  105551:
+    selection: other
+    status: 'no'
+  124361:
+    selection: maybe
+    status: 'no'
+  131357:
+    selection: other
+    status: 'no'
+  148949:
+    selection: other
+    status: 'no'
+  167355:
+    selection: maybe
+    status: 'no'
+  175914:
+    selection: other
+    status: 'no'
+  176494:
+    selection: other
+    status: 'no'
+  181279:
+    selection: maybe
+    status: 'no'
+  182694:
+    selection: other
+    status: 'no'
+  193042:
+    selection: other
+    status: 'no'
+  205317:
+    selection: other
+    status: 'no'
+  223770:
+    selection: lock
+    status: 'yes'
+  228372:
+    selection: lock
+    status: 'yes'
+  232832:
+    selection: other
+    status: 'no'
+  233078:
+    selection: other
+    status: 'no'
+  284653:
+    selection: other
+    status: 'no'
+  286749:
+    selection: lock
+    status: 'yes'
+  296345:
+    selection: lock
+    status: 'yes'
+  324856:
+    selection: other
+    status: 'no'
+  340466:
+    selection: maybe
+    status: 'yes'
+  350689:
+    selection: maybe
+    status: 'no'
+  361545:
+    selection: other
+    status: 'no'
+  366013:
+    selection: other
+    status: 'no'
+  370444:
+    selection: lock
+    status: 'yes'
+  375769:
+    selection: maybe
+    status: 'no'
+  411033:
+    selection: lock
+    status: 'yes'
+  411567:
+    selection: lock
+    status: 'yes'
+  427866:
+    selection: lock
+    status: 'yes'
+  432527:
+    selection: lock
+    status: 'yes'
+  436217:
+    selection: maybe
+    status: 'no'
+  446497:
+    selection: maybe
+    status: 'no'
+  447305:
+    selection: lock
+    status: 'yes'
+  453740:
+    selection: lock
+    status: 'yes'
+  454103:
+    selection: lock
+    status: 'yes'

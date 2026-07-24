@@ -1,0 +1,359 @@
+```{python}
+#| label: explorer-payload
+#| output: asis
+import json
+from src.reports.explorer import build_explorer_payload
+# The including report may set `explorer_collection` / `explorer_games` to
+# scope the table (e.g. the menu report). Fall back to the full `data` bundle.
+_ec = explorer_collection if "explorer_collection" in dir() else data.collection
+_eg = explorer_games if "explorer_games" in dir() else data.games
+_payload = build_explorer_payload(_ec, _eg)
+print(
+    '<script id="explorer-data" type="application/json">'
+    + json.dumps(_payload)
+    + "</script>"
+)
+```
+
+```{=html}
+<div class="explorer-controls">
+  <div class="explorer-controls-title">Filters</div>
+  <!-- <p class="explorer-controls-help">Click values to filter. Chips within a group combine with <strong>or</strong>; groups combine with <strong>and</strong>. Numeric filters keep games with unknown values.</p> -->
+  <div id="explorer-filters" class="explorer-filters"></div>
+  <div id="explorer-controls-footer" class="explorer-controls-footer"></div>
+</div>
+```
+
+```{=html}
+<div class="explorer-topbar">
+  <span id="explorer-count"></span>
+  <span class="pc-key">
+    <span class="pc-badge pc-best">n</span> best
+    <span class="pc-badge pc-rec">n</span> recommended
+    <span id="explorer-pagesize"></span>
+  </span>
+</div>
+<div id="explorer-mount"></div>
+<div id="explorer-pager" class="explorer-pager"></div>
+```
+
+```{=html}
+<script>
+(function () {
+  function ready(fn){ if(document.readyState!=='loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
+  ready(function () {
+    var el = document.getElementById('explorer-data');
+    var mount = document.getElementById('explorer-mount');
+    if(!el || !mount) return;
+    var payload;
+    try { payload = JSON.parse(el.textContent); } catch(e) { return; }
+    var COLS = payload.columns || [];
+    var ROWS = payload.rows || [];
+    if(!ROWS.length){ mount.innerHTML = '<p class="explorer-empty">No games to show.</p>'; return; }
+
+    // ---- helpers ----
+    function isNumericStr(s){ return s !== '' && s != null && !isNaN(parseFloat(s)) && isFinite(s.toString().replace(/[^0-9.\-]/g,'')) ; }
+    // parse "60–120 min", "30 min", "9.0", "" -> {lo,hi} or null
+    function parseRange(txt){
+      if(txt === '' || txt == null) return null;
+      var cleaned = String(txt).replace(/[^0-9.\-–]/g,'');
+      var parts = cleaned.split(/[–-]/).filter(function(s){return s!=='';});
+      if(!parts.length) return null;
+      var lo = parseFloat(parts[0]); var hi = parts.length>1 ? parseFloat(parts[1]) : lo;
+      if(isNaN(lo)) return null;
+      return {lo: lo, hi: isNaN(hi)?lo:hi};
+    }
+    // tokens of a multi cell "2, 3, 4" -> ["2","3","4"]
+    function tokens(txt){
+      if(txt === '' || txt == null) return [];
+      return String(txt).split(',').map(function(s){return s.trim();}).filter(function(s){return s!=='';});
+    }
+    function sortVals(vals){
+      var allNum = vals.every(function(v){ return v!=='' && !isNaN(parseFloat(v)); });
+      var out = vals.slice();
+      if(allNum) out.sort(function(a,b){ return parseFloat(a)-parseFloat(b); });
+      else out.sort();
+      return out;
+    }
+
+    // ---- filter state ----
+    // discrete/multi: Set of active values per column index; range: {min,max}
+    function initState(c){
+      if(c.kind==='discrete'||c.kind==='multi'||c.kind==='range-contains') return {active:new Set()};
+      if(c.kind==='badges') return {active:new Set(), basis:'best'};
+      if(c.kind==='range') return {min:'', max:''};
+      return null;
+    }
+    var state = COLS.map(initState);
+    var sortIdx = -1, sortDir = 1;
+    var pageSize = 25, page = 0;
+
+    function rowMatches(row){
+      for(var i=0;i<COLS.length;i++){
+        var c = COLS[i], st = state[i], cell = row[i];
+        if(c.kind==='discrete'){
+          if(st.active.size && !st.active.has(String(cell))) return false;
+        } else if(c.kind==='multi'){
+          if(st.active.size){
+            var t = tokens(cell); var hit=false;
+            st.active.forEach(function(v){ if(t.indexOf(v)>=0) hit=true; });
+            if(!hit) return false;
+          }
+        } else if(c.kind==='range-contains'){
+          if(st.active.size){
+            var rr = parseRange(cell);
+            if(rr){
+              var any=false;
+              st.active.forEach(function(v){
+                // "8+" chip matches when the supported max reaches 8+
+                if(v==='8+'){ if(rr.hi>=8) any=true; }
+                else { var n=parseFloat(v); if(rr.lo<=n && n<=rr.hi) any=true; }
+              });
+              if(!any) return false;
+            } // unknown range -> keep
+          }
+        } else if(c.kind==='badges'){
+          if(st.active.size){
+            var set = (st.basis==='best') ? (cell&&cell.best||[]) : (cell&&cell.rec||[]);
+            var hit=false;
+            st.active.forEach(function(v){ if(set.indexOf(parseInt(v,10))>=0) hit=true; });
+            if(!hit) return false;
+          }
+        } else if(c.kind==='range'){
+          if(st.min!==''||st.max!==''){
+            var r = parseRange(cell);
+            if(r){
+              var lo = st.min===''? -Infinity : parseFloat(st.min);
+              var hi = st.max===''?  Infinity : parseFloat(st.max);
+              // containment: the game's whole range must fit within [lo,hi]
+              if(!(r.lo>=lo && r.hi<=hi)) return false;
+            } // unknown -> keep
+          }
+        }
+      }
+      return true;
+    }
+
+    // ---- build filter controls ----
+    var filtersEl = document.getElementById('explorer-filters');
+    function buildFilters(){
+      filtersEl.innerHTML = '';
+      COLS.forEach(function(c, i){
+        if(c.kind==='none') return;
+        var group = document.createElement('div');
+        group.className = 'facet';
+        var lab = document.createElement('div'); lab.className='facet-label'; lab.textContent=c.label;
+        group.appendChild(lab);
+        if(c.kind==='discrete'||c.kind==='multi'||c.kind==='range-contains'){
+          var chipVals;
+          if(c.kind==='range-contains'){
+            chipVals = ['1','2','3','4','5','6','7','8','8+'];
+          } else {
+            var vals = new Set();
+            ROWS.forEach(function(r){
+              if(c.kind==='discrete'){ if(r[i]!=='' && r[i]!=null) vals.add(String(r[i])); }
+              else tokens(r[i]).forEach(function(t){ vals.add(t); });
+            });
+            chipVals = sortVals(Array.from(vals));
+          }
+          var wrap = document.createElement('div'); wrap.className='chips';
+          chipVals.forEach(function(v){
+            var chip = document.createElement('button');
+            chip.type='button'; chip.className='chip'; chip.textContent=v;
+            chip.addEventListener('click', function(){
+              if(state[i].active.has(v)){ state[i].active.delete(v); chip.classList.remove('active'); }
+              else { state[i].active.add(v); chip.classList.add('active'); }
+              page=0; render();
+            });
+            wrap.appendChild(chip);
+          });
+          group.appendChild(wrap);
+        } else if(c.kind==='badges'){
+          // Best | Recommended basis toggle
+          var toggle = document.createElement('div'); toggle.className='basis-toggle';
+          [['best','Best'],['rec','Recommended']].forEach(function(pair){
+            var b = document.createElement('button');
+            b.type='button'; b.className='basis-btn'+(state[i].basis===pair[0]?' active':'');
+            b.textContent=pair[1];
+            b.addEventListener('click', function(){
+              state[i].basis=pair[0];
+              toggle.querySelectorAll('.basis-btn').forEach(function(x){x.classList.remove('active');});
+              b.classList.add('active');
+              page=0; render();
+            });
+            toggle.appendChild(b);
+          });
+          group.appendChild(toggle);
+          var bwrap = document.createElement('div'); bwrap.className='chips';
+          ['1','2','3','4','5','6','7','8'].forEach(function(v){
+            var chip = document.createElement('button');
+            chip.type='button'; chip.className='chip'; chip.textContent=v;
+            chip.addEventListener('click', function(){
+              if(state[i].active.has(v)){ state[i].active.delete(v); chip.classList.remove('active'); }
+              else { state[i].active.add(v); chip.classList.add('active'); }
+              page=0; render();
+            });
+            bwrap.appendChild(chip);
+          });
+          group.appendChild(bwrap);
+        } else if(c.kind==='range'){
+          var rw = document.createElement('div'); rw.className='explorer-range';
+          ['min','max'].forEach(function(b){
+            var inp = document.createElement('input');
+            inp.type='number'; inp.step='any'; inp.placeholder=b;
+            inp.addEventListener('input', function(){ state[i][b]=inp.value; page=0; render(); });
+            rw.appendChild(inp);
+          });
+          group.appendChild(rw);
+        }
+        filtersEl.appendChild(group);
+      });
+      var footer = document.getElementById('explorer-controls-footer');
+      if(footer){
+        footer.innerHTML = '';
+        var reset = document.createElement('button');
+        reset.type='button'; reset.className='chip reset'; reset.textContent='Reset';
+        reset.addEventListener('click', function(){
+          state = COLS.map(initState);
+          page=0; buildFilters(); render();
+        });
+        footer.appendChild(reset);
+      }
+    }
+
+    // ---- page-size selector ----
+    function buildPageSize(){
+      var host = document.getElementById('explorer-pagesize');
+      if(!host) return;
+      host.innerHTML = '';
+      var lab = document.createElement('span'); lab.className='pagesize-label'; lab.textContent='Show ';
+      var sel = document.createElement('select'); sel.className='pagesize-select';
+      [25,50,100,'All'].forEach(function(opt){
+        var o = document.createElement('option');
+        o.value = (opt==='All') ? '0' : String(opt);
+        o.textContent = opt; sel.appendChild(o);
+      });
+      sel.value = String(pageSize);
+      sel.addEventListener('change', function(){ pageSize = parseInt(sel.value,10)||0; page=0; render(); });
+      host.appendChild(lab); host.appendChild(sel);
+    }
+
+    // ---- cell helpers ----
+    function badgeHtml(cell){
+      if(!cell || !cell.rec || !cell.rec.length) return '<span class="badge-none">—</span>';
+      var best = cell.best || [];
+      return cell.rec.map(function(n){
+        var isBest = best.indexOf(n)>=0;
+        return '<span class="pc-badge'+(isBest?' pc-best':' pc-rec')+'" title="'
+          + (isBest?'Best at '+n:'Recommended at '+n)+'">'+n+'</span>';
+      }).join('');
+    }
+    // complexity diverging blue→white→orange, anchored to the range that
+    // actually occurs for games with >=25 ratings (~1.0 .. 4.5, mid 2.75).
+    var WMIN=1.0, WMID=2.75, WMAX=4.5;
+    var W_LOW=[59,130,246], W_MIDC=[241,243,246], W_HIGH=[234,120,40]; // blue, near-white, orange
+    function mix(a,b,t){ return [Math.round(a[0]+(b[0]-a[0])*t),Math.round(a[1]+(b[1]-a[1])*t),Math.round(a[2]+(b[2]-a[2])*t)]; }
+    function weightBadge(val){
+      var w = parseFloat(val);
+      if(isNaN(w)) return '<span class="badge-none">—</span>';
+      var wc, ink;
+      if(w<=WMID){ var t=Math.max(0,(w-WMIN)/(WMID-WMIN)); wc=mix(W_LOW,W_MIDC,t); }
+      else { var t2=Math.min(1,(w-WMID)/(WMAX-WMID)); wc=mix(W_MIDC,W_HIGH,t2); }
+      // dark ink on the pale middle, white ink on the saturated ends
+      var lum=(wc[0]*0.299+wc[1]*0.587+wc[2]*0.114);
+      ink = lum>170 ? '#1e222b' : '#fff';
+      return '<span class="weight-badge" style="--wc:rgb('+wc[0]+' '+wc[1]+' '+wc[2]+');--wi:'+ink+';">'
+        + w.toFixed(2) + '</span>';
+    }
+    function sortKey(cell){
+      // badges object -> sort by lowest best (then lowest rec)
+      if(cell && typeof cell==='object'){
+        var arr = (cell.best&&cell.best.length)?cell.best:(cell.rec||[]);
+        return arr.length ? arr[0] : Infinity;
+      }
+      var n = parseFloat(String(cell).replace(/[^0-9.\-]/g,''));
+      return isNaN(n) ? null : n;
+    }
+
+    // ---- render table ----
+    function render(){
+      var filtered = ROWS.filter(rowMatches);
+      if(sortIdx>=0){
+        filtered = filtered.slice().sort(function(a,b){
+          var ak=sortKey(a[sortIdx]), bk=sortKey(b[sortIdx]);
+          if(ak!==null && bk!==null) return (ak-bk)*sortDir;
+          return String(a[sortIdx]).localeCompare(String(b[sortIdx]))*sortDir;
+        });
+      }
+      var total = filtered.length;
+      var size = pageSize>0 ? pageSize : total;
+      var pageCount = size>0 ? Math.ceil(total/size) : 1;
+      if(page > pageCount-1) page = Math.max(0, pageCount-1);
+      var start = pageSize>0 ? page*size : 0;
+      var end = pageSize>0 ? Math.min(start+size, total) : total;
+      var pageRows = filtered.slice(start, end);
+
+      var html = '<table id="explorer-tbl" class="explorer-table"><thead><tr>';
+      COLS.forEach(function(c, i){
+        var arrow = sortIdx===i ? (sortDir>0?' ▲':' ▼') : '';
+        html += '<th data-i="'+i+'">'+c.label+arrow+'</th>';
+      });
+      html += '</tr></thead><tbody>';
+      pageRows.forEach(function(r){
+        html += '<tr>';
+        COLS.forEach(function(c, i){
+          if(c.kind==='badges'){
+            html += '<td class="dt-center pc-cell">'+badgeHtml(r[i])+'</td>';
+          } else if(c.label==='Complexity'){
+            html += '<td class="dt-center">'+weightBadge(r[i])+'</td>';
+          } else {
+            var cls = (c.label==='Game') ? '' : ' class="dt-center"';
+            html += '<td'+cls+'>'+(r[i]==null?'':r[i])+'</td>';
+          }
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      mount.innerHTML = html;
+
+      var cnt = document.getElementById('explorer-count');
+      if(cnt){
+        cnt.textContent = total===0 ? 'No games match'
+          : 'Showing ' + (start+1) + '–' + end + ' of ' + total
+            + (total!==ROWS.length ? ' (filtered from ' + ROWS.length + ')' : '') + ' games';
+      }
+
+      var pager = document.getElementById('explorer-pager');
+      if(pager){
+        pager.innerHTML = '';
+        if(pageSize>0 && pageCount>1){
+          var prev = document.createElement('button');
+          prev.type='button'; prev.className='chip'; prev.textContent='‹ Prev';
+          prev.disabled = page<=0;
+          prev.addEventListener('click', function(){ if(page>0){ page--; render(); } });
+          var info = document.createElement('span');
+          info.className='pager-info'; info.textContent='Page ' + (page+1) + ' of ' + pageCount;
+          var next = document.createElement('button');
+          next.type='button'; next.className='chip'; next.textContent='Next ›';
+          next.disabled = page>=pageCount-1;
+          next.addEventListener('click', function(){ if(page<pageCount-1){ page++; render(); } });
+          pager.appendChild(prev); pager.appendChild(info); pager.appendChild(next);
+        }
+      }
+
+      mount.querySelectorAll('th').forEach(function(th){
+        th.addEventListener('click', function(){
+          var i = parseInt(th.dataset.i,10);
+          if(sortIdx===i) sortDir = -sortDir; else { sortIdx=i; sortDir=1; }
+          page=0; render();
+        });
+      });
+    }
+
+    buildFilters();
+    buildPageSize();
+    render();
+  });
+})();
+</script>
+```

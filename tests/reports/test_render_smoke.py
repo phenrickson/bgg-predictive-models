@@ -22,6 +22,7 @@ import pytest
     [
         ("predictions", "phenrickson.html"),
         ("model", "model/phenrickson.html"),
+        ("collection", "collection/phenrickson.html"),
     ],
 )
 def test_render_smoke(fixture_collection_root: Path, tmp_path: Path, report, rel_out):

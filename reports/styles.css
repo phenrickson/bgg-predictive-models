@@ -227,3 +227,102 @@ table.topn-by-year tbody tr:hover td.owned {
     background-color: #2196f3 !important;  /* slightly brighter on hover */
 }
 
+
+/* Collection explorer: faceted-filter table
+   Tokens (fall back to the cosmo dark theme values). */
+.explorer-controls, .explorer-filters, #explorer-mount, .explorer-topbar, .explorer-pager, .explorer-controls-footer {
+  --exp-accent:#4c7ef3;
+  --exp-line:color-mix(in srgb, currentColor 16%, transparent);
+  --exp-line-soft:color-mix(in srgb, currentColor 9%, transparent);
+  --exp-hover:color-mix(in srgb, currentColor 6%, transparent);
+}
+
+/* Controls surface — a clearly-framed toolbar so it reads as "the controls" */
+.explorer-controls {
+  --exp-accent:#4c7ef3;
+  --exp-line:color-mix(in srgb, currentColor 16%, transparent);
+  --exp-line-soft:color-mix(in srgb, currentColor 9%, transparent);
+  margin:1rem 0 .75rem; padding:.85rem 1rem 1rem;
+  border:1px solid var(--exp-line); border-radius:.7rem;
+  background:color-mix(in srgb, currentColor 3.5%, transparent);
+}
+.explorer-controls-title {
+  margin:0 0 .2rem; font-size:.82rem; font-weight:700; text-transform:uppercase;
+  letter-spacing:.06em; opacity:.85;
+}
+.explorer-controls-help { margin:0 0 .85rem; font-size:.8rem; opacity:.6; max-width:60ch; text-transform:none; }
+
+/* Filter groups inside the surface */
+.explorer-filters { display:flex; flex-wrap:wrap; gap:.85rem 1.5rem; align-items:flex-start; margin:0; padding:0; border:none; }
+.facet { display:flex; flex-direction:column; gap:.35rem; }
+.facet-label { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; opacity:.6; }
+.facet .chips { display:flex; flex-wrap:wrap; gap:.3rem; max-width:24rem; }
+
+/* Shared control height so chips, range inputs, and toggles line up */
+.chip, .explorer-range input, .basis-btn, .pagesize-select { height:1.9rem; box-sizing:border-box; }
+
+/* Chips — one consistent rounded-rect shape for every facet */
+.chip { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:.8rem; line-height:1; min-width:1.9rem; text-align:center; padding:0 .55rem; border:1px solid var(--exp-line); border-radius:.4rem; background:transparent; color:inherit; cursor:pointer; transition:background .12s, border-color .12s; }
+.chip:hover { border-color:var(--exp-accent); }
+.chip.active { background:var(--exp-accent); border-color:var(--exp-accent); color:#fff; font-weight:600; }
+.explorer-controls-footer { display:flex; justify-content:flex-end; margin-top:.85rem; padding-top:.75rem; border-top:1px solid var(--exp-line-soft); }
+.chip.reset { opacity:.85; }
+.chip[disabled] { opacity:.35; cursor:default; border-color:var(--exp-line-soft); }
+
+/* Range inputs — match chip height/rounding */
+.explorer-range { display:flex; gap:.35rem; }
+.explorer-range input { width:4rem; box-sizing:border-box; font:inherit; font-size:.8rem; padding:.35rem .45rem; border:1px solid var(--exp-line); border-radius:.4rem; background:transparent; color:inherit; }
+.explorer-range input:focus, .pagesize-select:focus { outline:none; border-color:var(--exp-accent); }
+
+/* Best|Recommended basis toggle (segmented) */
+.basis-toggle { display:inline-flex; align-self:flex-start; width:fit-content; border:1px solid var(--exp-line); border-radius:.4rem; overflow:hidden; margin-bottom:.1rem; }
+.basis-btn { font:inherit; font-size:.72rem; padding:.28rem .55rem; border:none; background:transparent; color:inherit; cursor:pointer; opacity:.7; }
+.basis-btn:not(:last-child) { border-right:1px solid var(--exp-line); }
+.basis-btn.active { background:var(--exp-accent); color:#fff; opacity:1; font-weight:600; }
+
+/* Player-count badges: best = filled accent, recommended-only = outlined */
+.pc-cell { white-space:nowrap; }
+.pc-badge { display:inline-block; min-width:1.35rem; text-align:center; font-size:.76rem; line-height:1.35rem; height:1.35rem; padding:0 .3rem; margin:0 .12rem; border-radius:.35rem; box-sizing:border-box; }
+.pc-best { background:rgb(241 243 246); color:#1e222b; border:1px solid rgb(241 243 246); font-weight:700; }
+.pc-rec { background:transparent; color:inherit; border:1px solid var(--exp-line); opacity:.7; }
+.badge-none { opacity:.4; }
+/* Complexity heat chip */
+.weight-badge { display:inline-block; min-width:2.6rem; padding:.15rem .4rem; border-radius:.35rem; font-size:.78rem; font-weight:600; color:var(--wi,#fff); background:var(--wc,#4c7ef3); }
+.pc-key { display:inline-flex; align-items:center; gap:.3rem; font-size:.8rem; opacity:.75; }
+.pc-key .pc-badge { margin-left:.5rem; }
+
+/* Top bar + pager */
+.explorer-topbar { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:.4rem 0 .55rem; flex-wrap:wrap; }
+.explorer-count { font-size:.82rem; opacity:.65; }
+#explorer-pagesize { display:flex; align-items:center; gap:.4rem; font-size:.82rem; opacity:.8; }
+.pagesize-select { font:inherit; font-size:.82rem; padding:.25rem .4rem; border:1px solid var(--exp-line); border-radius:.4rem; background:transparent; color:inherit; }
+.explorer-pager { display:flex; align-items:center; justify-content:center; gap:.75rem; margin:.9rem 0; }
+.pager-info { font-size:.82rem; opacity:.7; }
+.explorer-empty { opacity:.65; font-style:italic; }
+
+/* Table — tighter rows, quiet lines, no mid-cell wrapping on data columns */
+.explorer-table { width:100%; border-collapse:collapse; font-size:.88rem; }
+.explorer-table thead th { position:sticky; top:0; z-index:1; text-align:left; padding:.5rem .65rem; border-bottom:1px solid var(--exp-line); cursor:pointer; user-select:none; white-space:nowrap; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; background:var(--bs-body-bg,#1e222b); }
+.explorer-table thead th:hover { color:var(--exp-accent); }
+.explorer-table tbody td { padding:.4rem .65rem; border-bottom:1px solid var(--exp-line-soft); vertical-align:middle; }
+.explorer-table tbody tr:hover { background:var(--exp-hover); }
+.explorer-table td.dt-center, .explorer-table th.dt-center { text-align:center; }
+/* Numeric/count columns never wrap; game titles may */
+.explorer-table td.dt-center { white-space:nowrap; }
+.explorer-table td a { text-decoration:none; }
+.explorer-table td a:hover { text-decoration:underline; }
+
+/* Menu report: game cards */
+.card-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:1rem; margin:1rem 0 1.75rem; }
+.game-card { display:flex; gap:.85rem; padding:.75rem; border:1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius:.6rem; background:color-mix(in srgb, currentColor 3%, transparent); }
+.card-thumb { flex:0 0 84px; width:84px; height:84px; border-radius:.4rem; overflow:hidden; background:color-mix(in srgb, currentColor 8%, transparent); }
+.card-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.card-thumb-empty { flex:0 0 84px; }
+.card-body { flex:1 1 auto; min-width:0; }
+.card-title { font-weight:600; font-size:.95rem; margin-bottom:.2rem; }
+.card-title a { text-decoration:none; }
+.card-title a:hover { text-decoration:underline; }
+.card-desc { font-size:.8rem; opacity:.7; line-height:1.35; margin-bottom:.5rem; }
+.card-meta { display:flex; flex-wrap:wrap; gap:.35rem .9rem; align-items:center; }
+.card-meta-item { display:inline-flex; align-items:center; gap:.35rem; font-size:.8rem; }
+.card-meta-label { font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.55; }

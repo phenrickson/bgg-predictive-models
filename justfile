@@ -290,6 +290,24 @@ render-index source="local":
 render-sandbox report="predictions":
     uv run python -m reports.render --fixture --report {{report}}
 
+# --- Selections workflow (Spain trip menu) ---
+#
+# Step 1: launch the game-selector Streamlit page. Filter a collection,
+# tag games lock/maybe + status, and export reports/selections/<name>.yaml.
+select:
+    uv run streamlit run src/selections/app.py
+
+# Step 2: render the menu report from a selections file.
+#   just render-menu                  # rocky_bilbao_2026
+#   just render-menu my_trip          # reports/selections/my_trip.yaml
+render-menu name="rocky_bilbao_2026":
+    #!/usr/bin/env bash
+    set -e
+    cd reports
+    BGG_PROJECT_ROOT="$(cd .. && pwd)" uv run quarto render \
+        rocky_bilbao_2026_menu_report.qmd \
+        -P selections="selections/{{name}}.yaml"
+
 # --- Artifact sync to GCS ---
 #
 # Local experiment artifacts live under models/collections/<user>/...

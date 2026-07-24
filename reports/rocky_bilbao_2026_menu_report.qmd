@@ -1,0 +1,168 @@
+---
+title: "Rocky Bilbao 2026"
+subtitle: "The games Phil is proposing to bring to Spain that we are 100% going to play"
+date: today
+author: Who else?
+format:
+  html:
+    output-file: rocky_bilbao_2026_menu_report.html
+    toc: false
+    embed-resources: true
+    page-layout: full
+    theme: flatly
+    css: rocky_bilbao_2026.css
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  username: phenrickson
+  selections: selections/rocky_bilbao_2026.yaml
+---
+
+```{python}
+#| label: setup
+#| include: false
+import os, sys
+_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
+# qmd renders from reports/; project root is one up
+for cand in (_root, os.path.dirname(_root)):
+    if os.path.isdir(os.path.join(cand, "src")) and cand not in sys.path:
+        sys.path.insert(0, cand)
+
+from pathlib import Path
+
+_proot0 = next((p for p in sys.path if os.path.isdir(os.path.join(p, "src"))), _root)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_proot0, ".env"))
+except ImportError:
+    pass
+
+# Resolve a relative GOOGLE_APPLICATION_CREDENTIALS (repo convention in .env)
+# against the project root so the BQ client works with cwd=reports/.
+_proot = next((p for p in sys.path if os.path.isdir(os.path.join(p, "src"))), _root)
+_gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if _gac and not os.path.isabs(_gac):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(_proot, _gac)
+elif not _gac:
+    _cand = os.path.join(_proot, "credentials", "service-account-key.json")
+    if os.path.exists(_cand):
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _cand
+
+import polars as pl
+from itables import show as itables_show
+
+from src.reports.collection_data import _fetch_collection_snapshot, _fetch_games_metadata
+from src.reports.selections import load_selections
+from src.reports.game_cards import game_cards_html
+
+USERNAME = "phenrickson"
+SEL_PATH = "selections/rocky_bilbao_2026.yaml"
+```
+
+```{python}
+#| tags: [parameters]
+#| include: false
+username = "phenrickson"
+selections = "selections/rocky_bilbao_2026.yaml"
+```
+
+```{python}
+#| label: load
+#| include: false
+USERNAME = username
+sel = load_selections(Path(selections))
+collection = _fetch_collection_snapshot(sel.username or USERNAME)
+games = _fetch_games_metadata()
+
+def cards(ids, tier):
+    return game_cards_html(games, ids, tier=tier)
+```
+
+# WTF Is This
+
+This report contains the list of games Phil is proposing to bring to Spain for Florida Bros Trip 2026. 
+The current numbers:
+
+```{python}
+#| output: asis
+_kpis = [
+    ("On the menu", len(sel.menu())),
+    ("Locks", len(sel.locks())),
+    ("Maybes", len(sel.maybes())),
+    ("The Year of Our Lord", 2026),
+]
+_cards = "".join(
+    f'<div class="kpi"><div class="kpi-num">{v}</div>'
+    f'<div class="kpi-label">{k}</div></div>'
+    for k, v in _kpis
+)
+print(f'<div class="kpi-row">{_cards}</div>')
+```
+
+The "locks" are the games that are **100% in the bag no question about it** I will fight any of you who try to argue with me.
+ 
+The "maybes" are games I'm considering but have to be careful; picking from these will require dropping something else.
+
+Games in the "other" category are games that technically fit my proposed criteria but I'm not actively considering, so feel free to argue with me.
+
+**Criteria:**
+
+- Support 5 players (assuming Pat Scott has bought his plane ticket)
+- Petty player interaction
+- Small boxes preferred
+- Small table footprint preferred
+- Novelty preferred over nostalgia
+
+**Constraints:**
+
+- Everything must fit into my [board game carrying bag](https://www.allplay.com/board-game-bags/premium)
+
+# The "Locks"
+
+Games I am 100% bringing no arguments about it I will fight all of you at once.
+
+```{python}
+#| output: asis
+print(cards(sel.locks(), "locks") or "_No locks selected._")
+```
+
+# The "Maybes"
+
+Games under consideration because they have big boxes and I can't fit all of these into my bag.
+
+```{python}
+#| output: asis
+print(cards(sel.maybes(), "maybes") or "_No maybes selected._")
+```
+
+# The "Others"
+
+Other games that fit the criteria but aren't currently being considered.
+
+```{python}
+#| output: asis
+print(cards(sel.others(), "others") or "_No other games._")
+```
+
+# The Menu
+
+The games that are currently in the bag.
+
+```{python}
+#| label: menu-table
+from src.reports.tables import format_menu_table
+_menu_ids = list(sel.menu())
+_menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids else collection.head(0)
+_sel_lookup = {g: lab["selection"] for g, lab in sel.games.items()}
+itables_show(
+    format_menu_table(_menu_coll, games, selection_lookup=_sel_lookup),
+    paging=True,
+    pageLength=25,
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
+    style="width: 100%",
+    allow_html=True,
+)
+```

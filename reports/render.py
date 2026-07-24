@@ -44,6 +44,7 @@ logger = logging.getLogger("reports.render")
 _REPORTS = {
     "predictions": "predictions_report.qmd",
     "model": "model_report.qmd",
+    "collection": "collection_report.qmd",
 }
 
 
@@ -55,6 +56,8 @@ def _output_rel_path(report: str, username: str) -> Path:
     slug = slugify_username(username)
     if report == "model":
         return Path("model") / f"{slug}.html"
+    if report == "collection":
+        return Path("collection") / f"{slug}.html"
     return Path(f"{slug}.html")
 
 
@@ -214,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         "--report",
         required=True,
         choices=sorted(_REPORTS),
-        help="Which report to render: predictions or model",
+        help="Which report to render: predictions, model, or collection",
     )
     parser.add_argument(
         "--output-dir",
@@ -263,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         # spinning up Quarto. Skipped in fixture mode (no real artifacts
         # are needed). Works against both local paths and gs:// URIs
         # via fsspec inside select_candidate.
-        if not args.fixture:
+        if not args.fixture and args.report != "collection":
             from src.reports.collection_data import (
                 MissingArtifactsError,
                 select_candidate,

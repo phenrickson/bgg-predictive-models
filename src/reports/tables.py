@@ -29,6 +29,18 @@ def _safe_col(pdf: pd.DataFrame, col: str, default=None) -> list:
 _STATUS_PRIORITY = ["Own", "Preordered", "Wishlist", "Want", "Prev. Owned"]
 
 
+def _sort_player_counts(raw) -> str:
+    """Render a comma-separated player-count string in ascending numeric
+    order. The warehouse stores them vote-ordered (e.g. "4, 3"); we want
+    "3, 4". Non-numeric buckets like "4+" sort to the end, order kept."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return ""
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    numeric = sorted((p for p in parts if p.isdigit()), key=int)
+    other = [p for p in parts if not p.isdigit()]
+    return ", ".join(numeric + other)
+
+
 def format_collection_table(
     collection: pl.DataFrame, games: pl.DataFrame
 ) -> pd.DataFrame:
@@ -65,6 +77,8 @@ def format_collection_table(
     min_t = _safe_col(pdf, "min_playtime", None)
     max_t = _safe_col(pdf, "max_playtime", None)
     weights = _safe_col(pdf, "average_weight", None)
+    best_pc = _safe_col(pdf, "best_player_counts", "")
+    rec_pc = _safe_col(pdf, "recommended_player_counts", "")
 
     def _row_status(r: pd.Series) -> str:
         if bool(r.get("owned", False)):
@@ -108,6 +122,8 @@ def format_collection_table(
                 format_range(_fmt_int(lo), _fmt_int(hi))
                 for lo, hi in zip(min_p, max_p)
             ],
+            "Best": [_sort_player_counts(c) for c in best_pc],
+            "Recommended": [_sort_player_counts(c) for c in rec_pc],
             "Playtime": [
                 format_range(_fmt_int(lo), _fmt_int(hi), " min")
                 for lo, hi in zip(min_t, max_t)
@@ -228,6 +244,101 @@ def format_predictions_with_images(
     # Older Games / model report don't pass it, so this is a no-op there.
     if "is_new_7d" in view.columns:
         rows["_is_new"] = [bool(x) for x in view["is_new_7d"].tolist()]
+    return pd.DataFrame(rows)
+
+
+def format_menu_table(
+    collection: pl.DataFrame,
+    games: pl.DataFrame,
+    selection_lookup: dict | None = None,
+) -> pd.DataFrame:
+    """Static menu table for the Spain report:
+    Game | Selection | Players | Recommended | Playtime | Complexity.
+
+    `selection_lookup` maps game_id -> "lock"/"maybe" (rendered as a pill).
+    Recommended is player-count badges; Complexity a heat chip."""
+    from src.reports.game_cards import complexity_chip, player_badges
+
+    base = format_collection_table(collection, games)  # Game|Status|rating|Players|Best|Recommended|Playtime|Complexity
+    if base.empty:
+        return pd.DataFrame()
+    sel = selection_lookup or {}
+    meta = {int(r["game_id"]): r for r in games.iter_rows(named=True)} if games.height else {}
+
+    def _gid(link_html):
+        import re
+        m = re.search(r"/boardgame/(\d+)", str(link_html))
+        return int(m.group(1)) if m else None
+
+    def _sel_pill(g):
+        v = sel.get(int(g)) if g is not None else None
+        if v == "lock":
+            return '<span class="sel-pill sel-lock">Lock</span>'
+        if v == "maybe":
+            return '<span class="sel-pill sel-maybe">Maybe</span>'
+        return ""
+
+    gids = [_gid(x) for x in base["Game"]]
+    return pd.DataFrame(
+        {
+            "Game": list(base["Game"]),
+            "Selection": [_sel_pill(g) for g in gids],
+            "Players": list(base["Players"]),
+            "Recommended": [
+                player_badges(
+                    (meta.get(g) or {}).get("best_player_counts"),
+                    (meta.get(g) or {}).get("recommended_player_counts"),
+                )
+                if g is not None else ""
+                for g in gids
+            ],
+            "Playtime": list(base["Playtime"]),
+            "Complexity": [
+                complexity_chip((meta.get(g) or {}).get("average_weight")) if g is not None else ""
+                for g in gids
+            ],
+        }
+    )
+
+
+def format_selection_table(
+    games: pl.DataFrame, game_ids: list[int]
+) -> pd.DataFrame:
+    """Image+description table for the menu report's Locks/Maybes/Others.
+
+    Columns: Image | Game | Description | Recommended | Complexity | Playtime.
+    Rows follow `game_ids` order, skipping ids absent from `games`. Reuses the
+    same badge/heat helpers as the explorer so all reports read alike.
+    """
+    from src.reports.game_cards import complexity_chip, player_badges
+
+    if not game_ids or games is None or games.height == 0:
+        return pd.DataFrame()
+    by_id = {int(r["game_id"]): r for r in games.iter_rows(named=True)}
+    rows = []
+    for gid in game_ids:
+        r = by_id.get(int(gid))
+        if r is None:
+            continue
+        lo, hi = r.get("min_playtime"), r.get("max_playtime")
+        rows.append(
+            {
+                "Image": img_tag(r.get("image") or r.get("thumbnail")),
+                "Game": bgg_link(
+                    int(gid), r.get("name") or r.get("game_name") or "", r.get("year_published")
+                ),
+                "Description": truncate(r.get("description")),
+                "Recommended": player_badges(
+                    r.get("best_player_counts"), r.get("recommended_player_counts")
+                ),
+                "Complexity": complexity_chip(r.get("average_weight")),
+                "Playtime": format_range(
+                    int(lo) if lo not in (None, 0) and not pd.isna(lo) else None,
+                    int(hi) if hi not in (None, 0) and not pd.isna(hi) else None,
+                    " min",
+                ),
+            }
+        )
     return pd.DataFrame(rows)
 
 
