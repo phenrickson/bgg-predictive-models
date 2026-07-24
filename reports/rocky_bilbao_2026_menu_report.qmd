@@ -1,0 +1,153 @@
+---
+title: "Rocky Bilbao 2026"
+subtitle: "The games Phil is proposing to bring to Spain"
+date: today
+format:
+  html:
+    output-file: rocky_bilbao_2026_menu_report.html
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    embed-resources: true
+    page-layout: full
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    mainfont: "Roboto, 'Helvetica Neue', Arial, sans-serif"
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  username: phenrickson
+  selections: selections/rocky_bilbao_2026.yaml
+---
+
+```{python}
+#| label: setup
+#| include: false
+import os, sys
+_root = os.environ.get("BGG_PROJECT_ROOT") or os.getcwd()
+# qmd renders from reports/; project root is one up
+for cand in (_root, os.path.dirname(_root)):
+    if os.path.isdir(os.path.join(cand, "src")) and cand not in sys.path:
+        sys.path.insert(0, cand)
+
+from pathlib import Path
+
+_proot0 = next((p for p in sys.path if os.path.isdir(os.path.join(p, "src"))), _root)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_proot0, ".env"))
+except ImportError:
+    pass
+
+# Resolve a relative GOOGLE_APPLICATION_CREDENTIALS (repo convention in .env)
+# against the project root so the BQ client works with cwd=reports/.
+_proot = next((p for p in sys.path if os.path.isdir(os.path.join(p, "src"))), _root)
+_gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if _gac and not os.path.isabs(_gac):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(_proot, _gac)
+elif not _gac:
+    _cand = os.path.join(_proot, "credentials", "service-account-key.json")
+    if os.path.exists(_cand):
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _cand
+
+import polars as pl
+from itables import show as itables_show
+
+from src.reports.collection_data import _fetch_collection_snapshot, _fetch_games_metadata
+from src.reports.selections import load_selections
+from src.reports.tables import format_selection_table
+
+USERNAME = "phenrickson"
+SEL_PATH = "selections/rocky_bilbao_2026.yaml"
+```
+
+```{python}
+#| tags: [parameters]
+#| include: false
+username = "phenrickson"
+selections = "selections/rocky_bilbao_2026.yaml"
+```
+
+```{python}
+#| label: load
+#| include: false
+USERNAME = username
+sel = load_selections(Path(selections))
+collection = _fetch_collection_snapshot(sel.username or USERNAME)
+games = _fetch_games_metadata()
+
+def section_table(ids):
+    itables_show(
+        format_selection_table(games, ids),
+        paging=True,
+        pageLength=10,
+        classes="display compact",
+        columnDefs=[{"className": "dt-center", "targets": [3, 4, 5]}],
+        style="width: 100%",
+        allow_html=True,
+    )
+```
+
+# About
+
+This document lists the board games Phil is proposing to bring to Spain.
+
+```{python}
+#| output: asis
+crit = sel.criteria or {}
+lines = ["**The constraints:**", ""]
+for k, v in crit.items():
+    lines.append(f"- {k}: {v}")
+print("\n".join(lines) if crit else "_No criteria recorded._")
+```
+
+# The "Locks"
+
+Games I am 100% bringing — you will have to fight me otherwise.
+
+```{python}
+#| label: locks-table
+section_table(sel.locks())
+```
+
+# The "Maybes"
+
+Games under consideration — can't bring 'em all.
+
+```{python}
+#| label: maybes-table
+section_table(sel.maybes())
+```
+
+# The "Others"
+
+Other games that fit the criteria but aren't currently being considered.
+
+```{python}
+#| label: others-table
+section_table(sel.others())
+```
+
+# The Menu
+
+The list of games I'm planning to bring, derived from the selections.
+
+```{python}
+#| label: menu-table
+from src.reports.tables import format_menu_table
+_menu_ids = list(sel.menu())
+_menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids else collection.head(0)
+itables_show(
+    format_menu_table(_menu_coll, games),
+    paging=True,
+    pageLength=25,
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5, 6]}],
+    style="width: 100%",
+    allow_html=True,
+)
+```

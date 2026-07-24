@@ -42,4 +42,9 @@ print(
 Explore **`{python} USERNAME`**'s board game collection. Use the filters to
 narrow by player count, complexity, and playing time.
 
+## Games {#explorer-table}
+
+Explore the collection below. Use the filters to narrow the list; click a column
+header to sort.
+
 {{< include _collection_explorer.qmd >}}

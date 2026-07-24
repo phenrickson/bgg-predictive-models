@@ -247,6 +247,97 @@ def format_predictions_with_images(
     return pd.DataFrame(rows)
 
 
+def format_menu_table(
+    collection: pl.DataFrame, games: pl.DataFrame
+) -> pd.DataFrame:
+    """Static menu table matching the explorer's columns (no JS/filters):
+    Game | Status | Your rating | Players | Recommended | Playtime | Complexity,
+    with Recommended rendered as player-count badges and Complexity as a heat
+    chip (same helpers as the explorer / section tables)."""
+    from src.reports.game_cards import complexity_chip, player_badges
+
+    base = format_collection_table(collection, games)  # Game|Status|rating|Players|Best|Recommended|Playtime|Complexity
+    if base.empty:
+        return pd.DataFrame()
+    # Map game metadata for badge inputs, keyed by the bgg link's id.
+    meta = {int(r["game_id"]): r for r in games.iter_rows(named=True)} if games.height else {}
+
+    def _gid(link_html):
+        import re
+        m = re.search(r"/boardgame/(\d+)", str(link_html))
+        return int(m.group(1)) if m else None
+
+    out = pd.DataFrame(
+        {
+            "Game": base["Game"],
+            "Status": base["Status"],
+            "Your rating": base["Your rating"],
+            "Players": base["Players"],
+            "Playtime": base["Playtime"],
+        }
+    )
+    gids = [_gid(x) for x in base["Game"]]
+    out.insert(
+        4,
+        "Recommended",
+        [
+            player_badges(
+                (meta.get(g) or {}).get("best_player_counts"),
+                (meta.get(g) or {}).get("recommended_player_counts"),
+            )
+            if g is not None
+            else ""
+            for g in gids
+        ],
+    )
+    out["Complexity"] = [
+        complexity_chip((meta.get(g) or {}).get("average_weight")) if g is not None else ""
+        for g in gids
+    ]
+    return out
+
+
+def format_selection_table(
+    games: pl.DataFrame, game_ids: list[int]
+) -> pd.DataFrame:
+    """Image+description table for the menu report's Locks/Maybes/Others.
+
+    Columns: Image | Game | Description | Recommended | Complexity | Playtime.
+    Rows follow `game_ids` order, skipping ids absent from `games`. Reuses the
+    same badge/heat helpers as the explorer so all reports read alike.
+    """
+    from src.reports.game_cards import complexity_chip, player_badges
+
+    if not game_ids or games is None or games.height == 0:
+        return pd.DataFrame()
+    by_id = {int(r["game_id"]): r for r in games.iter_rows(named=True)}
+    rows = []
+    for gid in game_ids:
+        r = by_id.get(int(gid))
+        if r is None:
+            continue
+        lo, hi = r.get("min_playtime"), r.get("max_playtime")
+        rows.append(
+            {
+                "Image": img_tag(r.get("image") or r.get("thumbnail")),
+                "Game": bgg_link(
+                    int(gid), r.get("name") or r.get("game_name") or "", r.get("year_published")
+                ),
+                "Description": truncate(r.get("description")),
+                "Recommended": player_badges(
+                    r.get("best_player_counts"), r.get("recommended_player_counts")
+                ),
+                "Complexity": complexity_chip(r.get("average_weight")),
+                "Playtime": format_range(
+                    int(lo) if lo not in (None, 0) and not pd.isna(lo) else None,
+                    int(hi) if hi not in (None, 0) and not pd.isna(hi) else None,
+                    " min",
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build_status_lookup(collection: pl.DataFrame) -> dict[int, str]:
     """Per-game status from the user's collection.
 

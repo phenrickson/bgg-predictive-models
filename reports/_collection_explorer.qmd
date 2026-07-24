@@ -1,14 +1,13 @@
-## Games {#explorer-table}
-
-Explore the collection below. Use the filters to narrow the list; click a column
-header to sort.
-
 ```{python}
 #| label: explorer-payload
 #| output: asis
 import json
 from src.reports.explorer import build_explorer_payload
-_payload = build_explorer_payload(data.collection, data.games)
+# The including report may set `explorer_collection` / `explorer_games` to
+# scope the table (e.g. the menu report). Fall back to the full `data` bundle.
+_ec = explorer_collection if "explorer_collection" in dir() else data.collection
+_eg = explorer_games if "explorer_games" in dir() else data.games
+_payload = build_explorer_payload(_ec, _eg)
 print(
     '<script id="explorer-data" type="application/json">'
     + json.dumps(_payload)

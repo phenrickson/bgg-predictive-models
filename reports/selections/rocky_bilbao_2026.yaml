@@ -1,0 +1,14 @@
+name: rocky_bilbao_2026
+username: phenrickson
+criteria:
+  players: [5]
+  note: sample fixture — replace via the Selections app
+games:
+  447305: {selection: lock, status: "yes"}
+  139976: {selection: lock, status: "yes"}
+  102794: {selection: lock, status: "yes"}
+  432527: {selection: maybe, status: "yes"}
+  446497: {selection: maybe, status: "no"}
+  338960: {selection: maybe, status: "no"}
+  387866: {selection: "no", status: "no"}
+  381248: {selection: "no", status: "no"}

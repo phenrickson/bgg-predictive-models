@@ -311,3 +311,18 @@ table.topn-by-year tbody tr:hover td.owned {
 .explorer-table td.dt-center { white-space:nowrap; }
 .explorer-table td a { text-decoration:none; }
 .explorer-table td a:hover { text-decoration:underline; }
+
+/* Menu report: game cards */
+.card-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:1rem; margin:1rem 0 1.75rem; }
+.game-card { display:flex; gap:.85rem; padding:.75rem; border:1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius:.6rem; background:color-mix(in srgb, currentColor 3%, transparent); }
+.card-thumb { flex:0 0 84px; width:84px; height:84px; border-radius:.4rem; overflow:hidden; background:color-mix(in srgb, currentColor 8%, transparent); }
+.card-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.card-thumb-empty { flex:0 0 84px; }
+.card-body { flex:1 1 auto; min-width:0; }
+.card-title { font-weight:600; font-size:.95rem; margin-bottom:.2rem; }
+.card-title a { text-decoration:none; }
+.card-title a:hover { text-decoration:underline; }
+.card-desc { font-size:.8rem; opacity:.7; line-height:1.35; margin-bottom:.5rem; }
+.card-meta { display:flex; flex-wrap:wrap; gap:.35rem .9rem; align-items:center; }
+.card-meta-item { display:inline-flex; align-items:center; gap:.35rem; font-size:.8rem; }
+.card-meta-label { font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.55; }
