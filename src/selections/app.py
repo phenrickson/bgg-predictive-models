@@ -243,6 +243,10 @@ def selector_panel():
     grid_opts = gb.build()
     grid_opts["getRowStyle"] = row_style
 
+    # Key on the FILTER values (not labels): a filter change re-seeds the grid
+    # with the newly-filtered rows; editing a label leaves the key unchanged so
+    # the grid keeps its sort/scroll and doesn't thrash.
+    filter_key = f"grid_{rec_player}_{supports}_{cx[0]}_{cx[1]}_{pt_max}"
     grid = AgGrid(
         df,
         gridOptions=grid_opts,
@@ -252,7 +256,7 @@ def selector_panel():
         theme="balham",
         height=560,
         use_container_width=True,
-        key="selector_grid",
+        key=filter_key,
     )
     # Merge the grid's current data back into session_state (persists edits
     # across filter changes; the grid keeps its own sort while you edit).

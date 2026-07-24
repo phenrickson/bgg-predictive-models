@@ -143,12 +143,13 @@ The list of games I'm planning to bring, derived from the selections.
 from src.reports.tables import format_menu_table
 _menu_ids = list(sel.menu())
 _menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids else collection.head(0)
+_sel_lookup = {g: lab["selection"] for g, lab in sel.games.items()}
 itables_show(
-    format_menu_table(_menu_coll, games),
+    format_menu_table(_menu_coll, games, selection_lookup=_sel_lookup),
     paging=True,
     pageLength=25,
     classes="display compact",
-    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5, 6]}],
+    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
     style="width: 100%",
     allow_html=True,
 )

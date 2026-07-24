@@ -161,6 +161,11 @@ a { color: var(--rioja); }
 .tile-others { opacity: .9; }
 .tile-others .tile-cover { filter: saturate(.9); }
 
+/* Selection pill in the Menu table */
+.sel-pill { display:inline-block; padding:.15rem .6rem; border-radius:1rem; font-size:.74rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
+.sel-lock { background:var(--rioja); color:#fff; }
+.sel-maybe { background:var(--olive); color:#fff; }
+
 /* ---- The Menu table (kept static; warmed to match) ---- */
 table.dataTable { font-size: .88rem; }
 .dataTables_wrapper { margin-top: .5rem; }

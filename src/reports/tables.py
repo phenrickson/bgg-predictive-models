@@ -248,18 +248,21 @@ def format_predictions_with_images(
 
 
 def format_menu_table(
-    collection: pl.DataFrame, games: pl.DataFrame
+    collection: pl.DataFrame,
+    games: pl.DataFrame,
+    selection_lookup: dict | None = None,
 ) -> pd.DataFrame:
-    """Static menu table matching the explorer's columns (no JS/filters):
-    Game | Status | Your rating | Players | Recommended | Playtime | Complexity,
-    with Recommended rendered as player-count badges and Complexity as a heat
-    chip (same helpers as the explorer / section tables)."""
+    """Static menu table for the Spain report:
+    Game | Selection | Players | Recommended | Playtime | Complexity.
+
+    `selection_lookup` maps game_id -> "lock"/"maybe" (rendered as a pill).
+    Recommended is player-count badges; Complexity a heat chip."""
     from src.reports.game_cards import complexity_chip, player_badges
 
     base = format_collection_table(collection, games)  # Game|Status|rating|Players|Best|Recommended|Playtime|Complexity
     if base.empty:
         return pd.DataFrame()
-    # Map game metadata for badge inputs, keyed by the bgg link's id.
+    sel = selection_lookup or {}
     meta = {int(r["game_id"]): r for r in games.iter_rows(named=True)} if games.height else {}
 
     def _gid(link_html):
@@ -267,34 +270,35 @@ def format_menu_table(
         m = re.search(r"/boardgame/(\d+)", str(link_html))
         return int(m.group(1)) if m else None
 
-    out = pd.DataFrame(
+    def _sel_pill(g):
+        v = sel.get(int(g)) if g is not None else None
+        if v == "lock":
+            return '<span class="sel-pill sel-lock">Lock</span>'
+        if v == "maybe":
+            return '<span class="sel-pill sel-maybe">Maybe</span>'
+        return ""
+
+    gids = [_gid(x) for x in base["Game"]]
+    return pd.DataFrame(
         {
-            "Game": base["Game"],
-            "Status": base["Status"],
-            "Your rating": base["Your rating"],
-            "Players": base["Players"],
-            "Playtime": base["Playtime"],
+            "Game": list(base["Game"]),
+            "Selection": [_sel_pill(g) for g in gids],
+            "Players": list(base["Players"]),
+            "Recommended": [
+                player_badges(
+                    (meta.get(g) or {}).get("best_player_counts"),
+                    (meta.get(g) or {}).get("recommended_player_counts"),
+                )
+                if g is not None else ""
+                for g in gids
+            ],
+            "Playtime": list(base["Playtime"]),
+            "Complexity": [
+                complexity_chip((meta.get(g) or {}).get("average_weight")) if g is not None else ""
+                for g in gids
+            ],
         }
     )
-    gids = [_gid(x) for x in base["Game"]]
-    out.insert(
-        4,
-        "Recommended",
-        [
-            player_badges(
-                (meta.get(g) or {}).get("best_player_counts"),
-                (meta.get(g) or {}).get("recommended_player_counts"),
-            )
-            if g is not None
-            else ""
-            for g in gids
-        ],
-    )
-    out["Complexity"] = [
-        complexity_chip((meta.get(g) or {}).get("average_weight")) if g is not None else ""
-        for g in gids
-    ]
-    return out
 
 
 def format_selection_table(
