@@ -1,0 +1,3 @@
+# Collection
+
+_Explorer fragment — filters and table added in Task 2._

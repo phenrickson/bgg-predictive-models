@@ -1,0 +1,45 @@
+---
+title: "Collection Explorer"
+date: today
+format:
+  html:
+    toc: true
+    toc-location: right
+    toc-depth: 2
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: true
+    theme:
+      - cosmo
+      - theme.scss
+    css: styles.css
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  message: false
+  daemon: false
+params:
+  username: phenrickson
+  outcome: own
+  source: local
+  candidate: ""
+  fixture: false
+---
+
+{{< include _setup.qmd >}}
+
+```{python}
+#| output: asis
+#| echo: false
+print(
+    f'---\ntitle: "{USERNAME}\'s Collection"\nsubtitle: "Explore & Filter"\n---'
+)
+```
+
+# About
+
+Explore **`{python} USERNAME`**'s board game collection. Use the filters to
+narrow by player count, complexity, and playing time.
+
+{{< include _collection_explorer.qmd >}}
