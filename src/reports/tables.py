@@ -257,7 +257,7 @@ def format_menu_table(
 
     `selection_lookup` maps game_id -> "lock"/"maybe" (rendered as a pill).
     Recommended is player-count badges; Complexity a heat chip."""
-    from src.reports.game_cards import complexity_chip, player_badges
+    from src.reports.game_cards import complexity_chip_labeled, player_badges
 
     base = format_collection_table(collection, games)  # Game|Status|rating|Players|Best|Recommended|Playtime|Complexity
     if base.empty:
@@ -294,7 +294,7 @@ def format_menu_table(
             ],
             "Playtime": list(base["Playtime"]),
             "Complexity": [
-                complexity_chip((meta.get(g) or {}).get("average_weight")) if g is not None else ""
+                complexity_chip_labeled((meta.get(g) or {}).get("average_weight")) if g is not None else ""
                 for g in gids
             ],
         }

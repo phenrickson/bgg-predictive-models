@@ -2,7 +2,7 @@ name: rocky_bilbao_2026
 username: phenrickson
 criteria:
   recommended_at: any
-  supports: 5
+  supports: any
   complexity:
   - 1.0
   - 5.0
@@ -52,7 +52,7 @@ games:
     status: 'no'
   167355:
     selection: maybe
-    status: 'no'
+    status: 'yes'
   175914:
     selection: other
     status: 'no'
@@ -97,7 +97,7 @@ games:
     status: 'no'
   340466:
     selection: maybe
-    status: 'yes'
+    status: 'no'
   350689:
     selection: maybe
     status: 'no'

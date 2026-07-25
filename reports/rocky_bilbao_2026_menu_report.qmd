@@ -130,9 +130,8 @@ _menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids 
 _sel_lookup = {g: lab["selection"] for g, lab in sel.games.items()}
 itables_show(
     format_menu_table(_menu_coll, games, selection_lookup=_sel_lookup),
-    paging=True,
-    pageLength=50,
-    dom="tip",
+    paging=False,
+    dom="ti",
     classes="display compact",
     columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
     style="width: 100%",
