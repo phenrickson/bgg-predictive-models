@@ -91,7 +91,6 @@ _kpis = [
     ("On the menu", len(sel.menu())),
     ("Locks", len(sel.locks())),
     ("Maybes", len(sel.maybes())),
-    ("The Year of Our Lord", 2026),
 ]
 _cards = "".join(
     f'<div class="kpi"><div class="kpi-num">{v}</div>'
@@ -119,6 +118,28 @@ Games in the "other" category are games that technically fit my proposed criteri
 
 - Everything must fit into my [board game carrying bag](https://www.allplay.com/board-game-bags/premium)
 
+# The Menu
+
+The games that are currently in the bag.
+
+```{python}
+#| label: menu-table
+from src.reports.tables import format_menu_table
+_menu_ids = list(sel.menu())
+_menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids else collection.head(0)
+_sel_lookup = {g: lab["selection"] for g, lab in sel.games.items()}
+itables_show(
+    format_menu_table(_menu_coll, games, selection_lookup=_sel_lookup),
+    paging=True,
+    pageLength=50,
+    dom="tip",
+    classes="display compact",
+    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
+    style="width: 100%",
+    allow_html=True,
+)
+```
+
 # The "Locks"
 
 Games I am 100% bringing no arguments about it I will fight all of you at once.
@@ -144,25 +165,4 @@ Other games that fit the criteria but aren't currently being considered.
 ```{python}
 #| output: asis
 print(cards(sel.others(), "others") or "_No other games._")
-```
-
-# The Menu
-
-The games that are currently in the bag.
-
-```{python}
-#| label: menu-table
-from src.reports.tables import format_menu_table
-_menu_ids = list(sel.menu())
-_menu_coll = collection.filter(pl.col("game_id").is_in(_menu_ids)) if _menu_ids else collection.head(0)
-_sel_lookup = {g: lab["selection"] for g, lab in sel.games.items()}
-itables_show(
-    format_menu_table(_menu_coll, games, selection_lookup=_sel_lookup),
-    paging=True,
-    pageLength=25,
-    classes="display compact",
-    columnDefs=[{"className": "dt-center", "targets": [1, 2, 3, 4, 5]}],
-    style="width: 100%",
-    allow_html=True,
-)
 ```

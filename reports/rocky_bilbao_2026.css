@@ -24,12 +24,13 @@ body {
   line-height: 1.55;
 }
 
-/* Widen the content well past Quarto's default narrow column, but keep a
-   comfortable max width and side gutters so it doesn't sprawl edge-to-edge. */
+/* Full page width with a symmetric inset from the viewport edges (no fixed
+   cap) — content fills the page minus the inset. */
 #quarto-content, main.content, .page-columns, #quarto-document-content {
-  max-width: 1180px !important;
-  margin-inline: auto !important;
-  padding-inline: 2rem !important;
+  max-width: none !important;
+  width: auto !important;
+  margin-inline: 0 !important;
+  padding-inline: clamp(1rem, 4vw, 4rem) !important;
 }
 main.content { width: 100% !important; }
 /* No sidebar/TOC column — reclaim the full width for content. */
@@ -179,3 +180,31 @@ table.dataTable a:hover { text-decoration: underline; }
 
 /* TOC + chrome warmed */
 #TOC, .sidebar { color: var(--ink-soft); }
+
+/* ---- Mobile ---- */
+@media (max-width: 640px) {
+  /* Tighter gutters so content isn't squeezed on a phone. */
+  #quarto-content, main.content, .page-columns, #quarto-document-content {
+    padding-inline: 1rem !important;
+  }
+  .quarto-title-block .quarto-title .title,
+  h1.title { font-size: 2rem !important; }
+  h1 { font-size: 1.5rem; margin-top: 1.8rem; }
+
+  /* KPIs stack 2-up instead of cramming 4 across. */
+  .kpi-row { gap: .6rem; }
+  .kpi { flex: 1 1 calc(50% - .6rem); padding: .75rem .85rem; }
+  .kpi-num { font-size: 1.9rem; }
+
+  /* One tile per row, full width — no forced 280px min. */
+  .tile-grid { grid-template-columns: 1fr; gap: .85rem; }
+  /* Landscape-ish cover so a single-column tile isn't absurdly tall. */
+  .tile-cover { aspect-ratio: 16 / 6; }
+
+  /* The Menu table scrolls inside its own box instead of overflowing the page. */
+  .dataTables_wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.dataTable { font-size: .82rem; }
+}
+
+/* Any wide table wrapper never pushes the page sideways. */
+.dataTables_wrapper, .cell-output-display { max-width: 100%; overflow-x: auto; }
