@@ -247,9 +247,19 @@ table.topn-by-year tbody tr:hover td.owned {
   background:color-mix(in srgb, currentColor 3.5%, transparent);
 }
 .explorer-controls-title {
-  margin:0 0 .2rem; font-size:.82rem; font-weight:700; text-transform:uppercase;
+  margin:0; font-size:.82rem; font-weight:700; text-transform:uppercase;
   letter-spacing:.06em; opacity:.85;
+  cursor:pointer; user-select:none; list-style:none;
+  display:flex; align-items:center; gap:.45rem;
 }
+.explorer-controls-title::-webkit-details-marker { display:none; }
+/* disclosure caret that rotates when open */
+.explorer-controls-title::before {
+  content:"▸"; font-size:.7rem; opacity:.7; transition:transform .12s ease;
+}
+.explorer-controls[open] .explorer-controls-title::before { transform:rotate(90deg); }
+/* space the groups from the summary only when open */
+.explorer-controls[open] .explorer-filters { margin-top:.75rem; }
 .explorer-controls-help { margin:0 0 .85rem; font-size:.8rem; opacity:.6; max-width:60ch; text-transform:none; }
 
 /* Filter groups inside the surface */
@@ -301,11 +311,24 @@ table.topn-by-year tbody tr:hover td.owned {
 .explorer-empty { opacity:.65; font-style:italic; }
 
 /* Table — tighter rows, quiet lines, no mid-cell wrapping on data columns */
+/* Table sits directly on the page ground (transparent), like the other
+   report tables — so it never reads as a dark rectangle pasted on the
+   blue-ish page. The sticky header needs an opaque fill to cover rows as
+   they scroll under it; inherit the actual page background color. */
+.explorer-table,
+.explorer-table thead, .explorer-table tbody, .explorer-table tr,
+.explorer-table th, .explorer-table td {
+  background:transparent !important; background-color:transparent !important;
+  background-image:none !important;
+  --bs-table-bg: transparent !important;
+  --bs-table-accent-bg: transparent !important;
+  --bs-table-striped-bg: transparent !important;
+}
 .explorer-table { width:100%; border-collapse:collapse; font-size:.88rem; }
-.explorer-table thead th { position:sticky; top:0; z-index:1; text-align:left; padding:.5rem .65rem; border-bottom:1px solid var(--exp-line); cursor:pointer; user-select:none; white-space:nowrap; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; background:var(--bs-body-bg,#1e222b); }
+.explorer-table thead th { position:sticky; top:0; z-index:1; text-align:left; padding:.5rem .65rem; border-bottom:2px solid var(--exp-line); cursor:pointer; user-select:none; white-space:nowrap; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; background:#0f0f1a !important; }
 .explorer-table thead th:hover { color:var(--exp-accent); }
-.explorer-table tbody td { padding:.4rem .65rem; border-bottom:1px solid var(--exp-line-soft); vertical-align:middle; }
-.explorer-table tbody tr:hover { background:var(--exp-hover); }
+.explorer-table tbody td { padding:.4rem .65rem; border-bottom:1px solid var(--exp-line-soft); vertical-align:middle; background:transparent; }
+.explorer-table tbody tr:hover td { background:var(--exp-hover) !important; }
 .explorer-table td.dt-center, .explorer-table th.dt-center { text-align:center; }
 /* Numeric/count columns never wrap; game titles may */
 .explorer-table td.dt-center { white-space:nowrap; }
@@ -326,3 +349,38 @@ table.topn-by-year tbody tr:hover td.owned {
 .card-meta { display:flex; flex-wrap:wrap; gap:.35rem .9rem; align-items:center; }
 .card-meta-item { display:inline-flex; align-items:center; gap:.35rem; font-size:.8rem; }
 .card-meta-label { font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.55; }
+
+/* Themed 'top games' sections — tile cards, dark-theme tuned. Mirrors the
+   Spain report's .tile markup but uses the collection report's dark ground. */
+
+/* Subsection headers (Best at N / Economic / …) — a full-width banded header
+   so each block clearly breaks from the one above. Accent chip + rule. */
+#quarto-document-content h3 {
+  margin:2.75rem 0 1rem;
+  padding:.5rem .9rem;
+  font-size:1.05rem; font-weight:700; line-height:1.1;
+  text-transform:uppercase; letter-spacing:.06em;
+  color:#e6ecff;
+  background:linear-gradient(90deg, rgba(76,126,243,.22), rgba(76,126,243,.02));
+  border-left:4px solid #4c7ef3;
+  border-radius:.35rem;
+}
+/* First subsection right under a group H1 shouldn't have the big top gap. */
+#quarto-document-content h1 + p + div h3:first-child,
+#quarto-document-content h3:first-of-type { margin-top:1.5rem; }
+
+/* Compact tiles: shorter cover + description clamped to one line + tighter
+   body, so sections don't eat so much vertical space. */
+.tile-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:.75rem; margin:.6rem 0 1.25rem; }
+.tile { display:flex; flex-direction:column; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.10); border-radius:.55rem; overflow:hidden; text-decoration:none !important; color:#e2e8f0 !important; transition:transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
+.tile:hover { transform:translateY(-2px); border-color:#4c7ef3; box-shadow:0 8px 18px rgba(0,0,0,.35); }
+.tile-cover { aspect-ratio:16/6; background:rgba(255,255,255,.06); overflow:hidden; }
+.tile-cover img { width:100%; height:100%; object-fit:cover; display:block; }
+.tile-body { padding:.55rem .7rem .6rem; display:flex; flex-direction:column; gap:.3rem; flex:1; }
+.tile-name { font-weight:700; font-size:.92rem; line-height:1.15; }
+.tile-year { color:#94a3b8; font-weight:400; margin-left:.3rem; font-size:.82em; }
+.tile-desc { font-size:.76rem; color:#94a3b8; line-height:1.3; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }
+.tile-meta { margin-top:auto; display:flex; flex-direction:column; gap:.25rem; padding-top:.4rem; border-top:1px solid rgba(255,255,255,.08); }
+.tile-meta-item { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; font-size:.78rem; }
+.tile-meta-k { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; opacity:.55; min-width:4.6rem; }
+.tile-time { font-variant-numeric:tabular-nums; }

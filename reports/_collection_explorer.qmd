@@ -16,12 +16,11 @@ print(
 ```
 
 ```{=html}
-<div class="explorer-controls">
-  <div class="explorer-controls-title">Filters</div>
-  <!-- <p class="explorer-controls-help">Click values to filter. Chips within a group combine with <strong>or</strong>; groups combine with <strong>and</strong>. Numeric filters keep games with unknown values.</p> -->
+<details class="explorer-controls">
+  <summary class="explorer-controls-title">Filters</summary>
   <div id="explorer-filters" class="explorer-filters"></div>
   <div id="explorer-controls-footer" class="explorer-controls-footer"></div>
-</div>
+</details>
 ```
 
 ```{=html}
@@ -274,6 +273,12 @@ print(
       var n = parseFloat(String(cell).replace(/[^0-9.\-]/g,''));
       return isNaN(n) ? null : n;
     }
+    // Plain text for lexical sort: strip HTML tags (e.g. the Game column's
+    // <a> link) so we compare the visible name, not the markup.
+    function sortText(cell){
+      if(cell && typeof cell==='object') return '';
+      return String(cell).replace(/<[^>]*>/g, '').trim().toLowerCase();
+    }
 
     // ---- render table ----
     function render(){
@@ -282,7 +287,7 @@ print(
         filtered = filtered.slice().sort(function(a,b){
           var ak=sortKey(a[sortIdx]), bk=sortKey(b[sortIdx]);
           if(ak!==null && bk!==null) return (ak-bk)*sortDir;
-          return String(a[sortIdx]).localeCompare(String(b[sortIdx]))*sortDir;
+          return sortText(a[sortIdx]).localeCompare(sortText(b[sortIdx]))*sortDir;
         });
       }
       var total = filtered.length;
