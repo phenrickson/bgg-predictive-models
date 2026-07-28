@@ -5,7 +5,7 @@ format:
   html:
     toc: true
     toc-location: right
-    toc-depth: 2
+    toc-depth: 3
     code-fold: true
     code-summary: "Show the code"
     embed-resources: true
@@ -42,9 +42,48 @@ print(
 Explore **`{python} USERNAME`**'s board game collection. Use the filters to
 narrow by player count, complexity, and playing time.
 
-## Games {#explorer-table}
+# Collection {#explorer-table}
 
-Explore the collection below. Use the filters to narrow the list; click a column
+Explore the collection below. Expand the filters to narrow the list; click a column
 header to sort.
 
 {{< include _collection_explorer.qmd >}}
+
+```{python}
+#| label: sections
+#| include: false
+from src.reports.collection_sections import build_sections
+from src.reports.game_cards import game_strips_html
+
+_sections = build_sections(data.collection, data.games, top_n=10)
+_by_group = {}
+for grp, label, ids in _sections:
+    _by_group.setdefault(grp, []).append((label, ids))
+
+
+def _render_group(group_name):
+    parts = []
+    for label, ids in _by_group.get(group_name, []):
+        html = game_strips_html(data.games, ids)
+        if html:
+            parts.append(f"### {label} ({len(ids)})\n\n{html}")
+    return "\n\n".join(parts)
+```
+
+# Player Counts
+
+The user's top-rated owned games at each player count.
+
+```{python}
+#| output: asis
+print(_render_group("Recommendations") or "_No games._")
+```
+
+# Game Types
+
+The user's top-rated owned games among different types of games.
+
+```{python}
+#| output: asis
+print(_render_group("Game Types") or "_No games._")
+```

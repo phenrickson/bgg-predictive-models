@@ -56,8 +56,12 @@ def bgg_link(game_id: int, name: str, year: int | None) -> str:
 
 def img_tag(url: str | None) -> str:
     if not url or (isinstance(url, float) and pd.isna(url)):
-        return ""
-    return f'<img src="{url}" style="height:64px;width:auto;border-radius:4px;" />'
+        return '<div class="cover-cell"></div>'
+    return (
+        f'<div class="cover-cell">'
+        f'<img class="cover-thumb" src="{url}" loading="lazy" alt="" />'
+        f"</div>"
+    )
 
 
 def truncate(text: str | None, max_len: int = 220) -> str:

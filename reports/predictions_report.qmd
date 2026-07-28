@@ -6,7 +6,7 @@ format:
   html:
     toc: true
     toc-location: right
-    toc-depth: 2
+    toc-depth: 3
     code-fold: true
     code-summary: "Show the code"
     embed-resources: true
@@ -56,7 +56,59 @@ release (categories, mechanics, designers, publishers, playing time, estimated c
 For more on the model's findings and evaluation, see the companion
 [Model Report](`{python} f"model/{USERNAME_SLUG}.html"`).
 
-# Predictions {#predictions}
+```{python}
+#| label: predictions-setup
+#| include: false
+# Shared setup for the prediction sections below: build the `upcoming` frame
+# (recent/upcoming releases scored by the model) and the status lookup once.
+status_lookup = build_status_lookup(data.collection)
+finalize_through = arts.registration.get("finalize_through")
+upcoming = arts.upcoming_predictions.join(data.games, on="game_id", how="inner")
+if finalize_through is not None:
+    upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
+upcoming = upcoming.sort("predicted_prob", descending=True)
+```
+
+# New on BGG {#new-on-bgg}
+
+Games recently added to BoardGameGeek that the model has scored for the first
+time in the **last 7 days** — a running look at what the model makes of brand-new
+releases as they appear. The **Prediction** is the model's call at its tuned
+threshold.
+
+```{python}
+#| label: predictions-new-7d
+#| column: page-right
+if "is_new_7d" in upcoming.columns:
+    _new = upcoming.filter(pl.col("is_new_7d")).sort("predicted_prob", descending=True)
+else:
+    _new = upcoming.head(0)
+
+if _new.height == 0:
+    print("_No games newly scored in the last 7 days._")
+else:
+    from src.reports.tables import format_new_games_table
+
+    _new_table = format_new_games_table(_new, threshold=arts.threshold, top_n=50)
+    # Columns: Image0 | Game1 | Description2 | Pr(Yes)3 | Prediction4
+    itables_show(
+        _new_table,
+        paging=True,
+        pageLength=10,
+        classes="display compact",
+        columnDefs=[
+            {"className": "dt-center", "targets": [0, 3, 4]},
+            {"width": "70px", "targets": [0]},
+            {"width": "220px", "targets": [1]},
+            {"width": "80px", "targets": [3]},
+            {"width": "110px", "targets": [4]},
+        ],
+        style="width: 100%",
+        allow_html=True,
+    )
+```
+
+# Top Picks {#top-picks}
 
 ## New and Upcoming Games
 
@@ -71,17 +123,7 @@ already in the user's collection.
 ```{python}
 #| label: predictions-upcoming
 #| column: page-right
-status_lookup = build_status_lookup(data.collection)
-
-# The model was trained on data through `finalize_through`, so anything
-# published in or before that year is in-sample. "New and Upcoming"
-# means strictly after.
-finalize_through = arts.registration.get("finalize_through")
-upcoming = arts.upcoming_predictions.join(data.games, on="game_id", how="inner")
-if finalize_through is not None:
-    upcoming = upcoming.filter(pl.col("year_published") > int(finalize_through))
-upcoming = upcoming.sort("predicted_prob", descending=True)
-
+# `upcoming` and `status_lookup` are built in the predictions-setup cell above.
 from itables import JavascriptFunction
 
 _upcoming_table = format_predictions_with_images(
