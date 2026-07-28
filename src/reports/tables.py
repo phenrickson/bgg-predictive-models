@@ -247,6 +247,49 @@ def format_predictions_with_images(
     return pd.DataFrame(rows)
 
 
+def format_new_games_table(
+    df: pl.DataFrame, *, threshold: float | None, top_n: int = 50
+) -> pd.DataFrame:
+    """New-on-BGG table: Image | Game | Description | Pr(Yes) | Prediction.
+
+    No Rank column. `Prediction` is the model's call at `threshold`
+    (Pr(Yes) >= threshold -> "Would own", else "Pass"), shown as a pill.
+    """
+    view = df.head(top_n).to_pandas()
+    ids = view["game_id"].tolist()
+    images = view["image"].tolist() if "image" in view.columns else [None] * len(view)
+    names = view["name"].tolist() if "name" in view.columns else [""] * len(view)
+    years = (
+        view["year_published"].tolist()
+        if "year_published" in view.columns
+        else [None] * len(view)
+    )
+    descs = (
+        view["description"].tolist() if "description" in view.columns else [""] * len(view)
+    )
+    probs = (
+        view["predicted_prob"].tolist()
+        if "predicted_prob" in view.columns
+        else view["proba"].tolist()
+    )
+    thr = 0.5 if threshold is None else float(threshold)
+
+    def _pred(p) -> str:
+        if float(p) >= thr:
+            return '<span class="pred-pill pred-yes">Yes</span>'
+        return '<span class="pred-pill pred-no">No</span>'
+
+    return pd.DataFrame(
+        {
+            "Image": [img_tag(u) for u in images],
+            "Game": [bgg_link(g, n, y) for g, n, y in zip(ids, names, years)],
+            "Description": [truncate(d) for d in descs],
+            "Pr(Yes)": [round(float(p), 3) for p in probs],
+            "Prediction": [_pred(p) for p in probs],
+        }
+    )
+
+
 def format_menu_table(
     collection: pl.DataFrame,
     games: pl.DataFrame,
