@@ -53,9 +53,9 @@ header to sort.
 #| label: sections
 #| include: false
 from src.reports.collection_sections import build_sections
-from src.reports.game_cards import game_cards_html
+from src.reports.game_cards import game_strips_html
 
-_sections = build_sections(data.collection, data.games, top_n=6)
+_sections = build_sections(data.collection, data.games, top_n=10)
 _by_group = {}
 for grp, label, ids in _sections:
     _by_group.setdefault(grp, []).append((label, ids))
@@ -64,9 +64,9 @@ for grp, label, ids in _sections:
 def _render_group(group_name):
     parts = []
     for label, ids in _by_group.get(group_name, []):
-        html = game_cards_html(data.games, ids, tier="collection")
+        html = game_strips_html(data.games, ids)
         if html:
-            parts.append(f"### {label}\n\n{html}")
+            parts.append(f"### {label} ({len(ids)})\n\n{html}")
     return "\n\n".join(parts)
 ```
 

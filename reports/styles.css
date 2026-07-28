@@ -384,3 +384,17 @@ table.topn-by-year tbody tr:hover td.owned {
 .tile-meta-item { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; font-size:.78rem; }
 .tile-meta-k { font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; opacity:.55; min-width:4.6rem; }
 .tile-time { font-variant-numeric:tabular-nums; }
+
+/* Compact horizontal-strip list (collection 'top games' sections). One thin
+   full-width row per game: thumbnail left, name + meta beside it. */
+.strip-list { display:flex; flex-direction:column; gap:.4rem; margin:.5rem 0 1.5rem; }
+.strip { display:flex; align-items:center; gap:.8rem; padding:.4rem .6rem; border:1px solid rgba(255,255,255,.08); border-radius:.45rem; background:rgba(255,255,255,.02); text-decoration:none !important; color:#e2e8f0 !important; transition:background .12s ease, border-color .12s ease; }
+.strip:hover { background:rgba(76,126,243,.08); border-color:#4c7ef3; }
+.strip-cover { flex:0 0 auto; width:56px; height:42px; border-radius:.3rem; overflow:hidden; background:rgba(255,255,255,.06); }
+.strip-cover img { width:100%; height:100%; object-fit:cover; display:block; }
+.strip-main { flex:1 1 auto; min-width:0; display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; }
+.strip-name { flex:1 1 auto; min-width:0; max-width:22rem; font-weight:600; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.strip-name .tile-year { color:#94a3b8; font-weight:400; font-size:.85em; margin-left:.35rem; }
+.strip-meta { display:flex; align-items:center; gap:.9rem; flex-shrink:0; }
+.strip-meta-item { display:inline-flex; align-items:center; }
+.strip-time { font-size:.8rem; color:#94a3b8; font-variant-numeric:tabular-nums; min-width:5.5rem; text-align:right; }

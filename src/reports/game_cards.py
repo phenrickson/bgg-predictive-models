@@ -226,3 +226,43 @@ def game_cards_html(games: pl.DataFrame, game_ids: list[int], tier: str = "") ->
     if not cards:
         return ""
     return '<div class="tile-grid">' + "".join(cards) + "</div>"
+
+
+def game_strips_html(
+    games: pl.DataFrame, game_ids: list[int], complexity: str = "label"
+) -> str:
+    """Compact horizontal-strip list: one thin full-width row per game —
+    small cover thumbnail on the left, name + year and a meta row (recommended
+    player badges · complexity · playtime) beside it. Shows every id in order;
+    skips ids absent from `games`. Whole row links to BGG.
+
+    complexity="label" (default) shows the tier chip (Light..Heavy); "number"
+    shows the numeric weight chip.
+    """
+    if not game_ids or games is None or games.height == 0:
+        return ""
+    cx_fn = complexity_chip if complexity == "number" else complexity_chip_labeled
+    by_id = {int(r["game_id"]): r for r in games.iter_rows(named=True)}
+    rows = []
+    for gid in game_ids:
+        row = by_id.get(int(gid))
+        if row is None:
+            continue
+        src = _cover_data_uri(row.get("image") or row.get("thumbnail"))
+        img_html = f'<img src="{src}" loading="lazy" alt=""/>' if src else ""
+        rows.append(
+            f'<a class="strip" '
+            f'href="https://boardgamegeek.com/boardgame/{int(gid)}" '
+            f'target="_blank" rel="noopener">'
+            f'<div class="strip-cover">{img_html}</div>'
+            f'<div class="strip-main">'
+            f'<div class="strip-name">{_name_year(gid, row.get("name") or row.get("game_name"), row.get("year_published"))}</div>'
+            f'<div class="strip-meta">'
+            f'<span class="strip-meta-item">{player_badges(row.get("best_player_counts"), row.get("recommended_player_counts"))}</span>'
+            f'<span class="strip-meta-item">{cx_fn(row.get("average_weight"))}</span>'
+            f'<span class="strip-meta-item strip-time">{_playtime(row)}</span>'
+            f'</div></div></a>'
+        )
+    if not rows:
+        return ""
+    return '<div class="strip-list">' + "".join(rows) + "</div>"

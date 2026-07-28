@@ -290,6 +290,14 @@ render-index source="local":
 render-sandbox report="predictions":
     uv run python -m reports.render --fixture --report {{report}}
 
+# Render the interactive collection explorer (faceted table + themed game-card
+# sections) for a user. Output: reports/_output/collection/<slug>.html.
+#   just render-collection                 # default user
+#   just render-collection rahdo
+render-collection user=username outcome="own":
+    uv run python -m reports.render --report collection \
+        --username "{{user}}" --outcome {{outcome}}
+
 # --- Selections workflow (Spain trip menu) ---
 #
 # Step 1: launch the game-selector Streamlit page. Filter a collection,
