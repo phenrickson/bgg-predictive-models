@@ -192,6 +192,18 @@ resource "google_bigquery_table" "ml_predictions_landing" {
       mode = "NULLABLE"
     },
     {
+      name        = "sample_status"
+      type        = "STRING"
+      mode        = "NULLABLE"
+      description = "in_sample if the loaded models were fitted on this game's year, else out_of_sample"
+    },
+    {
+      name        = "training_cutoff_year"
+      type        = "INTEGER"
+      mode        = "NULLABLE"
+      description = "Year the scoring models were fitted through (test_through from the model registration)"
+    },
+    {
       name = "score_ts"
       type = "TIMESTAMP"
       mode = "REQUIRED"

@@ -98,6 +98,8 @@ class DataWarehousePredictionUploader:
                 - predicted_rating (optional)
                 - predicted_users_rated (optional)
                 - predicted_geek_rating (optional)
+                - sample_status (optional)
+                - training_cutoff_year (optional)
             job_id: Unique identifier for this prediction job
             model_versions: Optional dict with model version info, e.g.:
                 {"hurdle": "hurdle-v2025", "complexity": "complexity-v2025", ...}

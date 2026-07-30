@@ -23,6 +23,10 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from registered_model import RegisteredModel  # noqa: E402
+from sample_status import (  # noqa: E402
+    compute_sample_status,
+    resolve_training_cutoff_year,
+)
 from src.data.loader import BGGDataLoader  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
@@ -671,6 +675,19 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             "original_experiment"
         ]["name"]
 
+        # Label each row against the cutoff the loaded models were fitted through
+        training_cutoff_year = resolve_training_cutoff_year({
+            "hurdle": hurdle_registration,
+            "complexity": complexity_registration,
+            "rating": rating_registration,
+            "users_rated": users_rated_registration,
+            "geek_rating": geek_rating_registration,
+        })
+        results["sample_status"] = compute_sample_status(
+            results["year_published"], training_cutoff_year
+        )
+        results["training_cutoff_year"] = training_cutoff_year
+
         # Add timestamp of scoring
         results["score_ts"] = datetime.now(timezone.utc).isoformat()
 
@@ -730,6 +747,8 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                             "game_id",
                             "name",
                             "year_published",
+                            "sample_status",
+                            "training_cutoff_year",
                             "predicted_hurdle_prob",
                             "predicted_complexity",
                             "predicted_rating",
@@ -1178,6 +1197,18 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
             geek_rating_pipeline=geek_rating_pipeline,
         )
 
+        # Label each row against the cutoff the loaded models were fitted through
+        training_cutoff_year = resolve_training_cutoff_year({
+            "hurdle": hurdle_reg,
+            "complexity": complexity_reg,
+            "rating": rating_reg,
+            "users_rated": users_rated_reg,
+            "geek_rating": geek_rating_reg,
+        })
+        sample_status = compute_sample_status(
+            df_pandas["year_published"], training_cutoff_year
+        )
+
         # Flatten simulation results into a DataFrame for upload/storage
         flat_rows = []
         for i, r in enumerate(sim_results):
@@ -1185,6 +1216,8 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
                 "game_id": r.game_id,
                 "name": r.game_name,
                 "year_published": df_pandas.iloc[i]["year_published"],
+                "sample_status": sample_status.iloc[i],
+                "training_cutoff_year": training_cutoff_year,
                 "predicted_hurdle_prob": float(predicted_hurdle_prob.iloc[i]),
                 "predicted_complexity": float(np.median(r.complexity_samples)),
                 "predicted_rating": float(np.median(r.rating_samples)),
