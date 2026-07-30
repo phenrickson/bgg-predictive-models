@@ -52,20 +52,27 @@ has no year filter — it takes the latest row per `game_id` from the landing ta
 
 So scoring the full population is a **payload and cap change, not a new capability**.
 
-**Sample status is a property of the model, not the game.** From `config.yaml`:
+**Sample status is a property of the model, not the game.** The shipped models are refit
+through their **test year**, so `test_through` is the training cutoff.
 
-```yaml
-years:
-  training:
-    train_through: 2022
-    tune_start: 2023 / tune_through: 2023
-    test_start: 2024 / test_through: 2024
-finalize_through: 2025   # finalize() refits on train+val+test filtered to <= this
+Verified against the deployed artifact — `gs://bgg-predictive-models/prod/models/registered/
+hurdle/hurdle-v2026/v3/registration.json`, under `original_experiment.metadata`:
+
+```json
+"train_through": 2022,
+"tune_through":  2023,
+"test_through":  2024,
 ```
 
-The shipped pipeline is refit through 2025, so it has seen essentially every game published
-through 2025. A prediction for a pre-2026 game is in-sample. Critically, `finalize_through`
-moves when the model is refit — which is why this cannot be derived downstream.
+**The cutoff is 2024, not 2025.** `config.yaml`'s `finalize_through: 2025` is read by no
+game-model code — grep it: the only `.py` hits are in `services/collections/`, a separate
+system reading its own value. Independently, `finalize_model.load_data` clamps the end year to
+`current_year - recent_year_threshold` = `2026 - 2` = 2024, which agrees.
+
+The scoring service already loads this dict — it reads `original_experiment.name` from it for
+every prediction row. So the cutoff is available at scoring time with no new plumbing, and it
+moves correctly when the model is refit, which is why it must come from here and not from
+config.
 
 ## The gap
 
@@ -121,9 +128,9 @@ game could be in-sample for `hurdle` and not for `complexity`. Today they share 
 is the field that would need to go per-target — flagged here so that is a deliberate choice
 later, not a surprise.
 
-**Decision needed:** confirm `in_sample` should be relative to `finalize_through` (what the
-shipped model actually saw) rather than `train_through` (the narrower training split). These
-differ for 2023–2025 games, which is a large and interesting population.
+**Decided:** `in_sample` is relative to the refit cutoff — what the shipped model actually saw
+— which is `test_through`, **2024**. Not `train_through` (2022), and not the 2025 this spec
+originally asserted. 2023 and 2024 games are therefore `in_sample`; 2025 games are not.
 
 ### 3. Warehouse plumbing
 
@@ -169,12 +176,17 @@ value as such. No viewer change is in scope here.
    unembedded-so-far.
 2. Time a scoring run over a single batch (say 10k games) to get a per-game cost, then
    extrapolate to 128k before committing to a full run.
-3. Confirm `finalize_through` is readable at scoring time from the loaded model/registry
-   rather than only from `config.yaml` — if the scorer has to read the config, the flag can
-   drift from the model actually loaded, which defeats the purpose.
+3. ~~Confirm the cutoff is readable at scoring time from the loaded model.~~ **Resolved.**
+   `original_experiment.metadata.test_through` is in the registration the scorer already
+   loads. All five deployed models agree — `train_through: 2022, tune_through: 2023,
+   test_through: 2024` (`hurdle` v3, `complexity` v3, `rating` v3, `users_rated` v3,
+   `geek_rating` v2), so the single flag argued for above is correct.
 
 ## Open decisions
 
-1. Batch size / run mode for the full-population score.
-2. `in_sample` relative to `finalize_through` (recommended) or `train_through`.
-3. Whether `sample_status` should carry the finer `train`/`tune`/`test` values now or later.
+1. ~~Batch size / run mode.~~ Batched against the existing endpoint; the change-detection
+   loop already drains the population. Batch size set from a timed trial.
+2. ~~`in_sample` relative to which cutoff.~~ The refit cutoff, `test_through` = 2024.
+3. ~~Finer `train`/`tune`/`test` values.~~ Binary. Once the cutoff is the refit year there is
+   one boundary, not three.
+4. **Open:** how to handle the `is_new_1d` / `is_new_7d` stampede from the backfill.
