@@ -23,6 +23,14 @@ on:
         description: 'Maximum games per batch'
         required: false
         default: '50000'
+      min_users_rated:
+        description: 'Only score games with at least this many ratings (blank = no filter)'
+        required: false
+        default: ''
+      max_batches:
+        description: 'Safety limit on batch count'
+        required: false
+        default: '10'
 
 env:
   GCP_PROJECT_ID: bgg-predictive-models
@@ -96,10 +104,19 @@ jobs:
         END_YEAR="${{ github.event.inputs.end_year || '2030' }}"
         N_SAMPLES="${{ github.event.inputs.n_samples || '1000' }}"
         MAX_GAMES="${{ github.event.inputs.max_games || '50000' }}"
+        MIN_USERS_RATED="${{ github.event.inputs.min_users_rated || '' }}"
+
+        # Omit the key entirely when unset, so scheduled runs keep scoring
+        # upcoming games regardless of ratings
+        if [ -n "$MIN_USERS_RATED" ]; then
+          MIN_RATED_FIELD="\"min_users_rated\": $MIN_USERS_RATED,"
+        else
+          MIN_RATED_FIELD=""
+        fi
 
         TOTAL_GAMES=0
         BATCH_COUNT=0
-        MAX_BATCHES=10  # Safety limit
+        MAX_BATCHES="${{ github.event.inputs.max_batches || '10' }}"
 
         while [ $BATCH_COUNT -lt $MAX_BATCHES ]; do
           BATCH_COUNT=$((BATCH_COUNT + 1))
@@ -119,6 +136,7 @@ jobs:
               \"n_samples\": $N_SAMPLES,
               \"use_change_detection\": true,
               \"max_games\": $MAX_GAMES,
+              $MIN_RATED_FIELD
               \"upload_to_data_warehouse\": true
             }" \
             -w "\n%{http_code}" \
@@ -159,6 +177,7 @@ jobs:
         echo "- **Environment**: ${{ steps.env.outputs.env_name }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Models**: ${{ steps.models.outputs.hurdle }}, ${{ steps.models.outputs.complexity }}, ${{ steps.models.outputs.rating }}, ${{ steps.models.outputs.users_rated }}, ${{ steps.models.outputs.geek_rating }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Year Range**: ${{ github.event.inputs.start_year || '2025' }}-${{ github.event.inputs.end_year || '2030' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Min Users Rated**: ${{ github.event.inputs.min_users_rated || 'none (all games in range)' }}" >> $GITHUB_STEP_SUMMARY
         echo "- **N Samples**: ${{ github.event.inputs.n_samples || '1000' }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Batches Completed**: ${{ steps.simulate.outputs.batch_count }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Total Games Scored**: ${{ steps.simulate.outputs.total_games }}" >> $GITHUB_STEP_SUMMARY
