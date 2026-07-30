@@ -20,12 +20,16 @@ RUN apt-get update --allow-releaseinfo-change && \
 RUN pip install uv
 
 # Copy required files
+# README.md is referenced by pyproject.toml's `readme` field; uv sync reads the
+# metadata and fails without it.
 COPY pyproject.toml .
 COPY uv.lock .
+COPY README.md .
 COPY services/scoring/main.py .
 COPY services/scoring/cloud_experiment_tracker.py .
 COPY services/scoring/registered_model.py .
 COPY services/scoring/auth.py .
+COPY services/scoring/sample_status.py .
 COPY src/ /app/src/
 
 # Copy config files
