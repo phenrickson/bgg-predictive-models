@@ -23,6 +23,10 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
 from registered_model import RegisteredModel  # noqa: E402
+from sample_status import (  # noqa: E402
+    compute_sample_status,
+    resolve_training_cutoff_year,
+)
 from src.data.loader import BGGDataLoader  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 from src.data.bigquery_uploader import DataWarehousePredictionUploader  # noqa: E402
@@ -95,6 +99,7 @@ class PredictGamesRequest(BaseModel):
     game_ids: Optional[List[int]] = None
     use_change_detection: bool = False  # NEW: Enable incremental scoring
     max_games: Optional[int] = 50000    # NEW: Limit for change detection mode
+    min_users_rated: Optional[int] = None  # Restrict to rated games (backfill)
 
 
 class PredictGamesResponse(BaseModel):
@@ -129,6 +134,7 @@ class SimulateGamesRequest(BaseModel):
     upload_to_data_warehouse: bool = True
     use_change_detection: bool = False
     max_games: Optional[int] = 50000
+    min_users_rated: Optional[int] = None  # Restrict to rated games (backfill)
 
 
 class SimulateGamesResponse(BaseModel):
@@ -308,6 +314,7 @@ def load_games_for_main_scoring(
     rating_model_version: Optional[int] = None,
     users_rated_model_version: Optional[int] = None,
     geek_rating_model_version: Optional[int] = None,
+    min_users_rated: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Load games that need main predictions (hurdle, rating, users_rated, geek_rating).
@@ -321,6 +328,8 @@ def load_games_for_main_scoring(
         start_year: Start year for predictions (inclusive)
         end_year: End year for predictions (exclusive)
         max_games: Maximum number of games to load
+        min_users_rated: Restrict to games with at least this many ratings
+            (unset for scheduled runs; set for the rated-game backfill)
         hurdle_model_version: Target hurdle model version (rescore if different)
         complexity_model_version: Target complexity model version (rescore if different)
         rating_model_version: Target rating model version (rescore if different)
@@ -344,6 +353,7 @@ def load_games_for_main_scoring(
         rating_model_version=rating_model_version,
         users_rated_model_version=users_rated_model_version,
         geek_rating_model_version=geek_rating_model_version,
+        min_users_rated=min_users_rated,
     )
     return df.to_pandas()
 
@@ -582,6 +592,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 request.start_year or 2024,
                 request.end_year or 2029,
                 max_games=request.max_games or 50000,
+                min_users_rated=request.min_users_rated,
                 hurdle_model_version=hurdle_registration["version"],
                 complexity_model_version=complexity_registration["version"],
                 rating_model_version=rating_registration["version"],
@@ -671,6 +682,19 @@ async def predict_games_endpoint(request: PredictGamesRequest):
             "original_experiment"
         ]["name"]
 
+        # Label each row against the cutoff the loaded models were fitted through
+        training_cutoff_year = resolve_training_cutoff_year({
+            "hurdle": hurdle_registration,
+            "complexity": complexity_registration,
+            "rating": rating_registration,
+            "users_rated": users_rated_registration,
+            "geek_rating": geek_rating_registration,
+        })
+        results["sample_status"] = compute_sample_status(
+            results["year_published"], training_cutoff_year
+        )
+        results["training_cutoff_year"] = training_cutoff_year
+
         # Add timestamp of scoring
         results["score_ts"] = datetime.now(timezone.utc).isoformat()
 
@@ -730,6 +754,8 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                             "game_id",
                             "name",
                             "year_published",
+                            "sample_status",
+                            "training_cutoff_year",
                             "predicted_hurdle_prob",
                             "predicted_complexity",
                             "predicted_rating",
@@ -1139,6 +1165,7 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
                 start_year=request.start_year,
                 end_year=request.end_year,
                 max_games=request.max_games,
+                min_users_rated=request.min_users_rated,
                 hurdle_model_version=hurdle_reg["version"],
                 complexity_model_version=complexity_reg["version"],
                 rating_model_version=rating_reg["version"],
@@ -1178,6 +1205,18 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
             geek_rating_pipeline=geek_rating_pipeline,
         )
 
+        # Label each row against the cutoff the loaded models were fitted through
+        training_cutoff_year = resolve_training_cutoff_year({
+            "hurdle": hurdle_reg,
+            "complexity": complexity_reg,
+            "rating": rating_reg,
+            "users_rated": users_rated_reg,
+            "geek_rating": geek_rating_reg,
+        })
+        sample_status = compute_sample_status(
+            df_pandas["year_published"], training_cutoff_year
+        )
+
         # Flatten simulation results into a DataFrame for upload/storage
         flat_rows = []
         for i, r in enumerate(sim_results):
@@ -1185,6 +1224,8 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
                 "game_id": r.game_id,
                 "name": r.game_name,
                 "year_published": df_pandas.iloc[i]["year_published"],
+                "sample_status": sample_status.iloc[i],
+                "training_cutoff_year": training_cutoff_year,
                 "predicted_hurdle_prob": float(predicted_hurdle_prob.iloc[i]),
                 "predicted_complexity": float(np.median(r.complexity_samples)),
                 "predicted_rating": float(np.median(r.rating_samples)),
