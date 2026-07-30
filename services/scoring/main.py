@@ -99,6 +99,7 @@ class PredictGamesRequest(BaseModel):
     game_ids: Optional[List[int]] = None
     use_change_detection: bool = False  # NEW: Enable incremental scoring
     max_games: Optional[int] = 50000    # NEW: Limit for change detection mode
+    min_users_rated: Optional[int] = None  # Restrict to rated games (backfill)
 
 
 class PredictGamesResponse(BaseModel):
@@ -133,6 +134,7 @@ class SimulateGamesRequest(BaseModel):
     upload_to_data_warehouse: bool = True
     use_change_detection: bool = False
     max_games: Optional[int] = 50000
+    min_users_rated: Optional[int] = None  # Restrict to rated games (backfill)
 
 
 class SimulateGamesResponse(BaseModel):
@@ -312,6 +314,7 @@ def load_games_for_main_scoring(
     rating_model_version: Optional[int] = None,
     users_rated_model_version: Optional[int] = None,
     geek_rating_model_version: Optional[int] = None,
+    min_users_rated: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Load games that need main predictions (hurdle, rating, users_rated, geek_rating).
@@ -325,6 +328,8 @@ def load_games_for_main_scoring(
         start_year: Start year for predictions (inclusive)
         end_year: End year for predictions (exclusive)
         max_games: Maximum number of games to load
+        min_users_rated: Restrict to games with at least this many ratings
+            (unset for scheduled runs; set for the rated-game backfill)
         hurdle_model_version: Target hurdle model version (rescore if different)
         complexity_model_version: Target complexity model version (rescore if different)
         rating_model_version: Target rating model version (rescore if different)
@@ -348,6 +353,7 @@ def load_games_for_main_scoring(
         rating_model_version=rating_model_version,
         users_rated_model_version=users_rated_model_version,
         geek_rating_model_version=geek_rating_model_version,
+        min_users_rated=min_users_rated,
     )
     return df.to_pandas()
 
@@ -586,6 +592,7 @@ async def predict_games_endpoint(request: PredictGamesRequest):
                 request.start_year or 2024,
                 request.end_year or 2029,
                 max_games=request.max_games or 50000,
+                min_users_rated=request.min_users_rated,
                 hurdle_model_version=hurdle_registration["version"],
                 complexity_model_version=complexity_registration["version"],
                 rating_model_version=rating_registration["version"],
@@ -1158,6 +1165,7 @@ async def simulate_games_endpoint(request: SimulateGamesRequest):
                 start_year=request.start_year,
                 end_year=request.end_year,
                 max_games=request.max_games,
+                min_users_rated=request.min_users_rated,
                 hurdle_model_version=hurdle_reg["version"],
                 complexity_model_version=complexity_reg["version"],
                 rating_model_version=rating_reg["version"],

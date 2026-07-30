@@ -357,6 +357,7 @@ class BGGDataLoader:
         users_rated_model_version: Optional[int] = None,
         geek_rating_model_version: Optional[int] = None,
         embeddings_table: Optional[str] = None,
+        min_users_rated: Optional[int] = None,
         timeout: int = 300,
     ) -> pl.DataFrame:
         """Load games needing re-scoring, joined with embeddings.
@@ -377,6 +378,9 @@ class BGGDataLoader:
             users_rated_model_version: Target users_rated model version
             geek_rating_model_version: Target geek_rating model version
             embeddings_table: Full BigQuery table path for embeddings
+            min_users_rated: Restrict to games with at least this many ratings.
+                Left unset for scheduled runs, which score upcoming games
+                regardless of ratings; set for the rated-game backfill.
             timeout: Timeout in seconds for BigQuery query execution
 
         Returns:
@@ -407,6 +411,10 @@ class BGGDataLoader:
         if version_checks:
             version_condition = "OR " + "\n          OR ".join(version_checks)
 
+        ratings_condition = ""
+        if min_users_rated is not None:
+            ratings_condition = f"AND gf.users_rated >= {int(min_users_rated)}"
+
         query = f"""
         SELECT f.*, e.embedding
         FROM `{features_table}` f
@@ -433,6 +441,7 @@ class BGGDataLoader:
             gf.year_published IS NOT NULL
             AND gf.year_published >= {start_year}
             AND gf.year_published < {end_year}
+            {ratings_condition}
             AND (
               lp.game_id IS NULL
               OR fh.last_updated > lp.score_ts
