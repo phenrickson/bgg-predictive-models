@@ -34,8 +34,17 @@ Measured 2026-07-30, not assumed:
 |---|---|
 | `raw.ml_predictions_landing` | 17,067 distinct games, `year_published` 2024–2028, 252 jobs |
 | `predictions.bgg_predictions` | 17,067 rows, 5,864,858 bytes (**344 bytes/row**) |
-| Games with embeddings + complexity | **127,940** — the real scoreable ceiling |
+| Games with an embedding | 127,949 (the other 12,018 have no `year_published` and are deliberately not scored) |
 | bgg-viewer catalog working set | 35,263 games; 7,424 currently have a prediction |
+
+**The scoring target is not every embedded game.** Two sets get scored:
+
+- **all upcoming games**, no ratings filter — *already scored*; these are the 17,067
+- **all rated games**, ~30k
+
+Everything else — old games with too few ratings to matter — is deliberately left unscored.
+So the coverage gap is **~30k rated games, not ~110k**. At a measured ~77ms/game this is
+roughly 40 minutes in the existing batch loop, which makes run mode a non-question.
 
 **The year gate is not in the warehouse.** [`definitions/bgg_predictions.sqlx`](../../../bgg-data-warehouse/definitions/bgg_predictions.sqlx)
 has no year filter — it takes the latest row per `game_id` from the landing table. The
@@ -76,7 +85,7 @@ config.
 
 ## The gap
 
-1. **Coverage.** 17,067 of ~127,940 scoreable games are scored.
+1. **Coverage.** Upcoming games are scored; the ~30k rated games are not.
 2. **No status field.** `bgg_predictions` columns are `job_id, game_id, name, year_published,
    predicted_*, {target}_model_{name,version,experiment}, score_ts, source_environment,
    first_prediction_ts, is_new_1d, is_new_7d`. Nothing distinguishes a forecast from a fitted
@@ -89,21 +98,20 @@ next refit. That is the reason this belongs in the pipeline.
 
 ### 1. Scoring population
 
-Score every game that *can* be scored: has description embeddings and a complexity value.
-That is ~127,940, not the ~140k total, because the models take `emb_0..emb_N` as features and
-a game without an embedding cannot be scored at all.
+Upcoming + rated. Upcoming is already covered, so the work is the **~30k rated games**
+(`users_rated >= 25`, matching the `hurdle` definition in `games_features`).
 
-Two changes:
+One change: drive the run with a wide `start_year` so the change-detection loop reaches rated
+games from earlier years. The request model's default stays 2024 so scheduled runs are
+unaffected; the backfill passes the wider window explicitly.
 
-- Drive the scoring run with `start_year=None` (or an explicit floor) rather than the 2024
-  default. The request model's default stays 2024 so existing scheduled runs are unaffected;
-  the full run passes the wider window explicitly.
-- Raise or remove `max_games`. At 50,000 it silently truncates a 128k run. **Recommend
-  batching** rather than one 128k call — the loader pulls embeddings into a pandas frame, and
-  a single frame of 128k × 64 embedding columns plus features is a memory risk worth avoiding.
+`max_games` at 50,000 does not truncate a ~30k run, and the existing while-loop in
+`run-scoring-service.yml` already drains the change-detection set. **No new endpoint, no
+parallelism, no batch-size tuning** — measured at ~77ms/game, ~30k is roughly 40 minutes.
 
-**Decision needed:** batch size and whether the full run is a separate endpoint/mode or the
-same one with a wider window.
+Note that the loader's change-detection query has no ratings filter — it selects on year and
+staleness only. Restricting the backfill to rated games needs either a ratings predicate added
+there or the batch driven by `game_ids`.
 
 ### 2. Sample status on the prediction row
 
@@ -143,9 +151,9 @@ Storage is not a consideration at this scale:
 | | |
 |---|---|
 | Today | 17,067 rows, 5.86 MB |
-| At ~128k rows | **~44 MB** |
-| Storage | ~**$0.0009 / month** |
-| Full scan | ~**$0.0003** |
+| At ~47k rows (upcoming + rated) | **~16 MB** |
+| Storage | ~**$0.0003 / month** |
+| Full scan | ~**$0.0001** |
 
 The per-game read already pays BigQuery's 10 MB minimum, so the point lookup barely moves.
 
@@ -161,21 +169,24 @@ value as such. No viewer change is in scope here.
   from `ml_predictions_landing`, which is append-only and retains everything, so the table can
   be reconstructed — but `first_prediction_ts` derives from `game_first_prediction` and should
   be checked before and after so "new game" flags do not all reset.
-- **Scoring 128k games in-sample will produce flattering numbers.** That is the point — they
-  are labelled — but any aggregate model-quality figure computed over `bgg_predictions`
+- **Scoring ~30k rated games in-sample will produce flattering numbers.** That is the point —
+  they are labelled — but any aggregate model-quality figure computed over `bgg_predictions`
   without filtering on `sample_status` will be wrong. Worth a note wherever such aggregates
   are computed.
 - **`is_new_1d` / `is_new_7d`** are computed from `first_prediction_ts`. A one-off backfill of
-  110k games gives them all a first prediction on the same day; anything keying off "new"
-  should be checked against that.
+  ~30k games gives them all a first prediction on the same day; anything keying off "new"
+  should be checked against that. Known consumers are the prediction and collection reports —
+  the predictions report already scopes to `upcoming`, so the exposure may be nil. To be
+  confirmed separately.
 
 ## Validation before implementing
 
-1. Confirm the embeddings join is really the ceiling — count games in `games_features` with no
-   description embedding, and confirm they are genuinely unscoreable rather than merely
-   unembedded-so-far.
-2. Time a scoring run over a single batch (say 10k games) to get a per-game cost, then
-   extrapolate to 128k before committing to a full run.
+1. ~~Confirm the embeddings join is really the ceiling.~~ **Resolved, and moot.** 127,949
+   games have an embedding; the 12,018 without one all lack `year_published` and are
+   deliberately not scored. The scoring target is upcoming + rated, not every embedded game.
+2. ~~Time a scoring run.~~ **Measured:** ~77ms/game, ~4s fixed cost per request (250 games in
+   23s, 2,000 in 157s, 6,000 in 673s — per-game cost rises slightly with batch size). ~30k is
+   roughly 40 minutes in the existing loop.
 3. ~~Confirm the cutoff is readable at scoring time from the loaded model.~~ **Resolved.**
    `original_experiment.metadata.test_through` is in the registration the scorer already
    loads. All five deployed models agree — `train_through: 2022, tune_through: 2023,
@@ -184,8 +195,8 @@ value as such. No viewer change is in scope here.
 
 ## Open decisions
 
-1. ~~Batch size / run mode.~~ Batched against the existing endpoint; the change-detection
-   loop already drains the population. Batch size set from a timed trial.
+1. ~~Batch size / run mode.~~ Moot. The gap is ~30k rated games, ~40 minutes in the existing
+   loop at the existing batch size.
 2. ~~`in_sample` relative to which cutoff.~~ The refit cutoff, `test_through` = 2024.
 3. ~~Finer `train`/`tune`/`test` values.~~ Binary. Once the cutoff is the refit year there is
    one boundary, not three.
