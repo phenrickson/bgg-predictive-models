@@ -2,7 +2,34 @@
 
 **Date:** 2026-07-30
 **Spec:** [2026-07-30-universal-scoring-and-sample-status-design.md](../specs/2026-07-30-universal-scoring-and-sample-status-design.md)
-**Status:** Awaiting approval
+**Status:** Phases 1 and 2 shipped. **Next step: merge bgg-data-warehouse#96, then full-refresh
+`bgg_predictions` immediately.** Until that happens no consumer sees these fields.
+
+## Progress
+
+| | | |
+|---|---|---|
+| Phase 1 — scorer emits both fields | **done** | [#62](https://github.com/phenrickson/bgg-predictive-models/pull/62) merged, deployed |
+| Scoring image build repair | **done** | [#63](https://github.com/phenrickson/bgg-predictive-models/pull/63) — image had not built since 2026-04-29 |
+| Deploy verification | **done** | revision `bgg-model-scoring-00020-8dn`; predictions bit-identical to the April image (0 differences across 100 games × 5 columns) |
+| Workflow inputs for the backfill | **done** | [#64](https://github.com/phenrickson/bgg-predictive-models/pull/64) merged |
+| Phase 2 — backfill rated games | **done** | 31,092 games scored, `sample_status=in_sample`, `training_cutoff_year=2024` |
+| Phase 3 — `bgg_predictions.sqlx` | **open** | [bgg-data-warehouse#96](https://github.com/phenrickson/bgg-data-warehouse/pull/96), dry-run passes, awaiting merge |
+| Phase 3 — full refresh | **not started** | must follow the merge immediately |
+
+**Landing table now** — latest row per game, 46,675 games:
+
+| | games | years |
+|---|---|---|
+| `in_sample`, cutoff 2024 | 31,092 | 1900–2024 |
+| NULL (scored before the change) | 15,583 | 2024–2028 |
+
+The NULLs self-heal via change detection: 3,446 are already stale and rescore on the next
+run, 5,905 had a feature-hash change within 7 days, 4,335 within 30. No action needed.
+
+**Measured, superseding earlier estimates:** ~183ms/game in production (2,500-game batches at
+~6.8 min each), not the ~77ms measured against smaller ad-hoc batches. The backfill took 77
+minutes across 12 batches.
 
 ## Goal & success criteria
 
