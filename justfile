@@ -305,15 +305,17 @@ render-collection user=username outcome="own":
 select:
     uv run streamlit run src/selections/app.py
 
-# Step 2: render the menu report from a selections file.
-#   just render-menu                  # rocky_bilbao_2026
-#   just render-menu my_trip          # reports/selections/my_trip.yaml
+# Step 2: render the menu report for a selection. Each selection has its own
+# reports/<name>_menu_report.qmd (own prose + theme) reading
+# reports/selections/<name>.yaml.
+#   just render-menu                       # rocky_bilbao_2026
+#   just render-menu dont_leave_us_2026
 render-menu name="rocky_bilbao_2026":
     #!/usr/bin/env bash
     set -e
     cd reports
     BGG_PROJECT_ROOT="$(cd .. && pwd)" uv run quarto render \
-        rocky_bilbao_2026_menu_report.qmd \
+        {{name}}_menu_report.qmd \
         -P selections="selections/{{name}}.yaml"
 
 # --- Artifact sync to GCS ---

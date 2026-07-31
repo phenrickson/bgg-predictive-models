@@ -1,0 +1,103 @@
+name: dont_leave_us_2026
+username: phenrickson
+criteria:
+  recommended_at: any
+  supports: 6
+  complexity:
+  - 1.0
+  - 5.0
+  max_playtime: null
+games:
+  93:
+    selection: maybe
+    status: 'no'
+  521:
+    selection: maybe
+    status: 'yes'
+  11971:
+    selection: maybe
+    status: 'no'
+  92415:
+    selection: maybe
+    status: 'no'
+  124361:
+    selection: maybe
+    status: 'no'
+  131357:
+    selection: maybe
+    status: 'no'
+  172971:
+    selection: maybe
+    status: 'yes'
+  182694:
+    selection: other
+    status: 'no'
+  193042:
+    selection: other
+    status: 'no'
+  205317:
+    selection: other
+    status: 'no'
+  223770:
+    selection: lock
+    status: 'yes'
+  232832:
+    selection: maybe
+    status: 'yes'
+  245655:
+    selection: lock
+    status: 'yes'
+  265736:
+    selection: other
+    status: 'no'
+  286749:
+    selection: maybe
+    status: 'no'
+  324856:
+    selection: maybe
+    status: 'no'
+  340466:
+    selection: other
+    status: 'no'
+  361545:
+    selection: other
+    status: 'no'
+  366013:
+    selection: maybe
+    status: 'yes'
+  370444:
+    selection: lock
+    status: 'yes'
+  375769:
+    selection: maybe
+    status: 'no'
+  411033:
+    selection: lock
+    status: 'yes'
+  411567:
+    selection: lock
+    status: 'yes'
+  424975:
+    selection: other
+    status: 'no'
+  427866:
+    selection: lock
+    status: 'yes'
+  429293:
+    selection: lock
+    status: 'yes'
+  432527:
+    selection: lock
+    status: 'yes'
+  436217:
+    selection: maybe
+    status: 'no'
+  446497:
+    selection: lock
+    status: 'yes'
+  448271:
+    selection: lock
+    status: 'yes'
+  454103:
+    selection: lock
+    status: 'yes'

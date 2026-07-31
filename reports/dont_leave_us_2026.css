@@ -1,0 +1,254 @@
+/* Don't Leave Us 2026 — cold, pale, and drained. Melancholy read as winter
+   light: a washed-out ice-blue page, watery greys, everything a little too
+   far away. The threat isn't loud; it's the chill. Single light theme. */
+
+:root {
+  --ground:   #eaf0f4;  /* frozen overcast — the page is a grey-blue sky */
+  --surface:  #f7fafc;  /* card face — thin ice, barely lighter */
+  --ink:      #33454f;  /* cold slate text, never true black */
+  --ink-soft: #8298a5;  /* washed-out, distant, fading grey-blue */
+  --line:     #d3e0e8;  /* frost hairline */
+  --sol:      #7fa8c4;  /* pale glacier blue — the accent */
+  --rioja:    #4a7894;  /* deep cold blue — locks */
+  --olive:    #8fa8ae;  /* drained sea-grey — maybes */
+  --sky:      #aebfc9;  /* the palest steel — others, nearly gone */
+}
+
+body {
+  background:
+    /* thin winter light bleeding in, going nowhere */
+    radial-gradient(ellipse at 18% -12%, #f4f9fc 0%, transparent 52%),
+    radial-gradient(ellipse at 92% 4%, #e2ebf1 0%, transparent 46%),
+    var(--ground);
+  color: var(--ink);
+  font-family: "Helvetica Neue", Helvetica, system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+}
+
+/* Full page width with a symmetric inset from the viewport edges (no fixed
+   cap) — content fills the page minus the inset. */
+#quarto-content, main.content, .page-columns, #quarto-document-content {
+  max-width: none !important;
+  width: auto !important;
+  margin-inline: 0 !important;
+  padding-inline: clamp(1rem, 4vw, 4rem) !important;
+}
+main.content { width: 100% !important; }
+/* No sidebar/TOC column — reclaim the full width for content. */
+#quarto-margin-sidebar, .margin-sidebar, #TOC { display: none !important; }
+
+/* The title is flat and uppercase — stated, not shouted. */
+.quarto-title-block .quarto-title .title,
+h1.title {
+  font-size: 3.4rem !important;
+  line-height: .98;
+  letter-spacing: .01em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--ink);
+}
+h1, h2, h3, .title, .subtitle {
+  font-family: "Helvetica Neue", "Arial Narrow", Helvetica, sans-serif !important;
+  color: var(--ink);
+  text-wrap: balance;
+}
+/* The subtitle is the fine print nobody reads until it's too late. */
+.subtitle {
+  color: var(--ink-soft);
+  font-style: normal;
+  font-weight: 400;
+  font-size: .95rem;
+  letter-spacing: .01em;
+  border-left: 2px solid var(--sol);
+  padding-left: .8rem;
+  margin-top: .9rem;
+}
+
+/* Section headers: uppercase, tracked out, ruled off — form-letter headings. */
+h1 {
+  font-weight: 700;
+  font-size: 1.45rem;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  margin-top: 3rem;
+  padding-bottom: .45rem;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: .7rem;
+}
+/* A hard square, not a friendly dot. */
+h1::before {
+  content: "";
+  width: .5rem; height: .5rem; border-radius: 0;
+  background: var(--sol);
+  flex: 0 0 auto;
+  transform: translateY(-.1em);
+}
+
+/* Links: cold slate, underlined in glacier blue. */
+a { color: var(--rioja); text-decoration-color: var(--sol); text-underline-offset: .15em; }
+a:hover { color: #2f5a73; }
+
+/* Bold text goes colder, not louder — the threat is delivered flatly. */
+strong { color: #2f5a73; font-weight: 600; }
+
+/* Constraint list in the intro reads like a packing list */
+#about ul, .about ul { list-style: none; padding-left: 0; }
+#about li, .about li { padding-left: 1.4rem; position: relative; }
+#about li::before { content: "—"; position: absolute; left: 0; color: var(--sol); }
+
+/* ---- KPI stat row ---- */
+.kpi-row {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  margin: 1.25rem 0 1.75rem;
+}
+/* KPIs read like counts on an official tally. Square corners, no warmth. */
+.kpi {
+  flex: 1 1 140px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--sol);
+  border-radius: 0;
+  padding: 1rem 1.15rem;
+}
+.kpi-num {
+  font-size: 2.6rem; font-weight: 800; line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.kpi-label {
+  margin-top: .4rem;
+  font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--ink-soft);
+}
+
+/* ---- Tile grid ---- */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 2.25rem;
+}
+
+/* Tiles are square, flat, and cold — no warmth, no rounding. */
+.tile {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  overflow: hidden;
+  text-decoration: none !important;
+  color: var(--ink) !important;
+  box-shadow: none;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+/* Hover barely responds. */
+.tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(74,120,148,.18);
+  border-color: var(--rioja);
+}
+
+.tile-cover {
+  aspect-ratio: 16 / 7;
+  background: #dde8ef;
+  overflow: hidden;
+}
+/* Covers are dimmed and drained; they brighten only under attention. */
+.tile-cover img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  filter: saturate(.35) brightness(1.06) contrast(.92);
+  transition: filter .18s ease;
+}
+.tile:hover .tile-cover img { filter: saturate(.7) brightness(1.02); }
+
+.tile-body { padding: .65rem .8rem .75rem; display: flex; flex-direction: column; gap: .4rem; flex: 1; }
+.tile-name {
+  font-weight: 700; font-size: 1rem; line-height: 1.2;
+  letter-spacing: .01em;
+}
+.tile-year { color: var(--ink-soft); font-weight: 400; margin-left: .35rem; font-size: .85em; }
+.tile-desc { font-size: .8rem; color: var(--ink-soft); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.tile-meta { margin-top: auto; display: flex; flex-direction: column; gap: .3rem; padding-top: .45rem; border-top: 1px solid var(--line); }
+.tile-meta-item { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.tile-meta-k {
+  font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-soft); min-width: 5.2rem;
+}
+.tile-time { font-variant-numeric: tabular-nums; font-size: .84rem; }
+
+/* Player-count badges (reused component, restyled cold) */
+.pc-badge { display:inline-block; min-width:1.4rem; text-align:center; font-size:.76rem;
+  line-height:1.4rem; height:1.4rem; padding:0 .32rem; margin:0 .1rem 0 0; border-radius:0; }
+.pc-best { background:var(--rioja); color:#f4fafd; border:1px solid var(--rioja); font-weight:700; }
+.pc-rec  { background:transparent; color:var(--ink-soft); border:1px solid var(--line); }
+.badge-none { color: var(--ink-soft); opacity:.5; }
+
+/* Complexity tier chip: gradient carried via --wc from Python, dark ink for
+   the pale middle, light for the saturated ends (set via --wi). */
+.weight-badge { display:inline-block; padding:.15rem .5rem; border-radius:.35rem;
+  font-size:.76rem; font-weight:700; color:var(--wi,#fff); background:var(--wc,var(--sol)); }
+
+/* Tier weighting: locks are the headline, others are nearly disowned. */
+.tile-locks  { border-left: 3px solid var(--rioja); }
+.tile-maybes { border-left: 3px solid var(--olive); }
+.tile-others { opacity: .62; }
+.tile-others:hover { opacity: 1; }
+
+/* Selection pill in the Menu table — a stamp, not a pill. */
+.sel-pill { display:inline-block; padding:.15rem .55rem; border-radius:0; font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.09em; }
+.sel-lock { background:var(--rioja); color:#f4fafd; }
+.sel-maybe { background:transparent; color:var(--olive); border:1px solid var(--olive); }
+
+/* ---- The Menu table: a cold ledger ---- */
+table.dataTable { font-size: .86rem; color: var(--ink); }
+.dataTables_wrapper { margin-top: .5rem; color: var(--ink-soft); }
+table.dataTable thead th {
+  background: #dde8ef !important; color: var(--ink) !important;
+  text-transform: uppercase; letter-spacing: .1em; font-size: .68rem;
+  border-bottom: 1px solid var(--line) !important;
+}
+table.dataTable tbody td { background: var(--surface); border-top: 1px solid var(--line); }
+table.dataTable tbody tr:hover td { background: #e8f1f6 !important; }
+table.dataTable a { color: var(--rioja); text-decoration: none; border-bottom: 1px solid var(--line); }
+table.dataTable a:hover { color: #2f5a73; }
+/* itables' own search/info chrome, dragged into the dark */
+.dataTables_wrapper .dataTables_filter input {
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+}
+
+/* Strikethrough (e.g. "What's in the ~~Box~~ Bag") — crossed out, faded out. */
+del, s { color: var(--ink-soft); text-decoration-color: var(--sol); text-decoration-thickness: 2px; }
+
+#TOC, .sidebar { color: var(--ink-soft); }
+
+/* ---- Mobile ---- */
+@media (max-width: 640px) {
+  /* Tighter gutters so content isn't squeezed on a phone. */
+  #quarto-content, main.content, .page-columns, #quarto-document-content {
+    padding-inline: 1rem !important;
+  }
+  .quarto-title-block .quarto-title .title,
+  h1.title { font-size: 2rem !important; }
+  h1 { font-size: 1.5rem; margin-top: 1.8rem; }
+
+  /* KPIs stack 2-up instead of cramming 4 across. */
+  .kpi-row { gap: .6rem; }
+  .kpi { flex: 1 1 calc(50% - .6rem); padding: .75rem .85rem; }
+  .kpi-num { font-size: 1.9rem; }
+
+  /* One tile per row, full width — no forced 280px min. */
+  .tile-grid { grid-template-columns: 1fr; gap: .85rem; }
+  /* Landscape-ish cover so a single-column tile isn't absurdly tall. */
+  .tile-cover { aspect-ratio: 16 / 6; }
+
+  /* The Menu table scrolls inside its own box instead of overflowing the page. */
+  .dataTables_wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.dataTable { font-size: .82rem; }
+}
+
+/* Any wide table wrapper never pushes the page sideways. */
+.dataTables_wrapper, .cell-output-display { max-width: 100%; overflow-x: auto; }
