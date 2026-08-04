@@ -9,13 +9,13 @@ criteria:
   max_playtime: null
 games:
   12:
-    selection: maybe
-    status: 'no'
-  93:
     selection: other
     status: 'no'
+  93:
+    selection: lock
+    status: 'yes'
   118:
-    selection: maybe
+    selection: lock
     status: 'yes'
   503:
     selection: other
@@ -23,12 +23,6 @@ games:
   11971:
     selection: lock
     status: 'yes'
-  39463:
-    selection: other
-    status: 'no'
-  54998:
-    selection: other
-    status: 'no'
   82222:
     selection: other
     status: 'no'
@@ -36,31 +30,25 @@ games:
     selection: lock
     status: 'yes'
   98778:
-    selection: maybe
-    status: 'no'
-  105551:
     selection: other
     status: 'no'
   124361:
-    selection: maybe
-    status: 'no'
-  131357:
     selection: other
     status: 'no'
+  131357:
+    selection: lock
+    status: 'yes'
   148949:
     selection: other
     status: 'no'
   167355:
-    selection: maybe
-    status: 'yes'
+    selection: other
+    status: 'no'
   175914:
     selection: other
     status: 'no'
-  176494:
-    selection: other
-    status: 'no'
   181279:
-    selection: maybe
+    selection: other
     status: 'no'
   182694:
     selection: other
@@ -77,9 +65,6 @@ games:
   228372:
     selection: lock
     status: 'yes'
-  232832:
-    selection: other
-    status: 'no'
   233078:
     selection: other
     status: 'no'
@@ -92,14 +77,11 @@ games:
   296345:
     selection: lock
     status: 'yes'
-  324856:
+  340466:
     selection: other
     status: 'no'
-  340466:
-    selection: maybe
-    status: 'no'
   350689:
-    selection: maybe
+    selection: other
     status: 'no'
   361545:
     selection: other
@@ -111,7 +93,7 @@ games:
     selection: lock
     status: 'yes'
   375769:
-    selection: maybe
+    selection: other
     status: 'no'
   411033:
     selection: lock
@@ -126,17 +108,17 @@ games:
     selection: lock
     status: 'yes'
   436217:
-    selection: maybe
-    status: 'no'
+    selection: lock
+    status: 'yes'
   446497:
-    selection: maybe
+    selection: other
     status: 'no'
   447305:
     selection: lock
     status: 'yes'
   453740:
-    selection: lock
-    status: 'yes'
+    selection: other
+    status: 'no'
   454103:
     selection: lock
     status: 'yes'
