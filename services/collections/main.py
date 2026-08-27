@@ -4,6 +4,7 @@ Endpoints:
 - GET  /health
 - GET  /models
 - GET  /model/{username}/{outcome}/info
+- POST /sync/{username}
 - POST /predict_own   (Task 9)
 """
 
@@ -17,6 +18,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from google.cloud import bigquery
+from pydantic import BaseModel
 
 # Make project root importable when running from services/collections/
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -25,6 +27,7 @@ sys.path.insert(0, project_root)
 from services.collections.auth import GCPAuthenticator, AuthenticationError  # noqa: E402
 from services.collections.registry import CollectionRegistry  # noqa: E402
 from services.collections.registered_model import RegisteredCollectionModel  # noqa: E402
+from src.collection.collection_pipeline import fetch_and_persist  # noqa: E402
 from src.utils.config import load_config  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
@@ -96,6 +99,28 @@ def model_info(username: str, outcome: str):
         "finalize_through_year": entry.finalize_through_year,
         "status": entry.status,
     }
+
+
+class SyncResponse(BaseModel):
+    username: str
+    rows_persisted: int
+
+
+@app.post("/sync/{username}", response_model=SyncResponse)
+def sync_collection(username: str):
+    """Fetch a user's raw collection from BGG and upsert into BigQuery.
+
+    Just the fetch + upsert (`fetch_and_persist`) — deliberately not
+    `CollectionPipeline.run_full_pipeline`, which additionally trains a model per
+    outcome. Callers wanting "does this game show up in my collection" don't need a
+    trained model; callers wanting collection predictions are a separate, unbuilt path.
+    """
+    try:
+        rows = fetch_and_persist(username, ENVIRONMENT_PREFIX)
+    except Exception as e:
+        logger.exception(f"Collection sync failed for {username!r}")
+        raise HTTPException(status_code=502, detail=f"Sync failed: {e}")
+    return SyncResponse(username=username, rows_persisted=rows)
 
 
 import uuid  # noqa: E402
