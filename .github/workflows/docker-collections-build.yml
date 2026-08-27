@@ -78,7 +78,7 @@ jobs:
           --image us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/bgg-predictive-models/collections:${{ steps.env-tag.outputs.env_tag }}-${{ github.sha }} \
           --platform managed \
           --region us-central1 \
-          --allow-unauthenticated \
+          --no-allow-unauthenticated \
           --max-instances 5 \
           --memory 4Gi \
           --cpu 2 \
