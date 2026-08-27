@@ -98,6 +98,32 @@ def test_predict_own_returns_404_when_user_not_registered(mocked_app):
     assert resp.status_code == 404
 
 
+def test_sync_collection_returns_rows_persisted(mocked_app):
+    m = mocked_app
+    with patch.object(m, "fetch_and_persist", return_value=42) as fap:
+        client = TestClient(m.app)
+        resp = client.post("/sync/alice")
+
+    # ENVIRONMENT_PREFIX comes from real config here, not the fixture's mocked
+    # `load_config` — `importlib.reload` re-runs `from ... import load_config`,
+    # which re-imports the real function and clobbers the patch before `config =
+    # load_config()` executes. Assert against whatever the module actually resolved
+    # to (what the endpoint is responsible for passing through), not a specific value.
+    fap.assert_called_once_with("alice", m.ENVIRONMENT_PREFIX)
+    assert resp.status_code == 200
+    assert resp.json() == {"username": "alice", "rows_persisted": 42}
+
+
+def test_sync_collection_returns_502_on_fetch_failure(mocked_app):
+    m = mocked_app
+    with patch.object(m, "fetch_and_persist", side_effect=ValueError("Could not fetch collection")):
+        client = TestClient(m.app)
+        resp = client.post("/sync/ghost")
+
+    assert resp.status_code == 502
+    assert "Sync failed" in resp.json()["detail"]
+
+
 def test_predict_own_rejects_both_game_ids_and_change_detection(mocked_app):
     m = mocked_app
     entry = MagicMock()
