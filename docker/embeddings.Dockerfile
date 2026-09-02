@@ -22,6 +22,9 @@ RUN pip install uv
 # Copy required files
 COPY pyproject.toml .
 COPY uv.lock .
+# README.md is referenced by pyproject.toml's `readme` field; uv sync builds the
+# project and hatchling errors if it's missing (matches scoring.Dockerfile).
+COPY README.md .
 COPY services/__init__.py /app/services/__init__.py
 COPY services/game_embeddings/ /app/services/game_embeddings/
 COPY services/scoring/auth.py /app/services/scoring/auth.py
