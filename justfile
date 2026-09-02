@@ -1,9 +1,10 @@
 set dotenv-load
 
-# On Windows, `just` otherwise looks for `sh` (plain recipes) or `cygpath`
-# (`#!/usr/bin/env bash` shebang recipes) and fails when neither is on PATH.
-# Point plain recipes at git-bash so the same recipes run on macOS and Windows.
-set windows-shell := ["bash", "-c"]
+# On Windows, `just` otherwise looks for `sh` and fails when it's not on PATH
+# (and `bash` there often resolves to a broken WSL launcher). Route plain
+# recipes through cmd; the recipes that must be POSIX carry their own
+# `#!/usr/bin/env bash` shebang and are run on macOS / CI. No-op on macOS.
+set windows-shell := ["cmd.exe", "/c"]
 
 # Defaults — every single-user recipe takes `user` as its first
 # positional argument. Pass it like a CLI:
