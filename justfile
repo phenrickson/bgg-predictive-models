@@ -428,3 +428,13 @@ embed-train algorithm="" embedding_dim="" min_feature_count="" experiment="game-
 # experiment version (latest if version is empty).
 embed-diagnose experiment="game-embeddings" version="":
     uv run python -m src.models.embeddings.diagnose_components --experiment {{experiment}} {{ if version == "" { "" } else { "--version " + version } }}
+
+# Register the latest game-embedding experiment as the production model
+# (embeddings-v<current year>, from config.years.current) that
+# bgg-embeddings-service loads. Overwrites the registered model in place —
+# run after `embed-train` + validation, then dispatch `run-generate-embeddings`
+# to re-score the catalog. `--name` / description default from config.
+#   just embed-register
+#   just embed-register svd-embeddings          # register a different experiment
+embed-register experiment="game-embeddings":
+    uv run python -m services.game_embeddings.register_model --experiment {{experiment}} --description "Production PCA embeddings for game similarity"
