@@ -8,7 +8,7 @@
 
 **Architecture:** Two small, reusable transformers in `src/features/transformers.py` (`TwoSDScaler`, `MinCountSelector`), following the existing `RowNormalizer` / `LogTransformer` pattern (column-subset transformer, pass-through others, `set_output` + `get_feature_names_out`). Wired into `create_embedding_preprocessor` (`src/models/embeddings/transformer.py`). The algorithm switch is `config.yaml`-only — `PCAEmbedding` already exists and already emits component loadings. Then a new embedding **experiment version** is trained and evaluated on the bgg-viewer bench before any BigQuery table regenerates.
 
-**Tech stack:** Python 3.12, scikit-learn, pandas, pytest, uv. Conventions: `uv run python -m …` for modules, `uv run --extra test python -m pytest …` for tests, `tmp_path` for hermetic tests.
+**Tech stack:** Python 3.12, scikit-learn, pandas, pytest, uv. Conventions: `uv run python -m …` for modules, `uv run -m pytest …` for tests, `tmp_path` for hermetic tests.
 
 **Branch:** `feat/embedding-input-scaling` → PR to `main`. Production embedding generation continues on `embeddings-v2026` until the new version clears evaluation. User reviews and merges the PR.
 
@@ -131,7 +131,7 @@ def test_zero_sd_column_is_safe():
 - [ ] **Step 3: Run — expect failure**
 
 ```bash
-uv run --extra test python -m pytest tests/test_two_sd_scaler.py -q
+uv run -m pytest tests/test_two_sd_scaler.py -q
 ```
 Expected: `ImportError` / all tests fail (`TwoSDScaler` doesn't exist).
 
@@ -213,14 +213,14 @@ class TwoSDScaler(BaseEstimator, TransformerMixin):
 - [ ] **Step 2: Run — expect pass**
 
 ```bash
-uv run --extra test python -m pytest tests/test_two_sd_scaler.py -q
+uv run -m pytest tests/test_two_sd_scaler.py -q
 ```
 Fix `test_transform_uses_fit_statistics` if its arithmetic assertion is clumsy — the intent is "transform applies fit-time mean/scale, not re-fit"; simplify to comparing two `transform` calls on frames that differ by a known constant.
 
 - [ ] **Step 3: Full transformer suite still green**
 
 ```bash
-uv run --extra test python -m pytest tests/test_transformers.py -q
+uv run -m pytest tests/test_transformers.py -q
 ```
 
 - [ ] **Step 4: Commit**
@@ -289,7 +289,7 @@ def test_get_feature_names_out_reflects_kept_columns():
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-uv run --extra test python -m pytest tests/test_min_count_selector.py -q
+uv run -m pytest tests/test_min_count_selector.py -q
 ```
 
 ### Task 4: Implement `MinCountSelector`
@@ -346,7 +346,7 @@ class MinCountSelector(BaseEstimator, TransformerMixin):
 - [ ] **Step 2: Run — expect pass**
 
 ```bash
-uv run --extra test python -m pytest tests/test_min_count_selector.py -q
+uv run -m pytest tests/test_min_count_selector.py -q
 ```
 
 - [ ] **Step 3: Commit**
@@ -397,7 +397,7 @@ def test_min_count_is_configurable():
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-uv run --extra test python -m pytest tests/test_embedding_preprocessor_scaling.py -q
+uv run -m pytest tests/test_embedding_preprocessor_scaling.py -q
 ```
 
 ### Task 6: Update `create_embedding_preprocessor`
@@ -417,13 +417,13 @@ Import `TwoSDScaler, MinCountSelector` from `src.features.transformers`. Leave t
 - [ ] **Step 2: Run — expect pass**
 
 ```bash
-uv run --extra test python -m pytest tests/test_embedding_preprocessor_scaling.py -q
+uv run -m pytest tests/test_embedding_preprocessor_scaling.py -q
 ```
 
 - [ ] **Step 3: Preprocessor still fits end-to-end on a sample**
 
 ```bash
-uv run --extra test python -m pytest tests/ -q -k "embedding" 
+uv run -m pytest tests/ -q -k "embedding" 
 ```
 Expected: green (or pre-existing unrelated failures only — note them, don't fix here).
 
@@ -515,7 +515,7 @@ def test_summarize_flags_rare_feature_dominated_component():
 - [ ] **Step 2: Run — expect failure**
 
 ```bash
-uv run --extra test python -m pytest tests/test_diagnose_components.py -q
+uv run -m pytest tests/test_diagnose_components.py -q
 ```
 
 ### Task 9: Implement `diagnose_components.py`
@@ -536,7 +536,7 @@ CLI (`python -m src.models.embeddings.diagnose_components --experiment game-embe
 - [ ] **Step 2: Run — expect pass**
 
 ```bash
-uv run --extra test python -m pytest tests/test_diagnose_components.py -q
+uv run -m pytest tests/test_diagnose_components.py -q
 ```
 
 - [ ] **Step 3: Smoke-run against the current (svd) model** for a baseline
