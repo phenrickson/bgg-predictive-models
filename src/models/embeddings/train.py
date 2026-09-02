@@ -38,7 +38,7 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     return logger
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments(argv=None) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Train embedding models for game representations"
@@ -79,9 +79,22 @@ def parse_arguments() -> argparse.Namespace:
     # Algorithm-specific arguments
     parser.add_argument(
         "--whiten",
+        dest="whiten",
         action="store_true",
-        default=True,
-        help="(PCA) Whether to whiten the output",
+        default=None,
+        help="(PCA) whiten the output — overrides config.yaml",
+    )
+    parser.add_argument(
+        "--no-whiten",
+        dest="whiten",
+        action="store_false",
+        help="(PCA) do not whiten — overrides config.yaml",
+    )
+    parser.add_argument(
+        "--min-feature-count",
+        type=int,
+        default=None,
+        help="Drop indicator features on fewer than N games (default: from config.yaml)",
     )
     parser.add_argument(
         "--n-iter",
@@ -132,7 +145,7 @@ def parse_arguments() -> argparse.Namespace:
         help="Minimum users_rated for training data (default: from config.yaml)",
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def get_algorithm_params(args: argparse.Namespace) -> dict:
@@ -196,6 +209,15 @@ def main():
     else:
         min_ratings = 25
 
+    # Resolve min_feature_count (CLI overrides config). The trainer reads this
+    # off config.embeddings when it builds the preprocessor, so apply it there.
+    if args.min_feature_count is not None and config.embeddings:
+        config.embeddings.min_feature_count = args.min_feature_count
+    if config.embeddings:
+        logger.info(
+            f"Min feature count (drop rarer dummies): {config.embeddings.min_feature_count}"
+        )
+
     # Get algorithm parameters (from args or config)
     # Update args.algorithm for get_algorithm_params
     args.algorithm = algorithm
@@ -225,6 +247,21 @@ def main():
         description=args.description,
         min_ratings=min_ratings,
     )
+
+    # Component diagnostic for linear decompositions (concentration x prevalence).
+    if algorithm in ("pca", "svd"):
+        try:
+            from src.models.embeddings.diagnose_components import (
+                _resolve_experiment_dir,
+                write_report,
+            )
+
+            exp_dir = _resolve_experiment_dir(experiment_name, None, args.output_dir)
+            path = write_report(exp_dir)
+            if path.exists():
+                logger.info("Component diagnostic:\n%s", path.read_text())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("component diagnostic skipped (%s)", e)
 
     # Log summary
     logger.info("Training complete!")

@@ -127,23 +127,35 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         help="flag components whose top features are all rarer than this",
     )
     args = parser.parse_args(argv)
-
     exp_dir = _resolve_experiment_dir(args.experiment, args.version, args.experiments_dir)
-    artifacts = json.loads((exp_dir / "artifacts.json").read_text())
+    print(generate_report(exp_dir, top_k=args.top_k, flag_prevalence=args.flag_prevalence))
+
+
+def generate_report(
+    exp_dir: Path, top_k: int = 10, flag_prevalence: float = 0.005
+) -> str:
+    """Build the diagnostic report string for a trained experiment directory."""
+    import json
+
+    artifacts = json.loads((Path(exp_dir) / "artifacts.json").read_text())
     if "components" not in artifacts:
         raise ValueError("artifacts.json has no 'components' — diagnostic needs pca / svd.")
     components = np.asarray(artifacts["components"], dtype=float)
     feature_names = list(artifacts["feature_names"])
-    evr = np.asarray(artifacts["explained_variance_ratio"]) if "explained_variance_ratio" in artifacts else None
+    evr = (
+        np.asarray(artifacts["explained_variance_ratio"])
+        if "explained_variance_ratio" in artifacts
+        else None
+    )
 
     prevalence = np.full(len(feature_names), np.nan)
     try:
         from src.models.embeddings.data import EmbeddingDataLoader
 
-        with open(exp_dir / "embedding_pipeline.pkl", "rb") as f:
+        with open(Path(exp_dir) / "embedding_pipeline.pkl", "rb") as f:
             preprocessor = pickle.load(f)["preprocessor"]
         # numpy output avoids sklearn's get_feature_names_out chain (older
-        # pickled imputers raise there); we align positionally to feature_names.
+        # pickled imputers raise there); align positionally to feature_names.
         preprocessor.set_output(transform="default")
         logger.info("Loading training features to compute prevalence...")
         df = EmbeddingDataLoader().load_embedding_data().to_pandas()
@@ -152,7 +164,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         logger.warning("prevalence unavailable (%s); reporting concentration only", e)
 
     rows = summarize_components(
-        components, feature_names, prevalence, top_k=args.top_k, explained_variance_ratio=evr
+        components, feature_names, prevalence, top_k=top_k, explained_variance_ratio=evr
     )
 
     def _feat_label(f: Dict[str, Any]) -> str:
@@ -160,26 +172,42 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         tag = "cont" if np.isnan(p) else f"{p:.3f}"
         return f"{f['feature']}({tag})"
 
-    by_conc = sorted(rows, key=lambda r: r["concentration"], reverse=True)
-    print(f"\n{'comp':>4}  {'conc':>6}  {'min_prev':>9}  {'evr':>7}  top features")
-    print("-" * 100)
-    for r in by_conc:
+    lines = [
+        f"component diagnostic - {Path(exp_dir).name}  ({len(rows)} components, sorted by concentration)",
+        f"{'comp':>4}  {'conc':>6}  {'min_prev':>9}  {'evr':>7}  top features",
+        "-" * 100,
+    ]
+    for r in sorted(rows, key=lambda r: r["concentration"], reverse=True):
         evr_s = f"{r.get('explained_variance_ratio', float('nan')):.4f}"
         mp = r["min_prevalence_in_top"]
         mp_s = "   nan   " if np.isnan(mp) else f"{mp:9.5f}"
         feats = ", ".join(_feat_label(f) for f in r["top_features"][:5])
-        print(f"{r['component']:>4}  {r['concentration']:6.3f}  {mp_s}  {evr_s:>7}  {feats}")
+        lines.append(
+            f"{r['component']:>4}  {r['concentration']:6.3f}  {mp_s}  {evr_s:>7}  {feats}"
+        )
 
-    flagged = [
-        r
+    flagged = sorted(
+        r["component"]
         for r in rows
         if not np.isnan(r["min_prevalence_in_top"])
-        and r["min_prevalence_in_top"] < args.flag_prevalence
-    ]
-    print(
-        f"\n{len(flagged)} component(s) with every top-{args.top_k} feature rarer than "
-        f"{args.flag_prevalence:g}: {sorted(r['component'] for r in flagged)}"
+        and r["min_prevalence_in_top"] < flag_prevalence
     )
+    lines.append("")
+    lines.append(
+        f"{len(flagged)} component(s) with every top-{top_k} feature rarer than "
+        f"{flag_prevalence:g}: {flagged}"
+    )
+    return "\n".join(lines)
+
+
+def write_report(exp_dir: Path, **kwargs) -> Path:
+    """Write ``component_diagnostic.txt`` into an experiment dir; return its path."""
+    out = Path(exp_dir) / "component_diagnostic.txt"
+    try:
+        out.write_text(generate_report(exp_dir, **kwargs), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 — never fail a training run over the diagnostic
+        logger.warning("component diagnostic skipped (%s)", e)
+    return out
 
 
 if __name__ == "__main__":

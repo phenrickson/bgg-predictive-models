@@ -98,6 +98,7 @@ embeddings:
   experiment_name: game-embeddings
   min_ratings: 5 # Minimum users_rated for training data
   use_embeddings: true # Use description embeddings (emb_*) as input features
+  min_feature_count: 10 # Drop mechanic/category/family dummies on fewer than N games
   algorithms:
     pca:
       # whiten off: whitening re-equalises every component to unit variance,
