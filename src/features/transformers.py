@@ -166,6 +166,56 @@ class TwoSDScaler(BaseEstimator, TransformerMixin):
         return np.asarray(self.feature_names_in_)
 
 
+class MinCountSelector(BaseEstimator, TransformerMixin):
+    """Drop binary (0/1) columns whose column sum is below ``min_count``.
+
+    Removes indicator features carried by too few rows to estimate reliably.
+    Continuous columns (observed values not a subset of ``{0, 1}``) and any
+    unmatched column are always kept. A feature on exactly ``min_count`` rows
+    is kept.
+    """
+
+    def __init__(self, min_count: int = 10):
+        self.min_count = min_count
+        self._output_config = None
+
+    @staticmethod
+    def _is_binary(series: pd.Series) -> bool:
+        vals = pd.unique(series.dropna())
+        if len(vals) == 0:
+            return False
+        return set(np.asarray(vals).ravel().tolist()).issubset({0, 1})
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        self.feature_names_in_ = list(X.columns)
+        drop = []
+        for c in X.columns:
+            col = X[c]
+            if self._is_binary(col) and float(col.fillna(0).sum()) < self.min_count:
+                drop.append(c)
+        self.columns_to_drop_ = drop
+        self.columns_kept_ = [c for c in X.columns if c not in drop]
+        return self
+
+    def transform(self, X):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_in_)
+        return X.drop(columns=self.columns_to_drop_, errors="ignore")
+
+    def set_output(self, *, transform=None):
+        if transform is not None and transform not in ["default", "pandas"]:
+            raise ValueError(
+                f"Invalid transform parameter: {transform}. Must be 'default' or 'pandas'."
+            )
+        self._output_config = transform
+        return self
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(self.columns_kept_)
+
+
 class LogTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer to apply log(1+x) transformation to specified columns.
