@@ -80,6 +80,11 @@ class EmbeddingTransformer(BaseBGGTransformer):
         include_count_features: bool = False,
         family_allow_patterns: Optional[List[str]] = None,
         max_family_features: int = 150,
+        # Player count enters as continuous min_players / max_players (via
+        # preserve_columns), not a 10-column thermometer one-hot: the one-hot
+        # block is correlated + common, so unscaled it dominates a PCA
+        # component and quantises the space into bands.
+        create_player_dummies: bool = False,
         # Inherit other defaults from base
         **kwargs,
     ):
@@ -108,6 +113,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
             include_count_features=include_count_features,
             family_allow_patterns=family_allow_patterns,
             max_family_features=max_family_features,
+            create_player_dummies=create_player_dummies,
             **kwargs,
         )
 
@@ -157,7 +163,14 @@ def create_embedding_preprocessor(
         ]
 
     if preserve_columns is None:
-        preserve_columns = ["year_published", "predicted_complexity"]
+        # min/max_players carried through as continuous features (see
+        # EmbeddingTransformer — no player_count_* one-hots).
+        preserve_columns = [
+            "year_published",
+            "predicted_complexity",
+            "min_players",
+            "max_players",
+        ]
 
     # Create embedding transformer with preserved columns
     transformer = EmbeddingTransformer(
@@ -170,9 +183,12 @@ def create_embedding_preprocessor(
     pipeline_steps = [
         ("bgg_preprocessor", transformer),
         (
+            # No add_indicator: a "this value was missing" flag encodes data
+            # completeness, not how a game plays, and (being common) it lands
+            # a PCA component of its own.
             "impute",
             SimpleImputer(
-                strategy="median", add_indicator=True, keep_empty_features=False
+                strategy="median", add_indicator=False, keep_empty_features=False
             ),
         ),
     ]
