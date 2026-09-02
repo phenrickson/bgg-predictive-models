@@ -31,12 +31,21 @@ warehouse side is automatic.
 ## The one deploy-mechanics finding
 
 `docker-embeddings-build.yml` triggers on push to `main` **only** for
-`services/game_embeddings/**` or `docker/embeddings.Dockerfile` changes. This
-branch changes `src/models/embeddings/transformer.py`, not the service dir — so
-merging does **not** auto-rebuild the service image. The service unpickles the
-model pipeline, which now contains `PlayerCountSanitizer` / `TwoSDScaler` /
-`MinCountSelector`, so the image must be rebuilt (with the new `src/`) before the
-new model can load. → manual `workflow_dispatch` of the build after merge.
+`services/game_embeddings/**`, `docker/embeddings.Dockerfile`, or (stale, wrong
+filename) `.github/workflows/build-embeddings.yml`. It does **not** watch
+`src/**`, even though the Dockerfile does `COPY src/` and the service imports
+`src.models.embeddings.transformer`. This branch changes `src/models/embeddings/`,
+not the service dir — so **merging does not auto-rebuild the service image**, and
+the deployed service would keep running the old `src/` (no `PlayerCountSanitizer`
+/ `TwoSDScaler` / `MinCountSelector`), unable to unpickle the new model.
+
+Same gap in `docker-scoring-build.yml`, `docker-collections-build.yml`,
+`docker-text-embeddings-build.yml` — none watch `src/**`. It's the established
+pattern; `src/` changes reach the services only via manual `workflow_dispatch`.
+
+**This deploy: option A** — dispatch `docker-embeddings-build.yml` by hand as
+step 2. Fixing the path filters across all four service builds is **follow-up B**
+(see Out of scope), its own workflow-hygiene PR.
 
 ## Not a problem (checked, ruled out)
 
@@ -90,9 +99,14 @@ Open the PR, Phil reviews and merges. 8 commits: TwoSDScaler/MinCountSelector,
 config swap, player-count features, diagnostic fix, neighbor_check, Makefile→justfile
 register move, deployment plan.
 
-**Verify:** CI green. `uv run -m pytest tests/` — the 8 pre-existing
-`test_transformers.py` / `test_preprocessor.py` failures (fixture schema drift,
-present on `main`) don't grow; everything else passes.
+Merging triggers **no workflows** — every `push: main` workflow is path-filtered
+to `services/**` / `docker/**` / `terraform/**` / `src/streamlit/**` /
+`reports/static/**`, none of which this branch touches, and there is no CI/test
+workflow. The merge is inert; every step below is a deliberate manual action.
+
+**Verify:** `uv run -m pytest tests/` locally — the 17 pre-existing failures
+(`test_transformers` / `test_preprocessor` fixture drift, `test_register` mocks,
+collections), all present on `main`, don't grow; the embedding tests pass.
 
 ### 2. Rebuild the embeddings service image
 
@@ -168,6 +182,16 @@ upcoming 0-rating game (`source_min_users_rated: 0` path).
 
 ## Out of scope
 
+- **Follow-up B — service-build path filters.** `docker-embeddings-build.yml`
+  (and `docker-scoring-build.yml`, `docker-collections-build.yml`,
+  `docker-text-embeddings-build.yml`) don't watch `src/**` despite `COPY src/` in
+  every Dockerfile, so shared-code changes never auto-redeploy the services. Also
+  `docker-embeddings-build.yml` self-references a stale filename
+  (`build-embeddings.yml`). Fix: add the imported `src/` subtrees +
+  `pyproject.toml` / `uv.lock` to each `paths:` list (scoped, not a blanket
+  `src/**`, to avoid unrelated churn triggering redeploys), correct the
+  self-reference. Its own PR — touches four workflows, changes the "inert merge"
+  property, deserves separate review.
 - The `game_neighbors` "quality" profile (family/reimplementation exclusion +
   rating percentile) — separate additive bgg-data-warehouse work.
 - The bgg-viewer `/dev/similar` bench.
