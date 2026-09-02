@@ -429,15 +429,19 @@ embed-train algorithm="" embedding_dim="" min_feature_count="" experiment="game-
 embed-diagnose experiment="game-embeddings" version="":
     uv run python -m src.models.embeddings.diagnose_components --experiment {{experiment}} {{ if version == "" { "" } else { "--version " + version } }}
 
-# Mirror local experiment dirs (models/experiments/**) to GCS under the
-# current environment prefix. Run this before `embed-register` so the
-# registered model's source experiment is backed up / reproducible. Set
-# ENVIRONMENT=prod for a production deploy. `dir="down"` pulls instead.
-#   just embed-sync                # upload (dev, or ENVIRONMENT from .env)
-#   ENVIRONMENT=prod just embed-sync
+# Mirror the local embedding experiment dirs
+# (models/experiments/embeddings/**) to GCS under the current environment
+# prefix. Run this before `embed-register` so the registered model's source
+# experiment is backed up / reproducible. Set ENVIRONMENT=prod for a
+# production deploy. `dir="down"` pulls instead.
+#
+# Scoped to embeddings on purpose: `src.utils.sync_experiments` defaults to
+# the whole models/experiments/ tree; `make upload-experiments` is the
+# everything sync.
+#   just embed-sync                # upload (ENVIRONMENT from .env, else dev)
 #   just embed-sync down           # download missing files from GCS
 embed-sync dir="up":
-    uv run python -m src.utils.sync_experiments --environment {{environment}} {{ if dir == "down" { "--download" } else { "" } }}
+    uv run python -m src.utils.sync_experiments --environment {{environment}} --local-dir models/experiments/embeddings --base-prefix models/experiments/embeddings {{ if dir == "down" { "--download" } else { "" } }}
 
 # Register the latest game-embedding experiment as the production model
 # (embeddings-v<current year>, from config.years.current) that
