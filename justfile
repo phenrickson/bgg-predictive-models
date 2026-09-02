@@ -429,11 +429,22 @@ embed-train algorithm="" embedding_dim="" min_feature_count="" experiment="game-
 embed-diagnose experiment="game-embeddings" version="":
     uv run python -m src.models.embeddings.diagnose_components --experiment {{experiment}} {{ if version == "" { "" } else { "--version " + version } }}
 
+# Mirror local experiment dirs (models/experiments/**) to GCS under the
+# current environment prefix. Run this before `embed-register` so the
+# registered model's source experiment is backed up / reproducible. Set
+# ENVIRONMENT=prod for a production deploy. `dir="down"` pulls instead.
+#   just embed-sync                # upload (dev, or ENVIRONMENT from .env)
+#   ENVIRONMENT=prod just embed-sync
+#   just embed-sync down           # download missing files from GCS
+embed-sync dir="up":
+    uv run python -m src.utils.sync_experiments --environment {{environment}} {{ if dir == "down" { "--download" } else { "" } }}
+
 # Register the latest game-embedding experiment as the production model
 # (embeddings-v<current year>, from config.years.current) that
 # bgg-embeddings-service loads. Overwrites the registered model in place —
-# run after `embed-train` + validation, then dispatch `run-generate-embeddings`
-# to re-score the catalog. `--name` / description default from config.
+# run after `embed-train` + validation (and `embed-sync`), then dispatch
+# `run-generate-embeddings` to re-score the catalog. `--name` / description
+# default from config.
 #   just embed-register
 #   just embed-register svd-embeddings          # register a different experiment
 embed-register experiment="game-embeddings":
