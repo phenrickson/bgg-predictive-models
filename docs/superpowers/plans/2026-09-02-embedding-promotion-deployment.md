@@ -192,6 +192,18 @@ upcoming 0-rating game (`source_min_users_rated: 0` path).
   `src/**`, to avoid unrelated churn triggering redeploys), correct the
   self-reference. Its own PR — touches four workflows, changes the "inert merge"
   property, deserves separate review.
+- **Follow-up C — stale embedding `feature_config` metadata.**
+  `src/models/embeddings/trainer.py:816-827` writes the experiment's
+  `config.feature_config` as a hand-typed literal, not from the fitted
+  preprocessor. Since PR #70 it lies: `create_player_dummies: true` (the actual
+  pipeline has no `player_count_*` one-hots — `min_players` / `max_players` /
+  `supports_solo` instead). It's documentation only — nothing reconstructs the
+  pipeline from it (that's the pickled `embedding_pipeline.pkl`) — so it's
+  cosmetic, but it propagates into `metadata.json` and the registered model's
+  `registration.json`. Also the Dockerfiles `text_embeddings` / `streamlit` /
+  `training` are missing `COPY README.md` (same break as #71). Fix: populate
+  `feature_config` from `preprocessor.named_steps[...].get_params()`; add the
+  README copy to the three Dockerfiles. Small, low-risk, own PR.
 - The `game_neighbors` "quality" profile (family/reimplementation exclusion +
   rating percentile) — separate additive bgg-data-warehouse work.
 - The bgg-viewer `/dev/similar` bench.
