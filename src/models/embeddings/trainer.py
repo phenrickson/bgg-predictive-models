@@ -118,7 +118,6 @@ class EmbeddingTrainer:
             )
             preprocessor = create_embedding_preprocessor(
                 model_type="linear",
-                preserve_columns=["year_published", "predicted_complexity"],
                 include_description_embeddings=use_embeddings,
                 min_feature_count=min_feature_count,
             )

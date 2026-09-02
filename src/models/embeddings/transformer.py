@@ -7,11 +7,13 @@ predictive models.
 
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
+
 from src.features.transformers import (
     BaseBGGTransformer,
     LogTransformer,
@@ -47,6 +49,83 @@ class PrefixColumnDropper(BaseEstimator, TransformerMixin):
         return X
 
 
+class PlayerCountSanitizer(BaseEstimator, TransformerMixin):
+    """Clean up ``min_players`` / ``max_players`` and derive ``supports_solo``.
+
+    EMBEDDING-ONLY. The predictive-model pipeline keeps its own player-count
+    handling; this runs first in ``create_embedding_preprocessor`` so the raw
+    columns are sane before they reach the base transformer and before they're
+    carried through as continuous features (no ``player_count_*`` one-hots in
+    the embedding).
+
+    BGG player counts have a dirty right tail — "any number" entered as 99 /
+    2000 / 11299, and stray values like a design year in the min field. Two
+    clips fix all of it:
+
+    - ``max_players`` clipped to ``[1, cap]`` (values < 1 treated as missing).
+    - ``min_players`` clipped to ``[1, max_players]`` — bounds the tail and
+      repairs any ``min > max`` inversion (min collapses onto max).
+
+    Then ``supports_solo = (min_players == 1)`` as a 0/1 dummy (NaN min -> 0).
+    ``min_players`` is effectively 3-valued ({1, 2, 3}); once 2*SD-scaled, the
+    1-vs-2 step is small, but solo capability is a real similarity axis
+    (co-op / solo games), so it gets its own unscaled flag. A separate
+    ``player_count_range`` feature is deliberately NOT derived — it correlates
+    ~0.95 with ``max_players`` (min is near-constant), so ``{min, max}`` already
+    carries the range signal.
+    """
+
+    def __init__(
+        self,
+        cap: int = 12,
+        min_col: str = "min_players",
+        max_col: str = "max_players",
+        solo_col: str = "supports_solo",
+    ):
+        self.cap = cap
+        self.min_col = min_col
+        self.max_col = max_col
+        self.solo_col = solo_col
+        self._output_config = None
+
+    def fit(self, X, y=None):
+        self.feature_names_in_ = list(X.columns) if isinstance(X, pd.DataFrame) else None
+        return self
+
+    def transform(self, X):
+        if not isinstance(X, pd.DataFrame):
+            return X
+        if self.min_col not in X.columns or self.max_col not in X.columns:
+            return X
+        X = X.copy()
+
+        mx = pd.to_numeric(X[self.max_col], errors="coerce")
+        mn = pd.to_numeric(X[self.min_col], errors="coerce")
+        mx = mx.where(mx >= 1).clip(upper=self.cap)
+        mn = mn.where(mn >= 1).clip(upper=mx.fillna(self.cap))
+
+        X[self.max_col] = mx
+        X[self.min_col] = mn
+        X[self.solo_col] = (mn == 1).astype(float)
+        return X
+
+    def set_output(self, *, transform=None):
+        if transform is not None and transform not in ["default", "pandas"]:
+            raise ValueError(
+                f"Invalid transform parameter: {transform}. Must be 'default' or 'pandas'."
+            )
+        self._output_config = transform
+        return self
+
+    def get_feature_names_out(self, input_features=None):
+        names = list(input_features) if input_features is not None else list(
+            self.feature_names_in_ or []
+        )
+        if self.solo_col not in names:
+            names.append(self.solo_col)
+        return np.asarray(names)
+
+
 # Default family patterns for embeddings - focus on game characteristic types
 DEFAULT_EMBEDDING_FAMILY_PATTERNS = [
     "^Players:",
@@ -80,6 +159,10 @@ class EmbeddingTransformer(BaseBGGTransformer):
         include_count_features: bool = False,
         family_allow_patterns: Optional[List[str]] = None,
         max_family_features: int = 150,
+        # Player count enters the embedding as sanitized min_players /
+        # max_players (continuous) + supports_solo (flag) via preserve_columns
+        # + PlayerCountSanitizer, not a correlated 10-column one-hot block.
+        create_player_dummies: bool = False,
         # Inherit other defaults from base
         **kwargs,
     ):
@@ -108,6 +191,7 @@ class EmbeddingTransformer(BaseBGGTransformer):
             include_count_features=include_count_features,
             family_allow_patterns=family_allow_patterns,
             max_family_features=max_family_features,
+            create_player_dummies=create_player_dummies,
             **kwargs,
         )
 
@@ -120,6 +204,7 @@ def create_embedding_preprocessor(
     preserve_columns: Optional[List[str]] = None,
     include_description_embeddings: bool = False,
     min_feature_count: int = 10,
+    player_count_cap: int = 12,
     **kwargs,
 ) -> Pipeline:
     """Create a preprocessing pipeline optimized for embedding training.
@@ -137,6 +222,9 @@ def create_embedding_preprocessor(
         min_feature_count: Drop binary indicator features (mechanic/category/
             family dummies) carried by fewer than this many games before the
             decomposition. Linear model_type only.
+        player_count_cap: Upper bound for min_players / max_players (see
+            PlayerCountSanitizer). "12+" carries little similarity signal and
+            the raw tail is dirty.
         **kwargs: Additional arguments passed to EmbeddingTransformer.
 
     Returns:
@@ -157,7 +245,16 @@ def create_embedding_preprocessor(
         ]
 
     if preserve_columns is None:
-        preserve_columns = ["year_published", "predicted_complexity"]
+        # Sanitized player counts ride through as features (PlayerCountSanitizer
+        # runs first; EmbeddingTransformer emits no player_count_* one-hots).
+        # min/max are continuous; supports_solo is a 0/1 flag.
+        preserve_columns = [
+            "year_published",
+            "predicted_complexity",
+            "min_players",
+            "max_players",
+            "supports_solo",
+        ]
 
     # Create embedding transformer with preserved columns
     transformer = EmbeddingTransformer(
@@ -168,11 +265,15 @@ def create_embedding_preprocessor(
 
     # Build pipeline steps (same structure as create_bgg_preprocessor)
     pipeline_steps = [
+        ("player_counts", PlayerCountSanitizer(cap=player_count_cap)),
         ("bgg_preprocessor", transformer),
         (
+            # No add_indicator: a "value was missing" flag encodes data
+            # completeness, not how a game plays, and (being common) it takes
+            # a PCA component of its own.
             "impute",
             SimpleImputer(
-                strategy="median", add_indicator=True, keep_empty_features=False
+                strategy="median", add_indicator=False, keep_empty_features=False
             ),
         ),
     ]

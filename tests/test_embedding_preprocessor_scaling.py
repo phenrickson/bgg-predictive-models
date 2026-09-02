@@ -46,3 +46,25 @@ def test_tree_pipeline_unchanged():
     types = _step_types(pipe)
     assert TwoSDScaler not in types
     assert MinCountSelector not in types
+
+
+def test_imputer_adds_no_missing_indicators():
+    from sklearn.impute import SimpleImputer
+
+    pipe = create_embedding_preprocessor(model_type="linear")
+    imp = next(est for _, est in pipe.steps if isinstance(est, SimpleImputer))
+    assert imp.add_indicator is False
+
+
+def test_player_count_is_continuous_not_one_hot():
+    import pandas as pd
+
+    df = pd.read_parquet("tests/fixtures/sample_games.parquet")
+    pipe = create_embedding_preprocessor(model_type="linear", min_feature_count=1)
+    out = pipe.fit_transform(df)
+    cols = list(out.columns)
+    assert not any(c.startswith("player_count_") and c[-1].isdigit() for c in cols)
+    for c in ("min_players", "max_players", "supports_solo"):
+        assert c in cols, c
+    assert "player_count_range" not in cols
+    assert not any(c.startswith("missingindicator") for c in cols)
