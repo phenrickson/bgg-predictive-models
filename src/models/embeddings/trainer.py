@@ -111,10 +111,15 @@ class EmbeddingTrainer:
             use_embeddings = bool(
                 self.config.embeddings and self.config.embeddings.use_embeddings
             )
+            min_feature_count = (
+                self.config.embeddings.min_feature_count
+                if self.config.embeddings
+                else 10
+            )
             preprocessor = create_embedding_preprocessor(
                 model_type="linear",
-                preserve_columns=["year_published", "predicted_complexity"],
                 include_description_embeddings=use_embeddings,
+                min_feature_count=min_feature_count,
             )
 
         df_pandas = df.to_pandas()

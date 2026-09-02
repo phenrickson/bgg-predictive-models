@@ -93,14 +93,27 @@ simulation:
 
 # Embeddings Configuration
 embeddings:
-  algorithm: svd # pca, svd, umap, autoencoder
+  algorithm: pca # pca, svd, umap, autoencoder
   embedding_dim: 64
   experiment_name: game-embeddings
   min_ratings: 5 # Minimum users_rated for training data
-  use_embeddings: true # Use description embeddings (emb_*) as input features
+  # Structural embedding only (mechanics/categories/families/players/numeric).
+  # Description/theme similarity is a separate concern — if added, do it as late
+  # fusion of two finished embeddings, not by concatenating the 100-d text vector
+  # into this feature matrix (it dominates at ~88% of captured variance).
+  # NOTE: this flag was set true 2026-04-30 but never trained; deployed
+  # svd-embeddings/v5 (2026-01-22) is structural-only.
+  use_embeddings: false # Use description embeddings (emb_*) as input features
+  min_feature_count: 10 # Drop mechanic/category/family dummies on fewer than N games
   algorithms:
     pca:
-      whiten: true
+      # whiten off: whitening re-equalises every component to unit variance,
+      # re-inflating the low-variance rare-feature directions the Gelman
+      # scaling is meant to suppress, and it's wrong for a cosine space
+      # (high-variance structural axes should dominate the metric).
+      whiten: false
+      svd_solver: randomized # centred + densified matrix, ~35k x ~1.5k features
+      random_state: 42 # randomized solver is stochastic without a seed
     svd:
       n_iter: 5
     autoencoder:

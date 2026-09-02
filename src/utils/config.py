@@ -127,6 +127,7 @@ class EmbeddingConfig:
     search: EmbeddingSearchConfig
     min_ratings: int = 25  # Minimum users_rated for training data
     use_embeddings: bool = False  # Use description embeddings as input features
+    min_feature_count: int = 10  # Drop indicator features on fewer than this many games
 
     def get_algorithm_params(self, algorithm: Optional[str] = None) -> Dict[str, Any]:
         """Get parameters for a specific algorithm.
@@ -482,6 +483,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
             search=search_config,
             min_ratings=emb.get("min_ratings", 25),
             use_embeddings=emb.get("use_embeddings", False),
+            min_feature_count=emb.get("min_feature_count", 10),
         )
 
     # Create text embeddings config if present

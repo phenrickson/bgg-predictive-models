@@ -16,7 +16,7 @@ help:  ## Show this help message
 	@echo '  make data                        Fetch training data from BigQuery'
 	@echo '  make models                      Train all model candidates'
 	@echo '  make register                    Register all models to scoring service'
-	@echo '  make register_embeddings         Register embeddings model to embeddings service'
+	@echo '  (game embeddings: use `just embed-register`)'
 	@echo '  make clean_experiments           Remove all experiment subfolders'
 	@echo '  make clean_predictions           Remove data/prediction subfolders'
 	@echo '  make years                       Show year configuration for model training'
@@ -179,12 +179,6 @@ register:
 register-dry-run:
 	uv run -m src.pipeline.register --dry-run
 
-EMBEDDINGS_CANDIDATE ?= svd-embeddings
-register_embeddings:
-	uv run -m services.game_embeddings.register_model \
-	--experiment $(EMBEDDINGS_CANDIDATE) \
-	--name embeddings-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
 
 ## dashboard
 .PHONY: streamlit dashboard

@@ -94,6 +94,128 @@ class RowNormalizer(BaseEstimator, TransformerMixin):
         return np.asarray(self.feature_names_in_)
 
 
+class TwoSDScaler(BaseEstimator, TransformerMixin):
+    """Gelman-style input scaling: continuous columns -> ``(x - mean) / (factor * SD)``,
+    binary (0/1) columns pass through unchanged.
+
+    Gelman (2008), *Scaling regression inputs by dividing by two standard
+    deviations*: with ``factor=2`` a continuous input ends up with SD ~0.5,
+    matching a balanced 0/1 dummy, while a rare dummy keeps its natural
+    variance ``p(1-p)`` instead of being forced to 1 by ``StandardScaler``.
+    In a PCA/SVD pipeline that stops rare, uncorrelated features from capturing
+    their own component.
+
+    Parameters
+    ----------
+    continuous_columns : list of str, optional
+        Columns to scale. If ``None``, auto-detected at ``fit`` as every column
+        whose observed (non-null) values are not a subset of ``{0, 1}``.
+    factor : float, default 2.0
+        SD multiplier in the denominator.
+    """
+
+    def __init__(self, continuous_columns: Optional[List[str]] = None, factor: float = 2.0):
+        self.continuous_columns = continuous_columns
+        self.factor = factor
+        self._output_config = None
+
+    @staticmethod
+    def _is_binary(series: pd.Series) -> bool:
+        vals = pd.unique(series.dropna())
+        if len(vals) == 0:
+            return False
+        return set(np.asarray(vals).ravel().tolist()).issubset({0, 1})
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        self.feature_names_in_ = list(X.columns)
+        if self.continuous_columns is None:
+            self.continuous_columns_ = [
+                c for c in X.columns if not self._is_binary(X[c])
+            ]
+        else:
+            self.continuous_columns_ = [
+                c for c in self.continuous_columns if c in X.columns
+            ]
+        self.means_ = X[self.continuous_columns_].mean()
+        sds = X[self.continuous_columns_].std(ddof=0)
+        self.scales_ = (self.factor * sds).replace(0.0, 1.0)
+        return self
+
+    def transform(self, X):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_in_)
+        X = X.copy()
+        cols = self.continuous_columns_
+        if cols:
+            X[cols] = (X[cols] - self.means_) / self.scales_
+        return X
+
+    def set_output(self, *, transform=None):
+        if transform is not None and transform not in ["default", "pandas"]:
+            raise ValueError(
+                f"Invalid transform parameter: {transform}. Must be 'default' or 'pandas'."
+            )
+        self._output_config = transform
+        return self
+
+    def get_feature_names_out(self, input_features=None):
+        if input_features is not None:
+            return np.asarray(list(input_features))
+        return np.asarray(self.feature_names_in_)
+
+
+class MinCountSelector(BaseEstimator, TransformerMixin):
+    """Drop binary (0/1) columns whose column sum is below ``min_count``.
+
+    Removes indicator features carried by too few rows to estimate reliably.
+    Continuous columns (observed values not a subset of ``{0, 1}``) and any
+    unmatched column are always kept. A feature on exactly ``min_count`` rows
+    is kept.
+    """
+
+    def __init__(self, min_count: int = 10):
+        self.min_count = min_count
+        self._output_config = None
+
+    @staticmethod
+    def _is_binary(series: pd.Series) -> bool:
+        vals = pd.unique(series.dropna())
+        if len(vals) == 0:
+            return False
+        return set(np.asarray(vals).ravel().tolist()).issubset({0, 1})
+
+    def fit(self, X, y=None):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+        self.feature_names_in_ = list(X.columns)
+        drop = []
+        for c in X.columns:
+            col = X[c]
+            if self._is_binary(col) and float(col.fillna(0).sum()) < self.min_count:
+                drop.append(c)
+        self.columns_to_drop_ = drop
+        self.columns_kept_ = [c for c in X.columns if c not in drop]
+        return self
+
+    def transform(self, X):
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names_in_)
+        return X.drop(columns=self.columns_to_drop_, errors="ignore")
+
+    def set_output(self, *, transform=None):
+        if transform is not None and transform not in ["default", "pandas"]:
+            raise ValueError(
+                f"Invalid transform parameter: {transform}. Must be 'default' or 'pandas'."
+            )
+        self._output_config = transform
+        return self
+
+    def get_feature_names_out(self, input_features=None):
+        return np.asarray(self.columns_kept_)
+
+
 class LogTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer to apply log(1+x) transformation to specified columns.
