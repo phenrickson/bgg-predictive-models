@@ -12,11 +12,11 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-
 from src.features.transformers import (
     BaseBGGTransformer,
     LogTransformer,
+    MinCountSelector,
+    TwoSDScaler,
     YearTransformer,
 )
 
@@ -119,6 +119,7 @@ def create_embedding_preprocessor(
     log_columns: Optional[List[str]] = None,
     preserve_columns: Optional[List[str]] = None,
     include_description_embeddings: bool = False,
+    min_feature_count: int = 10,
     **kwargs,
 ) -> Pipeline:
     """Create a preprocessing pipeline optimized for embedding training.
@@ -133,6 +134,9 @@ def create_embedding_preprocessor(
         normalization_factor: Factor for year normalization.
         log_columns: Columns to apply log transformation.
         preserve_columns: Columns to preserve through transformation.
+        min_feature_count: Drop binary indicator features (mechanic/category/
+            family dummies) carried by fewer than this many games before the
+            decomposition. Linear model_type only.
         **kwargs: Additional arguments passed to EmbeddingTransformer.
 
     Returns:
@@ -186,7 +190,13 @@ def create_embedding_preprocessor(
                     ),
                 ),
                 ("variance_selector", VarianceThreshold(threshold=0)),
-                ("scaler", StandardScaler()),
+                ("min_count", MinCountSelector(min_count=min_feature_count)),
+                # Gelman-style: continuous / 2*SD, dummies left at 0/1 so a rare
+                # feature keeps its natural variance p(1-p) and PCA never spends
+                # a component on it. Pairs with algorithm="pca" (centres) —
+                # a blanket StandardScaler was what forced every dummy to
+                # variance 1.
+                ("scaler", TwoSDScaler()),
             ]
         )
     elif model_type == "tree":
