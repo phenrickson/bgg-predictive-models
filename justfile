@@ -408,22 +408,27 @@ pull-artifacts-all prune="":
 
 # --- embeddings -------------------------------------------------------------
 
-# Train a game-embedding experiment and print the component diagnostic.
-# Algorithm/dim/min-feature-count fall back to config.yaml when omitted.
+# Train a game-embedding experiment; the diagnostic runs automatically and
+# lands in the experiment dir. Algorithm / dim / min-feature-count fall back to
+# config.yaml when passed empty.
 #
 #   just embed-train                          # config defaults (pca)
 #   just embed-train pca 64 25                # override algorithm / dim / min-count
 #   just embed-train svd
 embed-train algorithm="" embedding_dim="" min_feature_count="" experiment="game-embeddings":
-    uv run python -m src.models.embeddings.train \
-        $([ -n "{{algorithm}}" ] && echo "--algorithm {{algorithm}}") \
-        $([ -n "{{embedding_dim}}" ] && echo "--embedding-dim {{embedding_dim}}") \
-        $([ -n "{{min_feature_count}}" ] && echo "--min-feature-count {{min_feature_count}}") \
-        --experiment {{experiment}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(--experiment "{{experiment}}")
+    [ -n "{{algorithm}}" ] && args+=(--algorithm "{{algorithm}}")
+    [ -n "{{embedding_dim}}" ] && args+=(--embedding-dim "{{embedding_dim}}")
+    [ -n "{{min_feature_count}}" ] && args+=(--min-feature-count "{{min_feature_count}}")
+    uv run python -m src.models.embeddings.train "${args[@]}"
 
 # Re-run the component-loadings x prevalence diagnostic for an existing
-# experiment version (latest if --version omitted).
+# experiment version (latest if version is empty).
 embed-diagnose experiment="game-embeddings" version="":
-    uv run python -m src.models.embeddings.diagnose_components \
-        --experiment {{experiment}} \
-        $([ -n "{{version}}" ] && echo "--version {{version}}")
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(--experiment "{{experiment}}")
+    [ -n "{{version}}" ] && args+=(--version "{{version}}")
+    uv run python -m src.models.embeddings.diagnose_components "${args[@]}"

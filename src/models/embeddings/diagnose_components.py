@@ -151,14 +151,17 @@ def generate_report(
     prevalence = np.full(len(feature_names), np.nan)
     try:
         from src.models.embeddings.data import EmbeddingDataLoader
+        from src.utils.config import load_config
 
         with open(Path(exp_dir) / "embedding_pipeline.pkl", "rb") as f:
             preprocessor = pickle.load(f)["preprocessor"]
         # numpy output avoids sklearn's get_feature_names_out chain (older
         # pickled imputers raise there); align positionally to feature_names.
         preprocessor.set_output(transform="default")
+        cfg = load_config()
+        use_emb = bool(cfg.embeddings and cfg.embeddings.use_embeddings)
         logger.info("Loading training features to compute prevalence...")
-        df = EmbeddingDataLoader().load_embedding_data().to_pandas()
+        df = EmbeddingDataLoader().load_embedding_data(use_embeddings=use_emb).to_pandas()
         prevalence = _feature_prevalence(preprocessor.transform(df), feature_names)
     except Exception as e:  # noqa: BLE001 — diagnostic degrades gracefully
         logger.warning("prevalence unavailable (%s); reporting concentration only", e)
