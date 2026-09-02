@@ -179,12 +179,12 @@ register:
 register-dry-run:
 	uv run -m src.pipeline.register --dry-run
 
-EMBEDDINGS_CANDIDATE ?= svd-embeddings
+EMBEDDINGS_CANDIDATE ?= game-embeddings
 register_embeddings:
 	uv run -m services.game_embeddings.register_model \
 	--experiment $(EMBEDDINGS_CANDIDATE) \
 	--name embeddings-v$(CURRENT_YEAR) \
-	--description "Production (v$(CURRENT_YEAR)) SVD embeddings for game similarity"
+	--description "Production (v$(CURRENT_YEAR)) PCA embeddings for game similarity"
 
 ## dashboard
 .PHONY: streamlit dashboard
