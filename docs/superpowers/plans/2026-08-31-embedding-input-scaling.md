@@ -2,6 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
+> **Execution status (2026-09-02):** Stages 1–4 done on `feat/embedding-input-scaling`
+> (commits `1ca55aa`…`4439712`). Deviations from the plan as written:
+> - `train.py --whiten` was `action=store_true default=True` — it always forced
+>   `whiten=True` and overrode `config.yaml`, so the `svd→pca` swap was inert via
+>   `train.py`. Fixed to `--whiten/--no-whiten`, `default=None` (`d525260`).
+> - `min_feature_count` threaded through `config.yaml` → `EmbeddingConfig` →
+>   `train.py --min-feature-count` → `trainer.prepare_features` (`d525260`).
+> - `train.py` auto-runs the diagnostic after pca/svd and writes
+>   `component_diagnostic.txt` into the experiment dir; `just embed-train` /
+>   `just embed-diagnose` recipes added (`d525260`, `18f9e7d`).
+> - `config.yaml` pca block also got `svd_solver: randomized` + `random_state: 42`.
+> Stage 5 (train + evaluate) is the remaining runbook — needs a BQ training run.
+> Pre-existing test failures on `main` (unrelated): `test_transformers.py` ×5,
+> `test_preprocessor.py` ×3, `test_register.py` ×6, `test_train.py`/`test_geek_rating.py` collect errors.
+
 **Goal:** Replace the blanket `StandardScaler` in the game-embedding preprocessor with Gelman-style scaling (continuous ÷ 2·SD, binary dummies left at 0/1) so rare uncorrelated features stop capturing whole SVD/PCA dimensions. Switch the embedding algorithm `svd → pca` (`whiten=False`) since the dummies are no longer centred. Add a minimum-frequency floor on dummy features. Ship a component-diagnostic script.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-embedding-input-scaling-design.md`
