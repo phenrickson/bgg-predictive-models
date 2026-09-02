@@ -92,24 +92,28 @@ def _resolve_experiment_dir(experiment: str, version: Optional[int], experiments
     return Path(exp.exp_dir)
 
 
-def _feature_prevalence(matrix, feature_names: Sequence[str]) -> np.ndarray:
+def _feature_prevalence(frame, feature_names: Sequence[str]) -> np.ndarray:
     """Fraction of rows == 1 for binary columns; nan for the rest.
 
-    Aligns positionally to ``feature_names`` (the preprocessor preserves column
-    order), so it tolerates the ``SimpleImputer.get_feature_names_out`` mismatch
-    that older pickled pipelines trip on.
+    Aligns to ``feature_names`` **by name** — the transformed frame carries a few
+    columns (e.g. ``year_published_transformed``) that the trainer drops from the
+    final feature matrix, so positional alignment would shift everything after
+    them.
     """
     import pandas as pd
 
-    arr = matrix.to_numpy() if isinstance(matrix, pd.DataFrame) else np.asarray(matrix)
-    prev = np.full(len(feature_names), np.nan)
-    for k in range(min(arr.shape[1], len(feature_names))):
-        col = arr[:, k]
-        col = col[~np.isnan(col.astype(float))] if col.dtype.kind in "fc" else col
-        vals = set(np.unique(col).tolist())
-        if vals.issubset({0, 1}):
-            prev[k] = float(np.mean(col))
-    return prev
+    if not isinstance(frame, pd.DataFrame):
+        frame = pd.DataFrame(np.asarray(frame))
+
+    by_name: Dict[str, float] = {}
+    for name in frame.columns:
+        col = frame[name].to_numpy()
+        if col.dtype.kind in "fc":
+            col = col[~np.isnan(col)]
+        if col.size and set(np.unique(col).tolist()).issubset({0, 1}):
+            by_name[str(name)] = float(np.mean(col))
+
+    return np.array([by_name.get(str(n), np.nan) for n in feature_names])
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -128,7 +132,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(argv)
     exp_dir = _resolve_experiment_dir(args.experiment, args.version, args.experiments_dir)
-    print(generate_report(exp_dir, top_k=args.top_k, flag_prevalence=args.flag_prevalence))
+    report = generate_report(
+        exp_dir, top_k=args.top_k, flag_prevalence=args.flag_prevalence
+    )
+    (Path(exp_dir) / "component_diagnostic.txt").write_text(report, encoding="utf-8")
+    print(report)
 
 
 def generate_report(
@@ -155,9 +163,9 @@ def generate_report(
 
         with open(Path(exp_dir) / "embedding_pipeline.pkl", "rb") as f:
             preprocessor = pickle.load(f)["preprocessor"]
-        # numpy output avoids sklearn's get_feature_names_out chain (older
-        # pickled imputers raise there); align positionally to feature_names.
-        preprocessor.set_output(transform="default")
+        # Keep pandas output: LogTransformer / YearTransformer index columns by
+        # name and blow up on a RangeIndex. _feature_prevalence aligns by name.
+        preprocessor.set_output(transform="pandas")
         cfg = load_config()
         use_emb = bool(cfg.embeddings and cfg.embeddings.use_embeddings)
         logger.info("Loading training features to compute prevalence...")

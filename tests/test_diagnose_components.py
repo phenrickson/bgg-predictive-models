@@ -1,8 +1,39 @@
 """diagnose_components summarises each PCA component by loading x feature prevalence."""
 
 import numpy as np
+import pandas as pd
 
-from src.models.embeddings.diagnose_components import summarize_components
+from src.models.embeddings.diagnose_components import (
+    _feature_prevalence,
+    summarize_components,
+)
+
+
+def test_feature_prevalence_aligns_by_name_not_position():
+    # transformed frame carries an extra column (year_published_transformed) that
+    # the trainer drops from feature_names — positional alignment would shift.
+    frame = pd.DataFrame(
+        {
+            "year_published_transformed": [0.1, -0.3, 0.5, 0.2],
+            "dummy_a": [1, 0, 1, 1],
+            "cont_x": [3.0, 1.5, 9.0, 4.0],
+            "dummy_b": [0, 0, 1, 0],
+        }
+    )
+    feature_names = ["dummy_a", "cont_x", "dummy_b"]
+
+    prev = _feature_prevalence(frame, feature_names)
+
+    assert prev[0] == 0.75  # dummy_a, aligned by name despite the leading extra col
+    assert np.isnan(prev[1])  # cont_x is not binary
+    assert prev[2] == 0.25  # dummy_b
+
+
+def test_feature_prevalence_nan_for_names_absent_from_frame():
+    frame = pd.DataFrame({"dummy_a": [1, 0, 1]})
+    prev = _feature_prevalence(frame, ["dummy_a", "missing_feature"])
+    assert prev[0] == 2 / 3
+    assert np.isnan(prev[1])
 
 
 def test_summarize_flags_rare_feature_dominated_component():
