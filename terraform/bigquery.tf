@@ -607,3 +607,28 @@ resource "google_bigquery_table" "user_collections" {
     managed_by  = "terraform"
   }
 }
+
+# Authorized view: lets `bgg-data-warehouse.collections.user_collections` — a view over the
+# table above, filtered to `removed_at IS NULL` — read through without its callers needing any
+# access in THIS project. BigQuery runs a view's query as the caller unless the view is
+# authorized on the source dataset, so without this the warehouse view fails with
+# "Access Denied ... user_collections" for anyone who isn't already a reader here (which is how
+# bgg-viewer's settings page came to 500 in production).
+#
+# Preferred over granting the consuming service accounts dataViewer on this dataset: they stay
+# out of bgg-predictive-models entirely, and see only what the view exposes rather than the raw
+# soft-deleted rows.
+#
+# Separate resource rather than an `access` block on the dataset above: google_bigquery_dataset
+# declares no inline access here, so this stays non-authoritative and does not fight the
+# default ACL or the dataset_iam_member grants in iam.tf.
+resource "google_bigquery_dataset_access" "collections_authorized_view_warehouse" {
+  dataset_id = google_bigquery_dataset.collections.dataset_id
+  project    = var.project_id
+
+  view {
+    project_id = "bgg-data-warehouse"
+    dataset_id = "collections"
+    table_id   = "user_collections"
+  }
+}
