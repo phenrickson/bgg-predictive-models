@@ -79,6 +79,21 @@ resource "google_project_iam_member" "datawarehouse_dataform_bigquery_reader" {
   member  = "serviceAccount:service-668088964150@gcp-sa-dataform.iam.gserviceaccount.com"
 }
 
+# Dataset-scoped: let the same Dataform service agent re-authorize the warehouse view.
+# `collections_authorized_view_warehouse` (bigquery.tf) registers
+# bgg-data-warehouse.collections.user_collections as an authorized view on this dataset, and
+# BigQuery binds that grant to the view's definition. Dataform recreates the view
+# (CREATE OR REPLACE VIEW) on every run, which makes BigQuery refresh the authorization on
+# the source dataset — and that needs bigquery.datasets.update here. Without it every
+# warehouse Dataform run fails with "Permission bigquery.datasets.update denied on dataset
+# bgg-predictive-models:collections". dataOwner is the narrowest predefined role carrying it.
+resource "google_bigquery_dataset_iam_member" "datawarehouse_dataform_collections_owner" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.collections.dataset_id
+  role       = "roles/bigquery.dataOwner"
+  member     = "serviceAccount:service-668088964150@gcp-sa-dataform.iam.gserviceaccount.com"
+}
+
 # Grant bgg-data-warehouse workload SA read access to models bucket (for dash-viewer experiments page)
 resource "google_storage_bucket_iam_member" "datawarehouse_models_reader" {
   bucket = google_storage_bucket.models.name
