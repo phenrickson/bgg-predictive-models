@@ -27,12 +27,14 @@ Two things follow, neither of which is a bug today:
    post-2023 game.** That includes all "upcoming" games, which the viewer's
    embedding map places and reasons about. New mechanics/families that only
    appear from 2024 on are absent from the dummy vocabulary entirely.
-2. **The component structure is shaped by the ≥5-ratings long tail** (~54k
-   games) rather than the ≥30-ratings working set the viewer shows (~31k).
-   Reading the loadings (2026-09-18 side-analysis): PC1 = complexity/length,
-   PC2 = player count, PC3 = modern solo co-op card game vs. classic, PC4/5/6
-   are dice/card sub-splits — all sensible, but the poles are anchored by
-   obscure kids' titles and grognard wargames that the map's readers never see.
+2. **The component structure is shaped by the whole ≥5-ratings universe** (~54k
+   games), not just the ≥30-ratings working set the viewer shows (~31k). This is
+   the intended design: the map's job is to show where *every* game sits, and a
+   PCA fit only on already-popular games would learn what popular games look
+   like rather than the shape of the space. Reading the loadings (2026-09-18
+   side-analysis): PC1 = complexity/length, PC2 = player count, PC3 = modern
+   solo co-op card game vs. classic, PC4/5/6 are dice/card sub-splits — the
+   poles are anchored by the long tail, which is what makes them honest.
 
 ## What the collection module already does
 
@@ -56,11 +58,10 @@ never carried over.
 3. Record `finalize_through`, `min_ratings` and the final sample count in
    `model_info.json` / `registration.json` so the fit population is visible
    from the registry without reading the trainer.
-4. Decide the ratings floor separately and explicitly. Options: keep 5 (max
-   coverage of rare features), or raise to 25/30 to align with the working set
-   the similarity engine and map serve. This changes the structure at least
-   as much as the year does; evaluate both with the existing similarity eval
-   (`2026-08-31-embedding-similarity-eval-design.md`) before choosing.
+4. Keep `min_ratings: 5`. The floor is a deliberate choice to fit on the full
+   universe (see above), and the revision here is in the same direction — see
+   *more* of it, not less. If it is ever revisited, evaluate with the existing
+   similarity eval (`2026-08-31-embedding-similarity-eval-design.md`).
 5. Retrain → new experiment version → register as `embeddings-v2026` v7 via
    the justfile `register` recipe; the embeddings workflow picks it up by name.
    Downstream (`bgg_game_embeddings`, `bgg_game_coordinates`, the viewer's
