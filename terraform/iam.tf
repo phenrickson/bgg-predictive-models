@@ -101,6 +101,16 @@ resource "google_storage_bucket_iam_member" "datawarehouse_models_reader" {
   member = "serviceAccount:bgg-data-warehouse@${var.data_warehouse_project_id}.iam.gserviceaccount.com"
 }
 
+# Grant the bgg-data-warehouse workload SA (the warehouse read API's runtime identity)
+# table *metadata* access here: row counts, size, last modified and schema for this
+# project's tables in the admin Lineage view (GET /monitoring/lineage). metadataViewer
+# reads no table data. Project-wide so new datasets are covered without another grant.
+resource "google_project_iam_member" "datawarehouse_api_bigquery_metadata_viewer" {
+  project = var.project_id
+  role    = "roles/bigquery.metadataViewer"
+  member  = "serviceAccount:bgg-data-warehouse@${var.data_warehouse_project_id}.iam.gserviceaccount.com"
+}
+
 # -----------------------------------------------------------------------------
 # Terraform Admin SA permissions (created manually, permissions managed here)
 # -----------------------------------------------------------------------------
