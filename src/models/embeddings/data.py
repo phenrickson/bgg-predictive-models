@@ -7,6 +7,11 @@ import numpy as np
 import polars as pl
 from google.cloud import bigquery
 
+from src.data.ml_inputs import (
+    complexity_min_score_ts,
+    latest_complexity_sql,
+    latest_description_embeddings_sql,
+)
 from src.utils.config import Config, load_config
 
 logger = logging.getLogger(__name__)
@@ -69,14 +74,8 @@ class EmbeddingDataLoader:
         """
         ctes = [
             f"""latest_complexity AS (
-                SELECT
-                    game_id,
-                    predicted_complexity,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY game_id
-                        ORDER BY score_ts DESC
-                    ) as rn
-                FROM `{self.dw_project}.predictions.bgg_complexity_predictions`
+                SELECT game_id, predicted_complexity, 1 AS rn
+                FROM {latest_complexity_sql(complexity_min_score_ts(self.client))}
             )"""
         ]
         select_extra = ["lc.predicted_complexity"]
@@ -85,14 +84,8 @@ class EmbeddingDataLoader:
         if use_embeddings:
             ctes.append(
                 f"""latest_description_emb AS (
-                    SELECT
-                        game_id,
-                        embedding,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY game_id
-                            ORDER BY created_ts DESC
-                        ) as rn
-                    FROM `{self.dw_project}.predictions.bgg_description_embeddings`
+                    SELECT game_id, embedding, 1 AS rn
+                    FROM {latest_description_embeddings_sql()}
                 )"""
             )
             select_extra.append("lde.embedding")

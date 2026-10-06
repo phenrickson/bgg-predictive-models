@@ -7,6 +7,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
+from src.data.ml_inputs import (
+    complexity_min_score_ts,
+    latest_complexity_sql,
+    latest_description_embeddings_sql,
+)
 from src.utils.config import BigQueryConfig, DataWarehouseConfig
 
 logger = logging.getLogger(__name__)
@@ -143,9 +148,11 @@ class BGGDataLoader:
 
         Args:
             use_predicted_complexity: LEFT JOIN the latest predicted_complexity
-                row per game from ``predictions.bgg_complexity_predictions``.
-            use_embeddings: LEFT JOIN the latest embedding row per game from
-                ``predictions.bgg_description_embeddings`` and explode it.
+                row per game, read from the ML project's raw table
+                (``ml_inputs.latest_complexity_sql``).
+            use_embeddings: LEFT JOIN the latest embedding row per game, read
+                from the ML project's raw table
+                (``ml_inputs.latest_description_embeddings_sql``), and explode it.
             where_clause: Optional WHERE clause applied to the base features
                 table (no ``f.`` prefix; column names only). ``year_published
                 IS NOT NULL`` is always added.
@@ -165,14 +172,7 @@ class BGGDataLoader:
             ctes.append(
                 f"""complexity AS (
   SELECT game_id, predicted_complexity
-  FROM (
-    SELECT
-      game_id,
-      predicted_complexity,
-      ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY score_ts DESC) AS rn
-    FROM `{self.project_id}.predictions.bgg_complexity_predictions`
-  )
-  WHERE rn = 1
+  FROM {latest_complexity_sql(complexity_min_score_ts(self.client))}
 )"""
             )
             select_extra_cols.append("complexity.predicted_complexity")
@@ -182,14 +182,7 @@ class BGGDataLoader:
             ctes.append(
                 f"""embeddings AS (
   SELECT game_id, embedding
-  FROM (
-    SELECT
-      game_id,
-      embedding,
-      ROW_NUMBER() OVER (PARTITION BY game_id ORDER BY created_ts DESC) AS rn
-    FROM `{self.project_id}.predictions.bgg_description_embeddings`
-  )
-  WHERE rn = 1
+  FROM {latest_description_embeddings_sql()}
 )"""
             )
             select_extra_cols.append("embeddings.embedding")
@@ -264,23 +257,25 @@ class BGGDataLoader:
             where_clause: Optional WHERE clause (use 'f.' prefix for features
                 table columns, e.g. "f.year_published >= 2025")
             embeddings_table: Full BigQuery table path for embeddings.
-                Defaults to {project_id}.predictions.bgg_description_embeddings
+                Defaults to the latest-per-game raw embeddings
+                (``ml_inputs.latest_description_embeddings_sql``)
             timeout: Timeout in seconds for BigQuery query execution
 
         Returns:
             Polars DataFrame with features and expanded embedding columns.
         """
-        if embeddings_table is None:
-            embeddings_table = (
-                f"{self.project_id}.predictions.bgg_description_embeddings"
-            )
+        embeddings_source = (
+            f"`{embeddings_table}`"
+            if embeddings_table
+            else latest_description_embeddings_sql()
+        )
 
         features_table = f"{self.project_id}.{self.dataset}.{self.table}"
 
         query = f"""
         SELECT f.*, e.embedding
         FROM `{features_table}` f
-        INNER JOIN `{embeddings_table}` e
+        INNER JOIN {embeddings_source} e
             ON f.game_id = e.game_id
         """
 
@@ -386,10 +381,11 @@ class BGGDataLoader:
         Returns:
             Polars DataFrame with features and expanded embedding columns.
         """
-        if embeddings_table is None:
-            embeddings_table = (
-                f"{self.project_id}.predictions.bgg_description_embeddings"
-            )
+        embeddings_source = (
+            f"`{embeddings_table}`"
+            if embeddings_table
+            else latest_description_embeddings_sql()
+        )
 
         features_table = f"{self.project_id}.{self.dataset}.{self.table}"
 
@@ -418,7 +414,7 @@ class BGGDataLoader:
         query = f"""
         SELECT f.*, e.embedding
         FROM `{features_table}` f
-        INNER JOIN `{embeddings_table}` e
+        INNER JOIN {embeddings_source} e
             ON f.game_id = e.game_id
         WHERE f.game_id IN (
           SELECT gf.game_id
