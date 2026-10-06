@@ -1,9 +1,9 @@
 name: Run Scoring Service
 
 on:
-  # Triggered by data warehouse after Dataform materializes complexity predictions
-  repository_dispatch:
-    types: [dataform_complexity_ready]
+  # Called by ml-pipeline.yml (one daily run, stages in order); workflow_dispatch
+  # remains for manual runs.
+  workflow_call:
 
   workflow_dispatch:
     inputs:
