@@ -1,8 +1,9 @@
 name: ML Pipeline
 
 # One run per day: called by bgg-data-warehouse after the Dataform `core` piece.
-# Stages run as reusable workflows in order; any failure skips the rest, so
-# ml_complete (and the warehouse `publish` piece) only follow a full success.
+# Stages run as reusable workflows in order; a game-level failure skips the rest,
+# so ml_complete (and the warehouse `publish` piece) never follow it. Collection
+# scoring/reports failures stay visible but don't block publish.
 # A single orchestrator because workflow_run cannot chain more than three levels.
 on:
   repository_dispatch:
@@ -39,8 +40,10 @@ jobs:
     uses: ./.github/workflows/build-collection-reports.yml
     secrets: inherit
   notify-warehouse:
-    needs: collection-scoring
-    if: github.ref == 'refs/heads/main'
+    # Waits for collection scoring so its predictions publish the same day, but a
+    # collection failure (visible as a red job) does not block the game-level publish.
+    needs: [game-embeddings, collection-scoring]
+    if: ${{ !cancelled() && needs.game-embeddings.result == 'success' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - name: Send ml_complete

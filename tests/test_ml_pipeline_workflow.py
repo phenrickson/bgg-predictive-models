@@ -24,7 +24,13 @@ def test_orchestrator_trigger_and_order():
     for prev, job in zip(chain, chain[1:]):
         assert jobs[job]["needs"] == prev
     assert jobs["collection-reports"]["needs"] == "collection-scoring"
-    assert jobs["notify-warehouse"]["needs"] == "collection-scoring"
+    # Collection scoring must finish (so its predictions publish the same day) but
+    # its failure must not block publish: only the game-level chain gates it.
+    notify = jobs["notify-warehouse"]
+    assert notify["needs"] == ["game-embeddings", "collection-scoring"]
+    assert "!cancelled()" in notify["if"]
+    assert "needs.game-embeddings.result == 'success'" in notify["if"]
+    assert "collection-scoring.result" not in notify["if"]
     assert "ml_complete" in str(jobs["notify-warehouse"])
     for job in chain + ["collection-reports"]:
         assert jobs[job]["uses"].startswith("./.github/workflows/")
@@ -40,3 +46,10 @@ def test_stages_are_callable_and_have_no_old_triggers():
         assert "repository_dispatch" not in on and "workflow_run" not in on and "schedule" not in on, name
         for event in OLD_EVENTS:
             assert event not in text, (name, event)
+
+
+def test_service_images_rebuild_on_src_changes():
+    # The images bundle src/, so ml_inputs/loader changes must redeploy them.
+    for name in ["docker-scoring-build.yml", "docker-collections-build.yml", "docker-embeddings-build.yml"]:
+        _, on = _load(name)
+        assert "src/**" in on["push"]["paths"], name

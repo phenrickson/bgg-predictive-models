@@ -6,6 +6,7 @@ on:
       - main
       - develop
     paths:
+      - 'src/**'
       - 'services/collections/**'
       - 'services/scoring/auth.py'
       - 'docker/collections.Dockerfile'
