@@ -1,9 +1,16 @@
 name: Build Collection Reports
 
 on:
-  schedule:
-    # Daily 09:00 UTC — predictions refresh after overnight scoring.
-    - cron: '0 9 * * *'
+  # Called by ml-pipeline.yml (one daily run, stages in order); workflow_dispatch
+  # remains for manual runs.
+  workflow_call:
+    inputs:
+      users:
+        description: 'Comma-separated usernames to render (blank = discover all)'
+        type: string
+        required: false
+        default: ''
+
   workflow_dispatch:
     inputs:
       users:
@@ -18,10 +25,6 @@ permissions:
   contents: read
   id-token: write
   pages: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -147,6 +150,10 @@ jobs:
   # ---------------------------------------------------------------------------
   deploy:
     needs: [discover, render-user]
+    # Job-level: reusable workflows take concurrency per job.
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     environment:
       name: github-pages

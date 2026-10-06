@@ -1,0 +1,57 @@
+name: ML Pipeline
+
+# One run per day: called by bgg-data-warehouse after the Dataform `core` piece.
+# Stages run as reusable workflows in order; a game-level failure skips the rest,
+# so ml_complete (and the warehouse `publish` piece) never follow it. Collection
+# scoring/reports failures stay visible but don't block publish.
+# A single orchestrator because workflow_run cannot chain more than three levels.
+on:
+  repository_dispatch:
+    types: [dataform_complete]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+jobs:
+  text-embeddings:
+    uses: ./.github/workflows/run-generate-text-embeddings.yml
+    secrets: inherit
+  complexity:
+    needs: text-embeddings
+    uses: ./.github/workflows/run-complexity-scoring.yml
+    secrets: inherit
+  scoring:
+    needs: complexity
+    uses: ./.github/workflows/run-scoring-service.yml
+    secrets: inherit
+  game-embeddings:
+    needs: scoring
+    uses: ./.github/workflows/run-generate-embeddings.yml
+    secrets: inherit
+  collection-scoring:
+    needs: game-embeddings
+    uses: ./.github/workflows/run-collection-scoring.yml
+    secrets: inherit
+  collection-reports:
+    needs: collection-scoring
+    uses: ./.github/workflows/build-collection-reports.yml
+    secrets: inherit
+  notify-warehouse:
+    # Waits for collection scoring so its predictions publish the same day, but a
+    # collection failure (visible as a red job) does not block the game-level publish.
+    needs: [game-embeddings, collection-scoring]
+    if: ${{ !cancelled() && needs.game-embeddings.result == 'success' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send ml_complete
+        env:
+          GITHUB_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+        run: |
+          curl --fail-with-body -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/phenrickson/bgg-data-warehouse/dispatches \
+            -d '{"event_type": "ml_complete", "client_payload": {"run_id": "${{ github.run_id }}"}}'

@@ -1,8 +1,10 @@
 name: Run Collection Scoring Service
 
 on:
-  schedule:
-    - cron: '0 8 * * *'   # 1 hour after run-scoring-service.yml
+  # Called by ml-pipeline.yml (one daily run, stages in order); workflow_dispatch
+  # remains for manual runs.
+  workflow_call:
+
   workflow_dispatch: {}
 
 env:

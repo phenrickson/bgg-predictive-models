@@ -30,8 +30,12 @@ def fake_config(monkeypatch):
         client = MagicMock()
 
         def query(sql, *args, **kwargs):
-            state["last_sql"] = sql
             job = MagicMock()
+            if "MIN(latest_ts)" in sql:
+                # ml_inputs.complexity_min_score_ts bound lookup
+                job.result.return_value = [{"bound": "2026-03-12 04:00:00+00"}]
+                return job
+            state["last_sql"] = sql
             job.to_dataframe.return_value = state["next_df"]
             return job
 
@@ -51,8 +55,8 @@ def test_load_features_base_only_sql(fake_config):
     assert sql is not None
     assert "games_features" in sql
     assert "year_published IS NOT NULL" in sql
-    assert "bgg_complexity_predictions" not in sql
-    assert "bgg_description_embeddings" not in sql
+    assert "raw.complexity_predictions" not in sql
+    assert "raw.description_embeddings" not in sql
 
 
 def test_load_features_with_predicted_complexity_sql(fake_config):
@@ -60,10 +64,11 @@ def test_load_features_with_predicted_complexity_sql(fake_config):
     loader.load_features(use_predicted_complexity=True)
 
     sql = fake_config._state["last_sql"]
-    assert "bgg_complexity_predictions" in sql
+    assert "raw.complexity_predictions" in sql
     assert "ROW_NUMBER()" in sql
     assert "score_ts DESC" in sql
-    assert "bgg_description_embeddings" not in sql
+    assert "score_ts >= TIMESTAMP('2026-03-12 04:00:00+00')" in sql
+    assert "raw.description_embeddings" not in sql
 
 
 def test_load_features_with_embeddings_sql(fake_config):
@@ -71,9 +76,9 @@ def test_load_features_with_embeddings_sql(fake_config):
     loader.load_features(use_embeddings=True)
 
     sql = fake_config._state["last_sql"]
-    assert "bgg_description_embeddings" in sql
+    assert "raw.description_embeddings" in sql
     assert "created_ts DESC" in sql
-    assert "bgg_complexity_predictions" not in sql
+    assert "raw.complexity_predictions" not in sql
 
 
 def test_load_features_with_both_sql(fake_config):
@@ -81,8 +86,8 @@ def test_load_features_with_both_sql(fake_config):
     loader.load_features(use_predicted_complexity=True, use_embeddings=True)
 
     sql = fake_config._state["last_sql"]
-    assert "bgg_complexity_predictions" in sql
-    assert "bgg_description_embeddings" in sql
+    assert "raw.complexity_predictions" in sql
+    assert "raw.description_embeddings" in sql
 
 
 def test_load_features_with_where_clause(fake_config):
@@ -129,3 +134,15 @@ def test_embedding_explode_noop_without_embedding_column():
     df = pl.DataFrame({"game_id": [1, 2], "x": [10, 20]})
     out = _explode_embeddings(df)
     assert set(out.columns) == {"game_id", "x"}
+
+
+def test_load_data_with_embeddings_uses_latest_per_game(fake_config):
+    loader = BGGDataLoader(fake_config)
+    try:
+        loader.load_data_with_embeddings()
+    except Exception:
+        pass  # empty fake frame; only the SQL matters here
+    sql = fake_config._state["last_sql"]
+    assert "raw.description_embeddings" in sql
+    assert "rn = 1" in sql
+    assert "predictions.bgg_description_embeddings" not in sql
